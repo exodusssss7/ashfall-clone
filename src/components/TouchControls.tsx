@@ -1,3 +1,5 @@
+import { getActionCues, actionCueProps } from '../game/actionAlerts';
+import { formatRestCooldown } from '../game/restCooldown';
 import { FloatingStick } from './FloatingStick';
 import React, { useEffect, useState } from 'react';
 import {
@@ -69,6 +71,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
     return () => window.removeEventListener('resize', checkOrientation);
   }, []);
 
+  const cues = getActionCues(hud);
   const isDriving = Boolean(hud.drivingVehicle);
   const isFishing = Boolean(hud.fishing);
   const isMeleeOnFoot =
@@ -139,7 +142,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
         {showLeftTrigger && (
           <button
             type="button"
-            data-testid="touch-fire-btn"
+            data-testid="touch-fire-btn" {...actionCueProps((isFishing ? cues.fishing! : { state: 'idle' as const, reason: fireLabel }))}
             aria-label={isDriving ? 'Handbrake Drift Button' : isFishing ? 'Reel Fishing Line' : 'Left Hand Fire Button'}
             onPointerDown={(e) => {
               e.preventDefault();
@@ -188,7 +191,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
           <div className="grid grid-cols-3 gap-1.5">
             <button
               type="button"
-              data-testid="touch-boost-btn"
+              data-testid="touch-boost-btn" {...actionCueProps(cues.boost)}
               aria-label="Turbo Boost"
               onPointerDown={(e) => {
                 e.preventDefault();
@@ -223,7 +226,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
 
             <button
               type="button"
-              data-testid="touch-repair-btn"
+              data-testid="touch-repair-btn" {...actionCueProps(cues.repair)}
               aria-label="Repair Vehicle"
               onPointerDown={(e) => {
                 e.preventDefault();
@@ -259,7 +262,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
 
             <button
               type="button"
-              data-testid="touch-refuel-btn"
+              data-testid="touch-refuel-btn" {...actionCueProps(cues.fuel)}
               aria-label="Refuel Vehicle"
               onPointerDown={(e) => {
                 e.preventDefault();
@@ -275,7 +278,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
 
             <button
               type="button"
-              data-testid="touch-light-btn"
+              data-testid="touch-light-btn" {...actionCueProps(cues.light)}
               aria-label="Toggle Headlights"
               onPointerDown={(e) => {
                 e.preventDefault();
@@ -295,7 +298,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
 
             <button
               type="button"
-              data-testid="touch-horn-btn"
+              data-testid="touch-horn-btn" {...actionCueProps(cues.horn)}
               aria-label="Car Horn or Siren"
               onPointerDown={(e) => {
                 e.preventDefault();
@@ -318,7 +321,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
         ) : (
           <>
             <div className="context-action-stack flex flex-col items-end gap-1.5">
-              {hud.nearbyDoorAction && <button type="button" data-testid="touch-door-btn" aria-label={hud.nearbyDoorAction.label}
+              {hud.nearbyDoorAction && <button type="button" data-testid="touch-door-btn" {...actionCueProps(cues.door)} aria-label={hud.nearbyDoorAction.label}
                 onPointerDown={e=>{e.preventDefault();e.stopPropagation();onDoor();}} style={{touchAction:'none'}}
                 className="w-full min-h-[48px] px-3 flex items-center justify-center gap-2 cursor-pointer">
                 <DoorOpen className="w-5 h-5"/><span className="font-telemetry text-[10px] font-bold">{hud.nearbyDoorAction.label}</span>
@@ -326,7 +329,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               {hud.nearCookingHeat && (
                 <button
                   type="button"
-                  data-testid="touch-cook-btn"
+                  data-testid="touch-cook-btn" {...actionCueProps(cues.cook)}
                   aria-label="Open Quick Cook"
                   onPointerDown={(e) => {
                     e.preventDefault();
@@ -344,7 +347,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               {hud.nearbyPrompt?.secondaryLabel && (
                 <button
                   type="button"
-                  data-testid="touch-barricade-btn"
+                  data-testid="touch-barricade-btn" {...actionCueProps(cues.board)}
                   aria-label="Barricade Door"
                   onPointerDown={(e) => {
                     e.preventDefault();
@@ -364,7 +367,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                   {hud.nearbyVehiclePrompt.canDrive && (
                     <button
                       type="button"
-                      data-testid="touch-drive-btn"
+                      data-testid="touch-drive-btn" {...actionCueProps(cues.drive)}
                       aria-label="Enter Vehicle"
                       onPointerDown={(e) => {
                         e.preventDefault();
@@ -381,7 +384,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                   {hud.nearbyVehiclePrompt.hpPct < 100 && (
                     <button
                       type="button"
-                      data-testid="touch-repair-nearby-btn"
+                      data-testid="touch-repair-nearby-btn" {...actionCueProps(cues.nearbyRepair)}
                       aria-label="Repair Vehicle"
                       onPointerDown={(e) => {
                         e.preventDefault();
@@ -400,11 +403,11 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               <div className="quick-action-rail grid grid-cols-2 gap-1.5">
               <button
                 type="button"
-                data-testid="touch-loot-btn"
+                data-testid="touch-loot-btn" {...actionCueProps(cues.interact)}
                 data-loot-ready={hud.nearbyPrompt?.action === 'loot'}
                 aria-hidden={hud.nearbyPrompt?.action === 'door' && !isFishing}
                 tabIndex={hud.nearbyPrompt?.action === 'door' && !isFishing ? -1 : 0}
-                aria-label={hud.nearbyPrompt?.action === 'sleep' ? 'Rest in Bed' : 'Interact or Scavenge Nearby'}
+                aria-label={hud.nearbyPrompt?.action === 'sleep' ? cues.rest.reason : isFishing ? cues.fishing!.reason : 'Interact or Scavenge Nearby'}
                 onPointerDown={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -421,11 +424,12 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               >
                 <PackageOpen className="w-4 h-4" />
                 <span className="font-telemetry text-[9px] font-bold">{lootShortLabel}</span>
+                {hud.nearbyPrompt?.action === 'sleep' && hud.restCooldownSeconds > 0 && <span className="font-telemetry text-[8px]">{formatRestCooldown(hud.restCooldownSeconds)}</span>}
               </button>
 
               <button
                 type="button"
-                data-testid="touch-dodge-btn"
+                data-testid="touch-dodge-btn" {...actionCueProps(cues.dodge)}
                 aria-label="Dodge Roll"
                 onPointerDown={(e) => {
                   e.preventDefault();
@@ -441,7 +445,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
 
               <button
                 type="button"
-                data-testid="touch-reload-btn"
+                data-testid="touch-reload-btn" {...actionCueProps(cues.reload)}
                 aria-label="Reload Weapon"
                 onPointerDown={(e) => {
                   e.preventDefault();
@@ -457,7 +461,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
 
               <button
                 type="button"
-                data-testid="touch-light-btn"
+                data-testid="touch-light-btn" {...actionCueProps(cues.light)}
                 aria-label="Toggle Flashlight"
                 onPointerDown={(e) => {
                   e.preventDefault();

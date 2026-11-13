@@ -1,11 +1,15 @@
+import type { FootstepSurface } from './footstepSurfaces';
 import type { ZombieArchetype } from './types';
 import { ambienceMix } from './audioMix';
 
 const SAMPLE_NAMES = [
   'concrete0', 'concrete1', 'concrete2', 'concrete3', 'grass0', 'grass1', 'grass2', 'grass3',
+  'planks0', 'planks1', 'planks2', 'planks3', 'carpet0', 'carpet1', 'carpet2', 'carpet3',
+  'dirt0', 'dirt1', 'dirt2', 'dirt3', 'tile0', 'tile1', 'tile2', 'tile3',
   'wood0', 'wood1', 'punch0', 'punch1', 'metal0', 'metal1', 'glass0', 'glass1',
   'cloth1', 'cloth2', 'cloth3', 'metalClick', 'metalLatch', 'doorOpen_1', 'doorClose_1',
-  'creak1', 'knifeSlice', 'knifeSlice2', 'handleSmallLeather', 'beltHandle1', 'metalPot1',
+  'creak1', 'swing0', 'swing1', 'swing2', 'hurt0', 'hurt1', 'hurt2',
+  'drink', 'bottleOpen', 'liquid', 'repair0', 'repair1', 'splash', 'handleSmallLeather', 'beltHandle1', 'metalPot1',
   'groan1', 'groan2', 'groan3', 'groan4', 'pistol0', 'pistol1', 'shotgun0', 'shotgun1',
   'reload', 'rack', 'day', 'night',
 ];
@@ -26,6 +30,7 @@ class SurvivalSoundEngine {
   private timeMinutes = 510;
   private lastAmbienceTarget = '';
   private lastGroanTime = -10;
+  private lastHurtTime = -10;
   private lastVariants = new Map<string, number>();
   private voices = new Set<AudioBufferSourceNode>();
   private noise: AudioBuffer | null = null;
@@ -187,10 +192,12 @@ class SurvivalSoundEngine {
     this.stopEffects();
   }
 
-  playFootstep(surface: 'road' | 'grass', sprinting: boolean): void {
-    this.sample(this.choose(surface === 'road' ? 'concrete' : 'grass', 4), sprinting ? 0.23 : 0.17, sprinting ? 1.07 : 1);
+  playFootstep(surface: FootstepSurface, sprinting: boolean): void {
+    const level = { concrete: 0.17, grass: 0.17, dirt: 0.17, planks: 0.19, carpet: 0.12, tile: 0.16 }[surface];
+    this.sample(this.choose(surface, 4), level * (sprinting ? 1.28 : 1), sprinting ? 1.07 : 1);
   }
-  playMeleeSwing(): void { this.sample(Math.random() < 0.5 ? 'knifeSlice' : 'knifeSlice2', 0.26, 0.85); }
+  playMeleeSwing(): void { this.sample(this.choose('swing', 3), 0.42, 0.9); }
+  playDodge(): void { this.sample('cloth2', 0.22, 0.85); this.sample('cloth3', 0.14, 1.05, 0.06); }
   playMeleeHit(heavy = false): void { this.sample(this.choose('punch', 2), heavy ? 0.54 : 0.4, heavy ? 0.88 : 1); }
   playGunshot(kind: 'pistol' | 'shotgun'): void { this.sample(this.choose(kind, 2), kind === 'pistol' ? 0.75 : 0.85); }
   playDryFire(): void { this.sample('metalClick', 0.22); }
@@ -206,17 +213,27 @@ class SurvivalSoundEngine {
   playBuildHammer(): void { this.sample(this.choose('wood', 2), 0.43); }
   playLootPickup(): void { this.sample('handleSmallLeather', 0.28); }
   playConsume(kind: 'food' | 'water' | 'bandage'): void {
-    this.sample(kind === 'bandage' ? 'cloth3' : 'cloth1', 0.23);
-    if (kind === 'water') this.texture(520, 0.24, 0.08, 0.13);
+    if (kind === 'water') {
+      this.sample('bottleOpen', 0.18);
+      this.sample('drink', 0.29, 1, 0.12);
+    } else {
+      this.sample(kind === 'bandage' ? 'cloth3' : 'cloth1', 0.23);
+    }
   }
   playCampfireCrackle(): void { this.texture(3300, 0.035, 0.045); }
   playSpitHiss(): void { this.texture(2200, 0.27, 0.19); }
-  playPlayerHurt(): void { this.sample(this.choose('punch', 2), 0.48, 0.78); this.sample('cloth2', 0.16); }
+  playPlayerHurt(): void {
+    // One short human reaction per actual damage event, not every invulnerable contact.
+    if (!this.ctx || this.ctx.currentTime - this.lastHurtTime < 0.65) return;
+    this.lastHurtTime = this.ctx.currentTime;
+    this.sample(this.choose('hurt', 3), 0.48);
+    this.sample(this.choose('punch', 2), 0.18, 0.9);
+  }
   playUiClick(): void { this.sample('metalClick', 0.09, 1.12); }
   playCarDoor(): void { this.sample('metalLatch', 0.36, 0.7); this.sample(this.choose('metal', 2), 0.18, 0.75, 0.03); }
   playCarImpact(): void { this.sample(this.choose('metal', 2), 0.62, 0.7); }
   playTireScreech(): void { this.texture(1600, 0.3, 0.19); }
-  playFishingCast(): void { this.sample('knifeSlice2', 0.18, 0.72); this.splash(0.24, 0.24); }
+  playFishingCast(): void { this.sample('swing0', 0.13, 1.1); this.splash(0.24, 0.24); }
   playFishingBite(): void { this.splash(0.25); this.sample('beltHandle1', 0.16, 1, 0.04); }
   playFishingCatch(): void { this.splash(0.27); this.sample('beltHandle1', 0.24); this.sample('metalLatch', 0.1, 1.1, 0.13); }
   playCookingSizzle(): void { this.texture(3600, 0.65, 0.12); this.sample('metalPot1', 0.15); }
@@ -246,7 +263,8 @@ class SurvivalSoundEngine {
   }
   playDoorSwing(opening: boolean): void { this.sample(opening ? 'doorOpen_1' : 'doorClose_1', 0.34); }
   playLockpickClick(unlocked: boolean): void { this.sample(unlocked ? 'metalLatch' : 'metalClick', unlocked ? 0.32 : 0.16); }
-  playWrenchRepair(): void { this.sample('metalLatch', 0.22); this.sample(this.choose('metal', 2), 0.2, 1.1, 0.12); }
+  playWrenchRepair(): void { this.sample(this.choose('repair', 2), 0.3); }
+  playRefuel(): void { this.sample('bottleOpen', 0.16, 0.8); this.sample('liquid', 0.32, 0.9, 0.1); }
   playTurboSurge(): void { this.texture(280, 0.35, 0.24); }
   playSleepRest(): void {
     this.sample('cloth1', 0.28, 0.85);
@@ -273,8 +291,7 @@ class SurvivalSoundEngine {
     source.start(now, Math.random() * 0.5, duration);
   }
   private splash(volume: number, delay = 0): void {
-    this.texture(900, 0.22, volume, delay);
-    this.texture(2600, 0.11, volume * 0.35, delay + 0.025);
+    this.sample('splash', volume, 1, delay);
   }
   playHeartbeat(): void {
     if (!this.ctx || this.muted || document.hidden) return;

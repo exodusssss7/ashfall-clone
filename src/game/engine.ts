@@ -1,3 +1,5 @@
+import { footstepSurfaceForTile } from './footstepSurfaces';
+import { BED_REST_COOLDOWN_SECONDS, formatRestCooldown, tickRestCooldown } from './restCooldown';
 import { vehicleRelativeTouchInput } from './drivingControls';
 import {
   drawActionProp,
@@ -200,6 +202,7 @@ export class SurvivalEngine {
   private deathDelayTimer = 0;
   private pendingGameOver = false;
   private sleepTransitionTimer = 0;
+  private restCooldownSeconds = 0;
   private playerVelX = 0;
   private playerVelY = 0;
   private lastFrameDt = 0.016;
@@ -365,6 +368,7 @@ export class SurvivalEngine {
     this.pendingGameOver = false;
     this.deathDelayTimer = 0;
     this.sleepTransitionTimer = 0;
+    this.restCooldownSeconds = 0;
     this.playerVelX = 0;
     this.playerVelY = 0;
     this.statusBanner = titleMode ? null : 'DAY 1 · EXPLORE LAKE PIER, COOK AT STOVES & OUTLAST NIGHT';
@@ -897,7 +901,7 @@ export class SurvivalEngine {
     this.animateAction('refuel','REFUELING',1.2);
     this.inventory.fuel -= 1;
     car.fuel = Math.min(100, car.fuel + 45);
-    soundEngine.playLootPickup();
+    soundEngine.playRefuel();
     this.addFloatingText(car.x, car.y, 1.2, '+45% FUEL', '#f0d078');
     this.emitHud();
   }
@@ -1170,6 +1174,8 @@ export class SurvivalEngine {
       this.mouseJustClicked = false;
       return;
     }
+
+    this.restCooldownSeconds = tickRestCooldown(this.restCooldownSeconds, dt, this.sleepTransitionTimer <= 0);
 
     // Advance Day-Night clock (1 full 24h cycle = ~9.6 real minutes)
     const prevTime = this.timeMinutes;
@@ -1480,7 +1486,7 @@ export class SurvivalEngine {
       p.scaleX = 1.24;
       p.scaleY = 0.78;
       this.spawnParticles(p.x, p.y, 0.1, 6, '#9ca396', 2.4, 1.5);
-      soundEngine.playMeleeSwing();
+      soundEngine.playDodge();
     }
 
     const wantsSprint =
@@ -1510,8 +1516,9 @@ export class SurvivalEngine {
       } else {
         const dx = this.playerVelX * dt;
         const dy = this.playerVelY * dt;
+        const beforeX = p.x, beforeY = p.y;
         this.moveActor(p, dx, dy, 0.22);
-        const stepDist = Math.hypot(dx, dy);
+        const stepDist = Math.hypot(p.x - beforeX, p.y - beforeY);
         p.walkCycle += stepDist * 5.2;
         p.stepAccumulator += stepDist;
         if (this.fishing.phase !== 'idle') {
@@ -1520,11 +1527,8 @@ export class SurvivalEngine {
         if (p.stepAccumulator >= 0.85) {
           p.stepAccumulator = 0;
           const cell = this.getCell(Math.floor(p.x), Math.floor(p.y));
-          const surf =
-            cell.tile === 'road' || cell.tile === 'sidewalk' || cell.tile === 'floor' || cell.tile === 'pier'
-              ? 'road'
-              : 'grass';
-          soundEngine.playFootstep(surf, wantsSprint);
+          const surf = footstepSurfaceForTile(cell.tile);
+          if (surf) soundEngine.playFootstep(surf, wantsSprint);
           if (wantsSprint) {
             this.emitSound(p.x, p.y, 6.2, false);
           }
@@ -2122,6 +2126,12 @@ export class SurvivalEngine {
     const bed = this.findNearestBed();
     if (!bed) return false;
 
+    if (this.restCooldownSeconds > 0) {
+      this.showBanner(`Rest available in ${formatRestCooldown(this.restCooldownSeconds)} of awake play`, 2.2);
+      this.emitHud();
+      return true;
+    }
+
     const safe = canSleepSafely(this.zombies, this.player.x, this.player.y);
     if (!safe) {
       soundEngine.playDryFire();
@@ -2134,6 +2144,7 @@ export class SurvivalEngine {
     this.day = res.day;
     this.timeMinutes = res.timeMinutes;
     this.sleepTransitionTimer = 1.65;
+    this.restCooldownSeconds = BED_REST_COOLDOWN_SECONDS;
     this.animateAction('sleep', 'RESTING', 1.45);
     soundEngine.playSleepRest();
 
@@ -4118,7 +4129,11 @@ export class SurvivalEngine {
     } else if (nearbyBed) {
       nearbyPrompt = {
         action: 'sleep',
-        label: 'Rest in Bed (+40 HP · +3h)',
+        label: this.restCooldownSeconds > 0
+          ? `Rest cooldown ${formatRestCooldown(this.restCooldownSeconds)} (awake play)`
+          : !canSleepSafely(this.zombies, this.player.x, this.player.y)
+            ? 'Unsafe to rest: infected nearby'
+            : 'Rest in Bed (+40 HP · +3h)',
         key: 'E',
         progress: 0,
       };
@@ -4145,6 +4160,9 @@ export class SurvivalEngine {
       pistolMagSize: this.player.pistolMagSize,
       shotgunMag: this.player.shotgunMag,
       shotgunMagSize: this.player.shotgunMagSize,
+      restCooldownSeconds: this.restCooldownSeconds,
+      restSafe: canSleepSafely(this.zombies, this.player.x, this.player.y),
+      dodgeReady: this.player.dodgeCooldown <= 0 && this.player.dodgeTimer <= 0,
       isReloading: this.player.reloadingTimer > 0,
       reloadProgress:
         this.player.reloadingWeapon && WEAPONS[this.player.reloadingWeapon].reloadTime > 0

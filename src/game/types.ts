@@ -341,6 +341,9 @@ export interface HudSnapshot {
   pistolMagSize: number;
   shotgunMag: number;
   shotgunMagSize: number;
+  restCooldownSeconds: number;
+  restSafe: boolean;
+  dodgeReady: boolean;
   isReloading: boolean;
   reloadProgress: number;
   buildMode: StructureKind | null;

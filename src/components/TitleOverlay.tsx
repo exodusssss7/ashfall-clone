@@ -29,7 +29,7 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
 
       {/* Top right sound button */}
       <div className="relative z-10 flex justify-between items-center">
-        <span className="font-telemetry text-xs text-[#9aa09c] tracking-wide">v0.6</span>
+        <span className="font-telemetry text-xs text-[#9aa09c] tracking-wide">v0.7</span>
         <button
           type="button"
           onClick={(e) => {

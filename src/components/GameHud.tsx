@@ -1,3 +1,4 @@
+import { getActionCues, actionCueProps } from '../game/actionAlerts';
 import { ItemIcon } from './ItemIcon';
 import React from 'react';
 import {
@@ -69,6 +70,7 @@ export const GameHud: React.FC<GameHudProps> = ({
   onPrimaryInteract,
   onBarricadeDoor,
 }) => {
+  const cues = getActionCues(hud);
   const hpPct = Math.max(0, Math.min(100, (hud.hp / hud.maxHp) * 100));
   const foodPct = Math.max(0, Math.min(100, hud.hunger));
   const waterPct = Math.max(0, Math.min(100, hud.thirst));
@@ -122,7 +124,7 @@ export const GameHud: React.FC<GameHudProps> = ({
 
           {/* Hunger & Thirst compact quick-use buttons */}
           <div className="flex items-center gap-2 pt-0.5 pointer-events-auto">
-            <button
+            <button {...actionCueProps(cues.food)}
               type="button"
               tabIndex={-1}
               onClick={(e) => {
@@ -144,7 +146,7 @@ export const GameHud: React.FC<GameHudProps> = ({
               </span>
             </button>
 
-            <button
+            <button {...actionCueProps(cues.water)}
               type="button"
               tabIndex={-1}
               onClick={(e) => {
@@ -331,7 +333,7 @@ export const GameHud: React.FC<GameHudProps> = ({
           {!touchEnabled && !hud.drivingVehicle && (hud.fishing || hud.nearbyPrompt || hud.nearbyVehiclePrompt) && (
             <div className="flex flex-wrap items-center justify-center gap-2 pointer-events-auto">
               {hud.fishing && (
-                <button
+                <button {...actionCueProps(cues.interact)}
                   type="button"
                   tabIndex={-1}
                   onClick={(e) => {
@@ -367,7 +369,7 @@ export const GameHud: React.FC<GameHudProps> = ({
 
               {!hud.fishing && hud.nearbyPrompt && (
                 <div className="flex items-center gap-1.5">
-                  <button
+                  <button {...actionCueProps(cues.interact)}
                     type="button"
                     tabIndex={-1}
                     onClick={(e) => {
@@ -411,7 +413,7 @@ export const GameHud: React.FC<GameHudProps> = ({
 
               {hud.nearbyVehiclePrompt && (
                 <div className="flex items-center gap-1.5">
-                  <button
+                  <button {...actionCueProps(cues.drive)}
                     type="button"
                     tabIndex={-1}
                     disabled={!hud.nearbyVehiclePrompt.canDrive}
@@ -431,7 +433,7 @@ export const GameHud: React.FC<GameHudProps> = ({
                   </button>
 
                   {hud.nearbyVehiclePrompt.hpPct < 100 && (
-                    <button
+                    <button {...actionCueProps(cues.nearbyRepair)}
                       type="button"
                       tabIndex={-1}
                       onClick={(e) => {
@@ -525,7 +527,7 @@ export const GameHud: React.FC<GameHudProps> = ({
                       <Zap className="w-3 h-3" />
                       SHIFT
                     </span>
-                    <button
+                    <button {...actionCueProps(cues.fuel)}
                       type="button"
                       tabIndex={-1}
                       onClick={(e) => {
@@ -538,7 +540,7 @@ export const GameHud: React.FC<GameHudProps> = ({
                       <Fuel className="w-3 h-3" />
                       [R] {hud.inventory.fuel}
                     </button>
-                    <button
+                    <button {...actionCueProps(cues.repair)}
                       type="button"
                       tabIndex={-1}
                       onClick={(e) => {
@@ -555,7 +557,7 @@ export const GameHud: React.FC<GameHudProps> = ({
                       <Wrench className="w-3 h-3" />
                       [T]
                     </button>
-                    <button
+                    <button {...actionCueProps(cues.light)}
                       type="button"
                       tabIndex={-1}
                       onClick={(e) => {
@@ -570,7 +572,7 @@ export const GameHud: React.FC<GameHudProps> = ({
                       <Flashlight className="w-3 h-3" />
                       [F]
                     </button>
-                    <button
+                    <button {...actionCueProps(cues.horn)}
                       type="button"
                       tabIndex={-1}
                       onClick={(e) => {
@@ -701,7 +703,7 @@ export const GameHud: React.FC<GameHudProps> = ({
                 })}
 
                 {/* Slot 5: Quick Bandage */}
-                <button
+                <button {...actionCueProps(cues.heal)}
                   type="button"
                   tabIndex={-1}
                   onClick={(e) => {
