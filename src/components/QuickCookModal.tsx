@@ -209,10 +209,11 @@ export const QuickCookModal: React.FC<QuickCookModalProps> = ({
       <div
         role="dialog"
         aria-label="Quick Cook Fire and Stove"
-        className="hud-panel w-full max-w-xl max-h-[88vh] flex flex-col overflow-hidden"
+        data-cooking-active={Boolean(activeRecipe)}
+        className="quick-cook-dialog hud-panel w-full max-w-xl max-h-[88vh] flex flex-col overflow-hidden"
       >
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#2e3533]">
-          <div className="flex items-center gap-2.5">
+        <div className="quick-cook-header flex items-center justify-between px-5 py-3.5 border-b border-[#2e3533]">
+          <div className="cooking-timing-actions flex items-center gap-2.5">
             <Flame className="w-5 h-5 text-[#f0a848] shrink-0" />
             <div>
               <h2 className="font-pixel text-xl text-[#f0ece1]">Quick Cook</h2>
@@ -233,7 +234,7 @@ export const QuickCookModal: React.FC<QuickCookModalProps> = ({
           </button>
         </div>
 
-        <div className="p-5 overflow-y-auto space-y-5">
+        <div className="quick-cook-content p-5 overflow-y-auto space-y-5">
           {!hud.nearCookingHeat && (
             <div className="bg-[#2b1b18] border border-[#c9453e] px-3.5 py-2 text-xs font-telemetry text-[#ffb4ad]">
               No active heat source in range — move beside a Campfire or Kitchen Stove to cook.
@@ -241,7 +242,7 @@ export const QuickCookModal: React.FC<QuickCookModalProps> = ({
           )}
 
           {/* Stock overview */}
-          <div className="grid grid-cols-4 gap-2">
+          <div className="quick-cook-stock grid grid-cols-4 gap-2">
             {(['raw_fish', 'food', 'water', 'wood'] as ItemId[]).map((id) => (
               <div
                 key={id}
@@ -257,7 +258,7 @@ export const QuickCookModal: React.FC<QuickCookModalProps> = ({
           {activeRecipe && activeSpec && currentBeat ? (
             <div
               data-testid="cooking-qte-panel"
-              className={`bg-[#111517] border p-4 space-y-4 transition-colors ${
+              className={`cooking-timing-panel bg-[#111517] border p-4 space-y-4 transition-colors ${
                 inPerfectZone
                   ? 'border-[#ffd266]'
                   : inGoodZone
@@ -265,7 +266,7 @@ export const QuickCookModal: React.FC<QuickCookModalProps> = ({
                     : 'border-[#d9822b]/70'
               }`}
             >
-              <div className="flex items-center justify-between gap-3">
+              <div className="cooking-timing-heading flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="w-10 h-10 bg-[#171c1e] border border-[#2f3735] flex items-center justify-center shrink-0">
                     {activeRecipe.outputItem && (
@@ -291,7 +292,7 @@ export const QuickCookModal: React.FC<QuickCookModalProps> = ({
               </div>
 
               {/* Beat History / Step Indicators */}
-              <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${activeSpec.beats.length}, minmax(0, 1fr))` }}>
+              <div className="cooking-beat-history grid gap-2" style={{ gridTemplateColumns: `repeat(${activeSpec.beats.length}, minmax(0, 1fr))` }}>
                 {activeSpec.beats.map((b, idx) => {
                   const res = judgements[idx];
                   const isCurrent = idx === beatIndex && !res;
@@ -322,7 +323,7 @@ export const QuickCookModal: React.FC<QuickCookModalProps> = ({
               </div>
 
               {/* Callout Status Line */}
-              <div className="h-6 flex items-center justify-center">
+              <div className="cooking-timing-callout h-6 flex items-center justify-center">
                 {beatFreeze ? (
                   <span
                     className={`font-pixel text-base tracking-wide ${
@@ -412,7 +413,7 @@ export const QuickCookModal: React.FC<QuickCookModalProps> = ({
               </button>
 
               {/* Primary Trigger + Cancel Controls */}
-              <div className="flex items-center gap-2.5">
+              <div className="cooking-timing-actions flex items-center gap-2.5">
                 <button
                   type="button"
                   onClick={triggerBeatHit}

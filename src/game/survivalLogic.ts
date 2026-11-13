@@ -1093,7 +1093,7 @@ export function generateWorld(seed = 1994): GeneratedWorld {
       floorType: 'floor',
       porch: { x0: 40, y0: 46, w: 3, h: 1 },
       doors: [
-        { gx: 41, gy: 47, orientation: 'ew', status: 'locked' },
+        { gx: 40, gy: 47, orientation: 'ew', status: 'locked' },
         { gx: 41, gy: 51, orientation: 'ns', status: 'open' },
       ],
       partitions: [{ x0: 41, y0: 47, x1: 41, y1: 54 }],

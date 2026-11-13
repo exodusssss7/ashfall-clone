@@ -2119,6 +2119,8 @@ export class SurvivalEngine {
   }
 
   private trySleepInBed(): boolean {
+    // One rest per transition, including repeated E / touch input.
+    if (this.sleepTransitionTimer > 0) return true;
     const bed = this.findNearestBed();
     if (!bed) return false;
 

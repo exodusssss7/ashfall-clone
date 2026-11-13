@@ -429,3 +429,36 @@ html[data-skin="a"] .floating-stick-ring[data-attacking="true"]{border-color:#f4
 .context-action-stack{left:31vw;width:38vw;transform:none;}
 .context-action-stack{bottom:140px;}
 @media(max-height:360px) and (orientation:landscape){.context-action-stack{bottom:124px;}}
+
+/* Keep the live cooking gauge and both touch actions visible without scrolling. */
+@media(orientation:landscape) and (max-height:500px){
+ .quick-cook-dialog[data-cooking-active="true"]{max-height:calc(100dvh - 16px);}
+ .quick-cook-dialog[data-cooking-active="true"] .quick-cook-header{padding:6px 14px;flex-shrink:0;}
+ .quick-cook-dialog[data-cooking-active="true"] .quick-cook-header h2{font-size:18px;line-height:22px;}
+ .quick-cook-dialog[data-cooking-active="true"] .quick-cook-header p{font-size:10px;line-height:13px;}
+ .quick-cook-dialog[data-cooking-active="true"] .quick-cook-content{padding:8px 12px;min-height:0;}
+ .quick-cook-dialog[data-cooking-active="true"] .quick-cook-stock{display:none;}
+ .quick-cook-dialog[data-cooking-active="true"] .cooking-timing-panel{padding:8px;margin-top:0;}
+ .quick-cook-dialog[data-cooking-active="true"] .cooking-timing-panel>*+*{margin-top:6px;}
+ .quick-cook-dialog[data-cooking-active="true"] .cooking-timing-heading>div:first-child>div:first-child{width:28px;height:28px;}
+ .quick-cook-dialog[data-cooking-active="true"] .cooking-timing-heading p{display:none;}
+ .quick-cook-dialog[data-cooking-active="true"] .cooking-timing-heading .font-tactical{font-size:13px;line-height:18px;}
+ .quick-cook-dialog[data-cooking-active="true"] .cooking-beat-history>div{padding:3px 6px;font-size:8px;line-height:12px;}
+ .quick-cook-dialog[data-cooking-active="true"] .cooking-beat-history>div>div:first-child{display:none;}
+ .quick-cook-dialog[data-cooking-active="true"] .cooking-timing-callout{height:20px;}
+ .quick-cook-dialog[data-cooking-active="true"] .cooking-timing-callout>*{font-size:10px;line-height:14px;}
+ .quick-cook-dialog[data-cooking-active="true"] [aria-label^="Cooking timing bar"]{height:44px;}
+ .quick-cook-dialog[data-cooking-active="true"] .cooking-timing-actions>button{min-height:44px;padding:6px 10px;font-size:11px;}
+}
+@media(orientation:landscape) and (max-height:500px){
+ .quick-cook-dialog[data-cooking-active="true"] .cooking-timing-panel{display:flex;flex-direction:column;gap:6px;}
+ .quick-cook-dialog[data-cooking-active="true"] .cooking-timing-panel>*{margin-block:0!important;flex-shrink:0;}
+ .quick-cook-dialog[data-cooking-active="true"] .cooking-timing-heading>div:last-child{padding:3px 6px;font-size:8px;line-height:12px;}
+ .quick-cook-dialog[data-cooking-active="true"] .quick-cook-content{overflow:hidden;flex-shrink:0;}
+}
+
+/* An unopened container/trunk within the engine's interaction range is actionable. */
+html[data-skin="a"] [data-testid="touch-loot-btn"]{transition:background-color .18s,border-color .18s,box-shadow .18s,color .18s;}
+html[data-skin="a"] [data-testid="touch-loot-btn"][data-loot-ready="true"]{background:#c3d38a;border-color:#f3ecc2;border-bottom-color:#71804a;color:#152d21;text-shadow:none;box-shadow:inset 0 1px #f6f0c9,0 0 0 2px #bacc7a44,0 0 14px #d4dc7a66;}
+html[data-skin="a"] [data-testid="touch-loot-btn"][data-loot-ready="true"] svg{filter:none;}
+html[data-skin="a"] [data-testid="touch-loot-btn"][data-loot-ready="true"] svg,html[data-skin="a"] [data-testid="touch-loot-btn"][data-loot-ready="true"] span{color:#152d21;text-shadow:none;}

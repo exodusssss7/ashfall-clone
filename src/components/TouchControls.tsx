@@ -101,6 +101,8 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
     ? hud.fishing?.canHook
       ? 'REEL!'
       : 'REEL'
+    : hud.nearbyPrompt?.action === 'sleep'
+      ? 'REST'
     : hud.nearbyPrompt?.action === 'fishing'
       ? 'CAST'
       : hud.nearbyPrompt?.action === 'door'
@@ -399,9 +401,10 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               <button
                 type="button"
                 data-testid="touch-loot-btn"
+                data-loot-ready={hud.nearbyPrompt?.action === 'loot'}
                 aria-hidden={hud.nearbyPrompt?.action === 'door' && !isFishing}
                 tabIndex={hud.nearbyPrompt?.action === 'door' && !isFishing ? -1 : 0}
-                aria-label="Interact or Scavenge Nearby"
+                aria-label={hud.nearbyPrompt?.action === 'sleep' ? 'Rest in Bed' : 'Interact or Scavenge Nearby'}
                 onPointerDown={(e) => {
                   e.preventDefault();
                   e.stopPropagation();

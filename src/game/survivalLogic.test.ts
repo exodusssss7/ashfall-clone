@@ -388,3 +388,27 @@ test('all town beds sit flush against West bedroom walls with walkable access an
 });
 
 
+
+test('checkpoint entrance has a clear vestibule into both preserved rooms', () => {
+  const world = generateWorld(1994);
+  assert.equal(world.grid[48][41].prop, 'wall_interior');
+  assert.equal(world.grid[48][40].solid, false);
+  assert.equal(world.grid[49][41].prop, 'wall_interior');
+  assert.equal(world.grid[48][42].prop, 'bed');
+  assert.ok(world.containers.some(c => c.gx === 35 && c.gy === 48));
+  assert.ok(world.doors.some(d => d.gx === 41 && d.gy === 51));
+  const queue: number[][] = [[40, 46]], seen = new Set(['40,46']);
+  for(let i=0;i<queue.length;i++) {
+    const [x,y]=queue[i];
+    for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nx=x+dx,ny=y+dy,key=`${nx},${ny}`;
+      if(nx<34||nx>48||ny<46||ny>54||seen.has(key))continue;
+      const cell=world.grid[ny][nx];
+      if(cell.solid&&cell.prop!=='door')continue;
+      seen.add(key);queue.push([nx,ny]);
+    }
+  }
+  assert.ok(seen.has('40,48'),'west room reachable from exterior door');
+  assert.ok(seen.has('43,48'),'bed room reachable through interior door');
+  assert.ok(seen.has('36,48'),'ammo crate approachable');
+});
