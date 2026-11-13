@@ -5,6 +5,10 @@ import {
   Backpack,
   Car,
   Flame,
+  Clock3,
+  Skull,
+  Utensils,
+  Droplet,
   Flashlight,
   Fuel,
   Gamepad2,
@@ -108,7 +112,7 @@ export const GameHud: React.FC<GameHudProps> = ({
                 strokeWidth="2"
               />
             </svg>
-            <div className="flex-1 h-2.5 bg-[#121518] border border-[#2c3331] overflow-hidden">
+            <div className="health-track flex-1 h-2.5 bg-[#121518] border border-[#2c3331] overflow-hidden">
               <div
                 className="h-full"
                 style={{
@@ -117,8 +121,8 @@ export const GameHud: React.FC<GameHudProps> = ({
                 }}
               />
             </div>
-            <span className="font-telemetry text-xs font-bold w-10 text-right text-[#f0ece1]">
-              {hud.hp}
+            <span className="health-value font-telemetry text-xs font-bold w-10 text-right text-[#f0ece1]">
+              {hud.hp} / {hud.maxHp}
             </span>
           </div>
 
@@ -136,7 +140,7 @@ export const GameHud: React.FC<GameHudProps> = ({
               className="flex items-center gap-1 flex-1 hover:bg-[#1d2224] px-1 py-0.5 -mx-1 rounded transition-colors cursor-pointer"
             >
               <span className="font-telemetry text-[10px] uppercase tracking-wider text-[#d99b38]">
-                Food
+                <Utensils className="w-3 h-3" aria-label="Food" />
               </span>
               <div className="flex-1 h-1.5 bg-[#121518] border border-[#2c3331] overflow-hidden">
                 <div className="h-full bg-[#d99b38]" style={{ width: `${foodPct}%` }} />
@@ -158,7 +162,7 @@ export const GameHud: React.FC<GameHudProps> = ({
               className="flex items-center gap-1 flex-1 hover:bg-[#1d2224] px-1 py-0.5 -mx-1 rounded transition-colors cursor-pointer"
             >
               <span className="font-telemetry text-[10px] uppercase tracking-wider text-[#4ea2d4]">
-                H2O
+                <Droplet className="w-3 h-3" aria-label="Water" />
               </span>
               <div className="flex-1 h-1.5 bg-[#121518] border border-[#2c3331] overflow-hidden">
                 <div className="h-full bg-[#4ea2d4]" style={{ width: `${waterPct}%` }} />
@@ -189,7 +193,7 @@ export const GameHud: React.FC<GameHudProps> = ({
                 Day {hud.day} · {hud.dayPhaseLabel}
               </div>
               <div className={`font-telemetry font-bold leading-tight text-[#f0ece1] ${touchEnabled ? 'text-sm' : 'text-lg'}`}>
-                {hud.timeLabel}
+                <Clock3 className="clock-symbol" />{hud.timeLabel}
               </div>
             </div>
 
@@ -200,7 +204,7 @@ export const GameHud: React.FC<GameHudProps> = ({
                 Kills · ({hud.worldCoords.gx}, {hud.worldCoords.gy})
               </div>
               <div className={`font-telemetry font-bold leading-tight text-[#e8a849] ${touchEnabled ? 'text-xs' : 'text-base'}`}>
-                {hud.kills} <span className="text-[#69706c] font-normal">/</span> {hud.score}
+                <Skull className="clock-symbol" />{hud.kills} <span className="text-[#69706c] font-normal">/</span> {hud.score}
               </div>
             </div>
           </div>

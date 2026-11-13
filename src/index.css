@@ -474,3 +474,131 @@ html[data-skin="a"] button[data-action-state="timed"]{background:#927123!importa
 html[data-skin="a"] button[data-action-state]:not([data-action-state="idle"]) :is(svg,span,.equipment-name){color:inherit!important;text-shadow:none!important;filter:none!important;}
 @keyframes action-alert-pulse{0%,100%{box-shadow:inset 0 0 0 1px #fff0c955,0 0 0 0 #f7cb6c11;}50%{box-shadow:inset 0 0 0 2px #fff5cf,0 0 0 3px #f7cb6c77,0 0 13px #f7bc6488;}}
 @media(prefers-reduced-motion:reduce){html[data-skin="a"] button[data-action-state="urgent"],html[data-skin="a"] button[data-action-state="timed"]{animation:none!important;box-shadow:0 0 0 2px #f7cb6c88!important;}}
+
+/* User reference: dark forged frames, warm icons, gold equipment selection.
+   This layer changes HUD/controls only; simulation and world art are untouched. */
+html[data-skin="a"]{--hud-dark:#17151f;--hud-rim:#a28c8f;--hud-inner:#49404c;--hud-gold:#ffe69c;}
+html[data-skin="a"] :is(.vitals-panel,.clock-panel,[data-testid="mobile-map"]){background:linear-gradient(145deg,#25212eea,#17151fed 60%);color:#f3eddf;border:2px solid #8b747b;border-top-color:#c0a0a0;border-bottom:3px solid #4b3a42;border-radius:3px;box-shadow:inset 0 0 0 2px #16141c,inset 0 0 0 3px #50454e,0 3px 0 #0b0a10,0 5px 9px #0008;}
+html[data-skin="a"] .vitals-panel{padding:10px 10px 8px 70px!important;min-width:236px!important;min-height:96px;border-left:2px solid #927c83;border-radius:3px 3px 9px 3px;}
+html[data-skin="a"] .vitals-panel::before{left:9px;top:11px;width:51px;height:72px;background-color:#2c3030;border:2px solid #7c777d;box-shadow:inset 0 0 0 3px #15131c,0 2px 1px #07070c;filter:drop-shadow(0 2px #0b0a10);background-size:86%;}
+html[data-skin="a"] .vitals-panel :is([class*="text-[#f0ece1]"],[class*="text-[#c7c2b6]"],[class*="text-[#8a918d]"]){color:#ece6d9;}
+html[data-skin="a"] .vitals-panel [class*="bg-[#121518]"]{background:#0d0c13;border:1px solid #62545b;border-radius:2px;box-shadow:inset 0 2px 2px #0008;}
+html[data-skin="a"] .vitals-panel .health-track{height:20px;}
+html[data-skin="a"] .vitals-panel .health-track>div{background:linear-gradient(#d74b4a,#ae252e)!important;box-shadow:inset 0 2px #fb767755;}
+html[data-skin="a"] .vitals-panel>div:first-child{position:relative;gap:5px;}
+html[data-skin="a"] .vitals-panel .health-value{position:absolute;right:5px;top:1px;width:auto;font-size:11px;line-height:18px;text-shadow:0 2px #3d1019;}
+html[data-skin="a"] .vitals-panel button{border-radius:2px;min-height:20px;}
+html[data-skin="a"] .vitals-panel button [class*="h-1.5"]{display:none;}
+html[data-skin="a"] .vitals-panel button>span:first-child{color:#e7d7af;}
+html[data-skin="a"] .vitals-panel button>span:last-child{font-size:11px;}
+html[data-skin="a"] .vitals-panel>div:last-child{border-color:#554650;}
+html[data-skin="a"] .clock-panel{top:16px;min-width:245px;border-radius:5px;padding:9px 13px;}
+html[data-skin="a"] .clock-panel [class*="text-[#8a918d]"]{color:#d4c8c4;font-size:9px;}
+html[data-skin="a"] .clock-panel [class*="font-bold"]{display:flex;align-items:center;gap:5px;color:#f1e6cf;}
+.clock-symbol{width:14px;height:14px;fill:currentColor;stroke-width:1.5;}
+html[data-skin="a"] .utility-buttons{gap:5px;}
+html[data-skin="a"] .utility-buttons>button{border-radius:4px;background:#221e2ae6;border:1px solid #8f7c82;border-bottom:3px solid #45323c;box-shadow:inset 0 0 0 2px #39303d,0 2px 4px #0009;color:#efdfc3;}
+html[data-skin="a"] .utility-label{color:#d4c5bc;}
+html[data-skin="a"] [data-testid="mobile-map"]{top:126px;width:91px;padding:5px;border-radius:3px;}
+html[data-skin="a"] [data-testid="mobile-map"]>div:first-child{display:flex;border-bottom:1px solid #6e5962;padding-bottom:3px;margin-bottom:3px;color:#f3eadb;letter-spacing:.1em;}
+html[data-skin="a"] [data-testid="mobile-map"] canvas{width:76px;height:76px;}
+html[data-skin="a"] [data-testid="mobile-map"]>div:last-child{display:block;font-size:8px;color:#d2c5c3;border-top:1px solid #64525c;padding-top:3px;}
+html[data-skin="a"] .equipment-bar{background:#211c28cc;border:2px solid #9b8c81;border-bottom-color:#59484e;border-radius:9px;padding:6px;gap:5px;box-shadow:inset 0 0 0 2px #0e0c14,inset 0 0 0 3px #544950,0 3px 6px #0009;}
+html[data-skin="a"] .equipment-bar>button{background:linear-gradient(145deg,#211e2bbd,#15141c9c);border:2px solid #77717e;border-top-color:#a19ba8;border-bottom:3px solid #47424e;border-radius:7px;box-shadow:inset 0 0 0 2px #0e0d16,inset 0 0 0 3px #3c3543;color:#fff2db;}
+html[data-skin="a"] .equipment-bar>button.hud-slot-active{background:linear-gradient(135deg,#57451a,#241f20 80%);border:2px solid #ffedaa;border-bottom:3px solid #d8af59;box-shadow:inset 0 0 0 2px #493515,inset 0 0 0 3px #f5ce74,0 0 12px #ffd96b88;}
+html[data-skin="a"] .equipment-bar>button>div:first-child{left:0;right:0;bottom:4px;text-align:center;justify-content:center;width:100%;}
+html[data-skin="a"] .equipment-bar>button>div:first-child>span{color:#fff6e7!important;text-shadow:0 2px #09090e;font-size:12px;}
+html[data-skin="a"] .equipment-icon{filter:drop-shadow(2px 3px #06050ab0);}
+html[data-skin="a"] .equipped-readout{border:2px solid #8c8575;background:linear-gradient(120deg,#211e2cee,#25251bea);border-radius:5px;color:#f3ecd9;padding:5px 10px;font-weight:700;box-shadow:inset 0 0 0 1px #1b1820,0 2px 3px #0008;}
+html[data-skin="a"] .equipped-sub{color:#c5e48f;opacity:1;font-weight:700;}
+html[data-skin="a"] [data-testid^="touch-"][data-testid$="-btn"]{border-radius:7px;background:#241d2d9e;border:2px solid #9d858e;border-top-color:#c2a0a7;border-bottom:3px solid #5b3d4e;box-shadow:inset 0 0 0 2px #15121c,inset 0 0 0 3px #4c3b50,0 3px 5px #0008;color:#f8e8ce;}
+html[data-skin="a"] [data-testid^="touch-"][data-testid$="-btn"] svg{width:24px;height:24px;stroke-width:2.5;color:#f1dfbf;filter:drop-shadow(0 2px #100e17);}
+html[data-skin="a"] [data-testid="touch-fire-btn"]{border-radius:50%;background:radial-gradient(circle at 45% 20%,#4d364d9e,#201b269c 75%);border-color:#c6a28a;}
+html[data-skin="a"] [data-testid="touch-fire-btn"] svg{width:28px;height:28px;fill:#edb84b;stroke:#ffe093;}
+html[data-skin="a"] .floating-stick-ring{background:radial-gradient(circle,#1e1b2760 45%,#15121e91 46%,#28232d8a)!important;border:3px solid #96909c!important;box-shadow:inset 0 0 0 3px #14111cbf,inset 0 0 0 5px #4b4452,0 4px 6px #0009!important;}
+html[data-skin="a"] .floating-stick-guide{border-color:#887b8e55;}
+html[data-skin="a"] .floating-stick-knob{background:radial-gradient(circle at 40% 30%,#5b53629e,#332d419c);border:2px solid #a59aa9;box-shadow:0 3px 4px #0008;}
+html[data-skin="a"] .floating-stick-knob i{background:#e6d4af!important;}
+html[data-skin="a"] .floating-stick-right .floating-stick-knob{border-color:#eddbb4;background:#3d314b6b;}
+html[data-skin="a"] .floating-aim-boundary{border-color:#dac39b96;background:#d7b9880b;}
+html[data-skin="a"] .floating-stick-ring[data-attacking="true"]{border-color:#ffd78f!important;box-shadow:inset 0 0 0 4px #825b35,0 0 12px #e8b46988!important;}
+/* Readiness and warning colors remain the approved action-cue palette. */
+html[data-skin="a"] button[data-action-state="ready"]{background:linear-gradient(145deg,#dad89c,#9baa67)!important;border-color:#f3edba;}
+@media(orientation:landscape){
+ html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar{position:fixed;left:28vw;right:auto;bottom:14px;width:39vw;gap:4px;padding:5px;}
+ html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar>button{flex:1;min-width:0;width:0;height:67px;}
+ html[data-skin="a"] .game-hud[data-touch="true"] .equipment-icon{width:42px!important;height:42px!important;margin-top:-3px!important;}
+ html[data-skin="a"] .equipped-readout{position:fixed;left:30vw;right:auto;bottom:99px;width:35vw;justify-content:center;font-size:12px;transform:none;}
+ html[data-skin="a"] .equipped-sub{display:inline;font-size:9px;}
+ .quick-action-rail{position:fixed;left:69vw;right:auto;top:auto;bottom:18px;display:grid;grid-template-columns:repeat(2,48px);gap:8px;}
+ .quick-action-rail>button{width:48px;height:48px;}
+ .context-action-stack{left:31vw;bottom:138px;width:37vw;max-width:37vw;transform:none;}
+ .context-action-stack>.quick-action-rail{width:auto;}
+ .left-control-cluster>[data-testid="touch-fire-btn"]{position:fixed;left:calc(23vw - 29px);bottom:calc(24vh - 29px);width:58px;height:58px;}
+ .floating-stick-left .floating-stick-ring:not([data-active="true"]){left:11vw!important;top:calc(100% - 24vh)!important;}
+ .floating-stick-right .floating-stick-ring:not([data-active="true"]){left:calc(100% - 9vw)!important;top:calc(100% - 24vh)!important;}
+ .floating-stick-left{width:27vw;}.floating-stick-right{width:17vw;}
+}
+@media(max-width:800px) and (orientation:landscape){
+ html[data-skin="a"] .vitals-panel{min-width:207px!important;width:207px;padding-left:58px!important;min-height:88px;}
+ html[data-skin="a"] .vitals-panel::before{width:41px;height:65px;left:7px;top:10px;}
+ html[data-skin="a"] .clock-panel{min-width:210px;padding:7px 9px;}
+ html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar{left:27vw;width:39vw;bottom:10px;gap:3px;padding:4px;}
+ html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar>button{height:57px;}
+ html[data-skin="a"] .game-hud[data-touch="true"] .equipment-icon{width:33px!important;height:33px!important;}
+ html[data-skin="a"] .equipment-bar>button>div:first-child>span{font-size:10px;}
+ html[data-skin="a"] .equipped-readout{left:28vw;width:37vw;bottom:81px;font-size:10px;}
+ html[data-skin="a"] .equipped-sub{font-size:7px;}
+ .quick-action-rail{left:68vw;bottom:13px;grid-template-columns:repeat(2,44px);gap:5px;}
+ .quick-action-rail>button{width:44px;min-width:44px!important;height:44px;min-height:44px!important;}
+ html[data-skin="a"] .quick-action-rail svg{width:21px;height:21px;}
+ .quick-action-rail span{font-size:8px;}
+ html[data-skin="a"] .floating-stick-ring{width:96px!important;height:96px!important;}
+ .context-action-stack{bottom:120px;}
+ html[data-skin="a"] [data-testid="mobile-map"]{top:112px;width:76px;}
+ html[data-skin="a"] [data-testid="mobile-map"] canvas{width:60px;height:60px;}
+}
+/* Keep the map clear of the floating thumb rest at short landscape heights. */
+html[data-skin="a"] [data-testid="touch-fire-btn"]{border-radius:50%!important;}
+.clock-symbol{fill:none;stroke-width:2.5;}
+html[data-skin="a"] [data-testid="mobile-map"]{width:81px;}
+html[data-skin="a"] [data-testid="mobile-map"] canvas{width:66px;height:66px;}
+@media(max-width:800px) and (orientation:landscape){
+ html[data-skin="a"] [data-testid="mobile-map"]{top:110px;width:66px;padding:4px;}
+ html[data-skin="a"] [data-testid="mobile-map"] canvas{width:52px;height:52px;}
+ html[data-skin="a"] [data-testid="mobile-map"]>div:last-child{display:none;}
+}
+@media(min-width:801px) and (orientation:landscape){
+ html[data-skin="a"] [data-testid="mobile-map"]{top:121px;}
+ html[data-skin="a"] [data-testid="mobile-map"]>div:last-child{font-size:7px;white-space:nowrap;}
+}
+/* Reference refinement: cut metal corners with a raised rim and a dark inset lip.
+   Shapes are painted inside existing boxes, leaving layout and touch zones intact. */
+html[data-skin="a"] :is(.vitals-panel,.clock-panel,.equipment-bar,.equipment-bar>button,.equipped-readout,.utility-buttons>button,[data-testid="mobile-map"],[data-testid="vehicle-hud"],[data-testid^="touch-"][data-testid$="-btn"]:not([data-testid="touch-fire-btn"]):not([data-testid="touch-drift-btn"])){--cut:8px;--rim-light:#c0a5a7;--rim-mid:#79616e;--rim-low:#3d2c3c;clip-path:polygon(var(--cut) 0,calc(100% - var(--cut)) 0,100% var(--cut),100% calc(100% - var(--cut)),calc(100% - var(--cut)) 100%,var(--cut) 100%,0 calc(100% - var(--cut)),0 var(--cut));border-color:transparent;border-radius:0!important;}
+html[data-skin="a"] :is(.utility-buttons>button,[data-testid="vehicle-hud"]){position:relative;}
+html[data-skin="a"] :is(.vitals-panel,.clock-panel,.equipment-bar,.equipment-bar>button,.equipped-readout,.utility-buttons>button,[data-testid="mobile-map"],[data-testid="vehicle-hud"],[data-testid^="touch-"][data-testid$="-btn"]:not([data-testid="touch-fire-btn"]):not([data-testid="touch-drift-btn"]))::after{
+ content:'';position:absolute;inset:0;width:auto;height:auto;pointer-events:none;z-index:3;box-shadow:none;
+ background:linear-gradient(135deg,var(--rim-light) 0%,var(--rim-mid) 26%,#302330 52%,var(--rim-mid) 78%,var(--rim-light) 100%);
+ clip-path:polygon(evenodd,8px 0,calc(100% - 8px) 0,100% 8px,100% calc(100% - 8px),calc(100% - 8px) 100%,8px 100%,0 calc(100% - 8px),0 8px,8px 0,9px 3px,3px 9px,3px calc(100% - 9px),9px calc(100% - 3px),calc(100% - 9px) calc(100% - 3px),calc(100% - 3px) calc(100% - 9px),calc(100% - 3px) 9px,calc(100% - 9px) 3px,9px 3px);
+}
+html[data-skin="a"] .equipment-bar>button.hud-slot-active{--rim-light:#fff3b3;--rim-mid:#e4b952;--rim-low:#825224;filter:drop-shadow(0 0 3px #ffcf66);box-shadow:inset 0 0 0 3px #f5ce74,inset 0 0 0 5px #433016, inset 0 0 18px #dfac4240;}
+html[data-skin="a"] :is(.equipment-bar>button,.utility-buttons>button,[data-testid^="touch-"][data-testid$="-btn"]:not([data-testid="touch-fire-btn"]):not([data-testid="touch-drift-btn"])){box-shadow:inset 0 0 0 2px #16111d,inset 0 0 0 4px #594858,inset 0 5px 8px #ffffff0b;}
+html[data-skin="a"] button[data-action-state="ready"]{--rim-light:#fff1bc;--rim-mid:#aeb677;}
+html[data-skin="a"] button:is([data-action-state="urgent"],[data-action-state="timed"]){--rim-light:#fff0b4;--rim-mid:#d99963;}
+html[data-skin="a"] [data-testid="vehicle-hud"]{background:linear-gradient(145deg,#25212eea,#17151fed 60%);color:#f3eddf;box-shadow:inset 0 0 0 3px #66525e;}
+html[data-skin="a"] [data-testid="vehicle-hud"] [class*="text-[#"]{color:inherit;}
+html[data-skin="a"] .game-hud .equipment-bar>button.hud-slot-active{--rim-light:#fff3b3;--rim-mid:#e4b952;box-shadow:inset 0 0 0 3px #f5ce74,inset 0 0 0 5px #433016,inset 0 0 18px #dfac4240;}
+html[data-skin="a"] .game-hud .equipment-bar>button.hud-slot-active::after{background:linear-gradient(135deg,#fff6ba,#d29a37 45%,#ffe5a0 85%,#fff6ba);}
+html[data-skin="a"] .game-hud button[data-action-state="ready"]::after,html[data-skin="a"] .touch-controls button[data-action-state="ready"]::after{background:linear-gradient(135deg,#fff1bc,#a5ad72 60%,#e8daa0);}
+html[data-skin="a"] .equipment-bar>button.hud-slot-active{--rim-light:#fff3b3!important;--rim-mid:#e4b952!important;box-shadow:inset 0 0 0 3px #f5ce74,inset 0 0 0 5px #433016,inset 0 0 18px #dfac4240!important;}
+html[data-skin="a"] .equipment-bar>button.hud-slot-active::after{background:linear-gradient(135deg,#fff6ba,#d29a37 45%,#ffe5a0 85%,#fff6ba)!important;}
+/* User feedback: no pale outlines on buttons. Keep the bevel in dark metal. */
+html[data-skin="a"] :is(.equipment-bar>button,.utility-buttons>button,[data-testid="mobile-map"],[data-testid^="touch-"][data-testid$="-btn"])::after{background:linear-gradient(135deg,#685760,#493843 32%,#211a27 55%,#55414f 85%,#78616a);}
+html[data-skin="a"] :is(.equipment-bar>button,.utility-buttons>button,[data-testid^="touch-"][data-testid$="-btn"]){border-top-color:#62505e;border-right-color:#443341;border-left-color:#584451;border-bottom-color:#302332;box-shadow:inset 0 0 0 2px #15111c,inset 0 0 0 4px #40323f;}
+html[data-skin="a"] [data-testid="touch-fire-btn"]{border-color:#67505f;box-shadow:inset 0 0 0 2px #17121d,inset 0 0 0 3px #443442;}
+html[data-skin="a"] .utility-buttons>button::after{background:linear-gradient(135deg,#685760,#493843 32%,#211a27 55%,#55414f 85%,#78616a);}
+html[data-skin="a"] button[data-action-state="ready"]{border-color:#77794b;}
+html[data-skin="a"] :is(.equipment-bar>button,.utility-buttons>button,[data-testid="mobile-map"],[data-testid^="touch-"][data-testid$="-btn"])::after{background:linear-gradient(135deg,#685760,#493843 32%,#211a27 55%,#55414f 85%,#78616a)!important;}
+html[data-skin="a"] .equipment-bar>button.hud-slot-active::after{background:linear-gradient(135deg,#f3d78e,#a87529 45%,#ddb45d 85%,#ebca7f)!important;}
+html[data-skin="a"] :is(.equipment-bar>button,.utility-buttons>button,[data-testid="mobile-map"],[data-testid^="touch-"][data-testid$="-btn"]){border-color:transparent!important;}
+html[data-skin="a"] [data-testid="touch-fire-btn"]{border-color:#51404f!important;}

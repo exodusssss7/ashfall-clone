@@ -9,6 +9,8 @@ import {
   Flame,
   Flashlight,
   Fuel,
+  Footprints,
+  RotateCcw,
   Hammer,
   LogOut,
   PackageOpen,
@@ -74,11 +76,9 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
   const cues = getActionCues(hud);
   const isDriving = Boolean(hud.drivingVehicle);
   const isFishing = Boolean(hud.fishing);
-  const isMeleeOnFoot =
-    !isDriving && !isFishing && !hud.buildMode && hud.equippedWeapon === 'crowbar';
 
-  // Left-hand trigger is hidden when Crowbar is equipped on foot because Swing is integrated into the Aim Stick
-  const showLeftTrigger = !isMeleeOnFoot;
+  // Keep a separate left trigger like the reference; right outer-ring attacks remain.
+  const showLeftTrigger = true;
 
   const fireLabel = isDriving
     ? 'DRIFT'
@@ -177,7 +177,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                   : 'bg-[#1a1f22]/90 border-[#d9822b] text-[#f0ece1] shadow-[0_4px_14px_rgba(0,0,0,0.6)]'
             }`}
           >
-            <Crosshair className="w-5 h-5" />
+            <Flame className="w-5 h-5" />
             <span className="font-telemetry text-[10px] font-bold tracking-wider mt-0.5">
               {fireLabel}
             </span>
@@ -439,7 +439,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                 style={{ touchAction: 'none' }}
                 className="min-w-[46px] min-h-[46px] rounded-lg border-2 border-[#3b4442] bg-[#14181a]/88 active:border-[#d9a436] text-[#e6e2d8] flex flex-col items-center justify-center cursor-pointer"
               >
-                <Zap className="w-4 h-4 text-[#d9a436]" />
+                <Footprints className="w-4 h-4 text-[#d9a436]" />
                 <span className="font-telemetry text-[9px] font-bold">DODGE</span>
               </button>
 
@@ -455,8 +455,8 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                 style={{ touchAction: 'none' }}
                 className="min-w-[46px] min-h-[46px] rounded-lg border-2 border-[#3b4442] bg-[#14181a]/88 active:border-[#d9822b] text-[#e6e2d8] flex flex-col items-center justify-center cursor-pointer"
               >
-                <ShieldAlert className="w-4 h-4 text-[#d9822b]" />
-                <span className="font-telemetry text-[9px] font-bold">RLD</span>
+                <RotateCcw className="w-4 h-4 text-[#d9822b]" />
+                <span className="font-telemetry text-[9px] font-bold">RELOAD</span>
               </button>
 
               <button
