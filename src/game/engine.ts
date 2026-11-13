@@ -1,4 +1,17 @@
-import { drawActionProp, type ActionKind, type ActionVisual } from './actionAnimation';
+import {
+  drawActionProp,
+  getLootOpenStage,
+  getLootPopTransform,
+  getZombieDyingFrame,
+  resolvePlayerAnimState,
+  resolveZombieAnimState,
+  type ActionKind,
+  type ActionVisual,
+} from './actionAnimation';
+import {
+  resolveCookingOutcomeForGrade,
+  type CookingGrade,
+} from './cookingQte';
 import { AIM_DIRECTION_DEADZONE, touchAimAttack } from './touchAim';
 import { findZombieRoute, type RoutePoint } from './navigation';
 import {
@@ -21,9 +34,11 @@ import { soundEngine } from './sound';
 import {
   VEHICLE_REPAIR_SCRAP_COST,
   advanceDoorLockpick,
+  applyBedSleep,
   barricadeDoorWithWood,
   canAffordCost,
   canPlaceStructureAt,
+  canSleepSafely,
   computeCombatDamage,
   computeRamImpact,
   computeZombieSteering,
@@ -96,6 +111,8 @@ export class SurvivalEngine {
   private ctx: CanvasRenderingContext2D;
   private lightCanvas: HTMLCanvasElement;
   private lightCtx: CanvasRenderingContext2D;
+  private flashCanvas: HTMLCanvasElement;
+  private flashCtx: CanvasRenderingContext2D;
   private minimapCanvas: HTMLCanvasElement | null = null;
   private atlas: PixelArtAtlas;
 
@@ -182,6 +199,10 @@ export class SurvivalEngine {
   private statusBannerTimer = 0;
   private deathDelayTimer = 0;
   private pendingGameOver = false;
+  private sleepTransitionTimer = 0;
+  private playerVelX = 0;
+  private playerVelY = 0;
+  private lastFrameDt = 0.016;
   private ambientAsh: Array<{ x: number; y: number; speed: number; drift: number; size: number; alpha: number }> = [];
 
   // Camera in unscaled isometric pixel coordinates
@@ -225,6 +246,12 @@ export class SurvivalEngine {
 
     this.lightCanvas = document.createElement('canvas');
     this.lightCtx = this.lightCanvas.getContext('2d')!;
+
+    this.flashCanvas = document.createElement('canvas');
+    this.flashCanvas.width = 48;
+    this.flashCanvas.height = 48;
+    this.flashCtx = this.flashCanvas.getContext('2d')!;
+    this.flashCtx.imageSmoothingEnabled = false;
 
     this.atlas = new PixelArtAtlas();
     this.onHudUpdate = onHudUpdate;
@@ -337,6 +364,9 @@ export class SurvivalEngine {
     this.trauma = 0;
     this.pendingGameOver = false;
     this.deathDelayTimer = 0;
+    this.sleepTransitionTimer = 0;
+    this.playerVelX = 0;
+    this.playerVelY = 0;
     this.statusBanner = titleMode ? null : 'DAY 1 · EXPLORE LAKE PIER, COOK AT STOVES & OUTLAST NIGHT';
     this.statusBannerTimer = titleMode ? 0 : 4.5;
 
@@ -373,6 +403,7 @@ export class SurvivalEngine {
       const rawDt = (now - this.lastTimestamp) / 1000;
       this.lastTimestamp = now;
       const dt = Math.min(Math.max(rawDt, 0.001), 0.05);
+      this.lastFrameDt = dt;
       this.update(dt);
       this.render();
       this.rafId = requestAnimationFrame(loop);
@@ -499,7 +530,7 @@ export class SurvivalEngine {
     return false;
   }
 
-  cookRecipe(recipeId: string): boolean {
+  cookRecipe(recipeId: string, grade: CookingGrade = 'good'): boolean {
     if (this.phase !== 'playing') return false;
     const recipe = COOK_RECIPES.find((r) => r.id === recipeId);
     if (!recipe) return false;
@@ -513,11 +544,46 @@ export class SurvivalEngine {
     }
     if (recipe.outputItem && recipe.outputAmount) {
       this.inventory = spendCost(this.inventory, recipe.cost);
-      this.inventory[recipe.outputItem] += recipe.outputAmount;
-      this.animateAction('cook','COOKING',1.4);
-      soundEngine.playCookingSizzle();
-      this.spawnParticles(this.player.x, this.player.y, 0.55, 8, '#ffbe5c', 1.5, 2.2, -1.5);
-      this.addFloatingText(this.player.x, this.player.y, 1.25, `+${recipe.outputAmount} ${recipe.name}`, '#f5c06e');
+      const outcome = resolveCookingOutcomeForGrade(grade, recipe.outputAmount);
+      this.inventory[recipe.outputItem] += outcome.outputAmount;
+      if (outcome.bonusHp > 0) {
+        this.player.hp = Math.min(this.player.maxHp, this.player.hp + outcome.bonusHp);
+      }
+      if (outcome.bonusScore > 0) {
+        this.score += outcome.bonusScore;
+      }
+      soundEngine.playCookOutcome(outcome.grade);
+      if (outcome.grade === 'perfect') {
+        this.animateAction('cook', 'PRIME COOK!', 1.45);
+        this.spawnParticles(this.player.x, this.player.y, 0.55, 14, '#ffd266', 2.0, 2.6, -1.6);
+        this.addFloatingText(
+          this.player.x,
+          this.player.y,
+          1.3,
+          `+${outcome.outputAmount} ${recipe.name} (PRIME!)`,
+          '#ffd266'
+        );
+      } else if (outcome.grade === 'good') {
+        this.animateAction('cook', 'COOKING', 1.3);
+        this.spawnParticles(this.player.x, this.player.y, 0.55, 8, '#ffbe5c', 1.5, 2.2, -1.5);
+        this.addFloatingText(
+          this.player.x,
+          this.player.y,
+          1.25,
+          `+${outcome.outputAmount} ${recipe.name}`,
+          '#f5c06e'
+        );
+      } else {
+        this.animateAction('cook', 'WARM SALVAGE', 1.0);
+        this.spawnParticles(this.player.x, this.player.y, 0.55, 8, '#c7b89c', 1.4, 2.0, -1.4);
+        this.addFloatingText(
+          this.player.x,
+          this.player.y,
+          1.25,
+          `+${outcome.outputAmount} ${recipe.name} (Warm Salvage)`,
+          '#e09c84'
+        );
+      }
       this.emitHud();
       return true;
     }
@@ -1054,6 +1120,7 @@ export class SurvivalEngine {
 
     // Visual-only effects always tick even during hitstop
     this.trauma = Math.max(0, this.trauma - dt * 2.4);
+    this.sleepTransitionTimer = Math.max(0, this.sleepTransitionTimer - dt);
     this.muzzleFlashTimer = Math.max(0, this.muzzleFlashTimer - dt);
     this.hitMarkerTimer = Math.max(0, this.hitMarkerTimer - dt);
     this.screechCooldown = Math.max(0, this.screechCooldown - dt);
@@ -1128,6 +1195,7 @@ export class SurvivalEngine {
       this.updatePlayer(dt);
     }
     this.updateDoors(dt);
+    this.updateContainers(dt);
     this.updateFishing(dt);
     this.updateStructures(dt);
     this.updateProjectiles(dt);
@@ -1424,33 +1492,46 @@ export class SurvivalEngine {
     if (p.dodgeTimer > 0) {
       p.dodgeTimer -= dt;
       const dodgeSpeed = 8.4;
-      this.moveActor(p, p.dodgeDirX * dodgeSpeed * dt, p.dodgeDirY * dodgeSpeed * dt, 0.22);
-    } else if (moveLen > 0) {
+      this.playerVelX = p.dodgeDirX * dodgeSpeed;
+      this.playerVelY = p.dodgeDirY * dodgeSpeed;
+      this.moveActor(p, this.playerVelX * dt, this.playerVelY * dt, 0.22);
+    } else {
       const baseSpeed = wantsSprint ? 4.8 : 3.25;
-      const dx = moveX * baseSpeed * dt;
-      const dy = moveY * baseSpeed * dt;
-      this.moveActor(p, dx, dy, 0.22);
+      const targetVx = moveLen > 0 ? moveX * baseSpeed : 0;
+      const targetVy = moveLen > 0 ? moveY * baseSpeed : 0;
+      const accelRate = moveLen > 0 ? 18 : 22;
+      const blend = 1 - Math.exp(-dt * accelRate);
+      this.playerVelX = lerp(this.playerVelX, targetVx, blend);
+      this.playerVelY = lerp(this.playerVelY, targetVy, blend);
 
-      const stepDist = Math.hypot(dx, dy);
-      p.walkCycle += stepDist * 3.4;
-      p.stepAccumulator += stepDist;
-      if (this.fishing.phase !== 'idle') {
-        this.cancelFishing();
-      }
-      if (p.stepAccumulator >= 0.85) {
-        p.stepAccumulator = 0;
-        const cell = this.getCell(Math.floor(p.x), Math.floor(p.y));
-        const surf =
-          cell.tile === 'road' || cell.tile === 'sidewalk' || cell.tile === 'floor' || cell.tile === 'pier'
-            ? 'road'
-            : 'grass';
-        soundEngine.playFootstep(surf, wantsSprint);
-        if (wantsSprint) {
-          this.emitSound(p.x, p.y, 6.2, false);
+      const speedNow = Math.hypot(this.playerVelX, this.playerVelY);
+      if (moveLen === 0 && speedNow < 0.08) {
+        this.playerVelX = 0;
+        this.playerVelY = 0;
+        p.walkCycle = 0;
+      } else {
+        const dx = this.playerVelX * dt;
+        const dy = this.playerVelY * dt;
+        this.moveActor(p, dx, dy, 0.22);
+        const stepDist = Math.hypot(dx, dy);
+        p.walkCycle += stepDist * 5.2;
+        p.stepAccumulator += stepDist;
+        if (this.fishing.phase !== 'idle') {
+          this.cancelFishing();
+        }
+        if (p.stepAccumulator >= 0.85) {
+          p.stepAccumulator = 0;
+          const cell = this.getCell(Math.floor(p.x), Math.floor(p.y));
+          const surf =
+            cell.tile === 'road' || cell.tile === 'sidewalk' || cell.tile === 'floor' || cell.tile === 'pier'
+              ? 'road'
+              : 'grass';
+          soundEngine.playFootstep(surf, wantsSprint);
+          if (wantsSprint) {
+            this.emitSound(p.x, p.y, 6.2, false);
+          }
         }
       }
-    } else {
-      p.walkCycle = 0;
     }
 
     // Aim facing toward right touch stick, movement direction (when using touch), or mouse cursor
@@ -1821,6 +1902,9 @@ export class SurvivalEngine {
       this.startFishing(spot);
       return;
     }
+    if (this.trySleepInBed()) {
+      return;
+    }
     if (this.isNearCookingHeat()) {
       soundEngine.playUiClick();
       this.onRequestOpenCook?.();
@@ -1926,10 +2010,27 @@ export class SurvivalEngine {
     }
   }
 
+  private updateContainers(dt: number): void {
+    for (const c of this.containers) {
+      if (c.kind === 'zombie_drop') continue;
+      if (c.searched) {
+        const cur = c.openAnim ?? 0;
+        if (cur < 1) {
+          c.openAnim = Math.min(1, cur + dt * 2.6);
+        }
+      }
+      if (c.popTimer && c.popTimer > 0) {
+        c.popTimer = Math.max(0, c.popTimer - dt);
+      }
+    }
+  }
+
   private collectContainer(c: LootContainer): void {
     if (c.searched) return;
     this.animateAction('search','SEARCHING',.9);
     c.searched = true;
+    c.openAnim = 0.05;
+    c.popTimer = 0.48;
     const gained: string[] = [];
     for (const [key, qty] of Object.entries(c.items)) {
       if (!qty) continue;
@@ -1990,6 +2091,72 @@ export class SurvivalEngine {
       }
     }
     return best;
+  }
+
+  private findNearestBed(): { gx: number; gy: number } | null {
+    const p = this.player;
+    const pgx = Math.floor(p.x);
+    const pgy = Math.floor(p.y);
+    let best: { gx: number; gy: number } | null = null;
+    let bestD = 1.85;
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const gx = pgx + dx;
+        const gy = pgy + dy;
+        const cell = this.getCell(gx, gy);
+        if (cell.prop !== 'bed') continue;
+        const d = dist(p.x, p.y, gx + 0.5, gy + 0.5);
+        if (d < bestD) {
+          // Ensure we do not interact through a solid wall partition
+          const midCell = this.getCell(Math.floor((p.x + gx + 0.5) * 0.5), Math.floor((p.y + gy + 0.5) * 0.5));
+          if (midCell.prop.startsWith('wall')) continue;
+          bestD = d;
+          best = { gx, gy };
+        }
+      }
+    }
+    return best;
+  }
+
+  private trySleepInBed(): boolean {
+    const bed = this.findNearestBed();
+    if (!bed) return false;
+
+    const safe = canSleepSafely(this.zombies, this.player.x, this.player.y);
+    if (!safe) {
+      soundEngine.playDryFire();
+      this.showBanner('Too dangerous to sleep — infected nearby!', 2.2);
+      return true;
+    }
+
+    const res = applyBedSleep(this.player, this.timeMinutes, this.day);
+    this.player = res.player;
+    this.day = res.day;
+    this.timeMinutes = res.timeMinutes;
+    this.sleepTransitionTimer = 1.65;
+    this.animateAction('sleep', 'RESTING', 1.45);
+    soundEngine.playSleepRest();
+
+    this.addFloatingText(
+      this.player.x,
+      this.player.y,
+      1.35,
+      res.healed > 0 ? `+${res.healed} HP · RESTED +3h` : 'RESTED · +3h',
+      '#9ee89e'
+    );
+    this.spawnParticles(bed.gx + 0.5, bed.gy + 0.5, 0.55, 8, '#c5e8c2', 1.1, 1.5, -1.2);
+
+    if (res.dayWrapped) {
+      this.score += 150;
+      this.showBanner(`DAWN · DAY ${this.day} (+150 SCORE)`, 3.2);
+    } else {
+      this.showBanner(
+        res.healed > 0 ? `Rested cleanly in bed (+${res.healed} HP · +3h)` : 'Rested cleanly in bed (+3h)',
+        2.4
+      );
+    }
+    this.emitHud();
+    return true;
   }
 
   private emitSound(x: number, y: number, radius: number, showRipple: boolean): void {
@@ -2214,7 +2381,7 @@ export class SurvivalEngine {
 
     if (z.hp <= 0 && z.state !== 'dying') {
       z.state = 'dying';
-      z.stateTimer = 0.38;
+      z.stateTimer = 0.52;
       z.hasAttackToken = false;
       this.kills += 1;
       const cfg = ZOMBIE_CONFIGS[z.archetype];
@@ -2637,26 +2804,31 @@ export class SurvivalEngine {
     const canMoveX = !this.isPointSolid(actor.x + dx, actor.y, radius);
     if (canMoveX) {
       actor.x += dx;
-    } else if (Math.abs(dx) > 0.001 && Math.abs(dy) < 0.002) {
-      // Smooth corner-sliding along Y when pushing into a doorway/corner along X
-      const slide = Math.abs(dx) * 0.55;
-      if (!this.isPointSolid(actor.x + dx * 0.5, actor.y + slide, radius)) {
-        actor.y += slide;
-      } else if (!this.isPointSolid(actor.x + dx * 0.5, actor.y - slide, radius)) {
-        actor.y -= slide;
+    } else if (Math.abs(dx) > 0.0005) {
+      // Smooth corner-sliding around isometric doorways and furniture edges (works even on diagonal WASD)
+      const probe = 0.28;
+      const clearPlus = !this.isPointSolid(actor.x + dx, actor.y + probe, radius);
+      const clearMinus = !this.isPointSolid(actor.x + dx, actor.y - probe, radius);
+      if (clearPlus !== clearMinus) {
+        const slide = Math.abs(dx) * 0.72 * (clearPlus ? 1 : -1);
+        if (!this.isPointSolid(actor.x + dx * 0.45, actor.y + slide, radius)) {
+          actor.y += slide;
+        }
       }
     }
 
     const canMoveY = !this.isPointSolid(actor.x, actor.y + dy, radius);
     if (canMoveY) {
       actor.y += dy;
-    } else if (Math.abs(dy) > 0.001 && Math.abs(dx) < 0.002) {
-      // Smooth corner-sliding along X when pushing into a doorway/corner along Y
-      const slide = Math.abs(dy) * 0.55;
-      if (!this.isPointSolid(actor.x + slide, actor.y + dy * 0.5, radius)) {
-        actor.x += slide;
-      } else if (!this.isPointSolid(actor.x - slide, actor.y + dy * 0.5, radius)) {
-        actor.x -= slide;
+    } else if (Math.abs(dy) > 0.0005) {
+      const probe = 0.28;
+      const clearPlus = !this.isPointSolid(actor.x + probe, actor.y + dy, radius);
+      const clearMinus = !this.isPointSolid(actor.x - probe, actor.y + dy, radius);
+      if (clearPlus !== clearMinus) {
+        const slide = Math.abs(dy) * 0.72 * (clearPlus ? 1 : -1);
+        if (!this.isPointSolid(actor.x + slide, actor.y + dy * 0.45, radius)) {
+          actor.x += slide;
+        }
       }
     }
   }
@@ -2805,13 +2977,15 @@ export class SurvivalEngine {
     const shakeX = shakeMag > 0.1 ? (Math.random() * 2 - 1) * shakeMag : 0;
     const shakeY = shakeMag > 0.1 ? (Math.random() * 2 - 1) * shakeMag : 0;
 
-    const originX = Math.floor(this.viewW * 0.5 / PIXEL_SCALE - this.camX + shakeX);
-    const originY = Math.floor(this.viewH * 0.5 / PIXEL_SCALE - this.camY + shakeY);
+    const originX = this.viewW * 0.5 / PIXEL_SCALE - this.camX + shakeX;
+    const originY = this.viewH * 0.5 / PIXEL_SCALE - this.camY + shakeY;
 
     ctx.save();
     ctx.scale(PIXEL_SCALE, PIXEL_SCALE);
 
-    // Determine visible tile bounds for fast infinite isometric culling
+    // Determine visible diamond tile bounds for fast infinite isometric culling (cull before getCell!)
+    const vPw = Math.ceil(this.viewW / PIXEL_SCALE);
+    const vPh = Math.ceil(this.viewH / PIXEL_SCALE);
     const centerWorld = isoToWorld(this.camX, this.camY);
     const span = 22;
     const minGX = Math.floor(centerWorld.wx - span);
@@ -2822,13 +2996,13 @@ export class SurvivalEngine {
     // Pass 1: Isometric Ground Tiles
     for (let gy = minGY; gy <= maxGY; gy++) {
       for (let gx = minGX; gx <= maxGX; gx++) {
-        const cell = this.getCell(gx, gy);
         const iso = worldToIso(gx, gy, 0);
         const drawX = Math.round(originX + iso.sx - TILE_W * 0.5);
         const drawY = Math.round(originY + iso.sy);
-        if (drawX < -TILE_W || drawX > this.viewW / PIXEL_SCALE + TILE_W || drawY < -TILE_H || drawY > this.viewH / PIXEL_SCALE + TILE_H) {
+        if (drawX < -TILE_W || drawX > vPw + TILE_W || drawY < -TILE_H || drawY > vPh + TILE_H) {
           continue;
         }
+        const cell = this.getCell(gx, gy);
         ctx.drawImage(this.atlas.getTile(cell.tile, cell.variant), drawX, drawY);
         // Subtle animated pixel water shimmer on lake tiles
         if (cell.tile === 'water' && ((gx * 7 + gy * 13 + Math.floor(this.elapsedClock * 3)) % 11) === 0) {
@@ -2844,15 +3018,20 @@ export class SurvivalEngine {
     ctx.fillStyle = `rgba(6, 8, 11, ${shadowAlpha.toFixed(2)})`;
     for (let gy = minGY; gy <= maxGY; gy++) {
       for (let gx = minGX; gx <= maxGX; gx++) {
-        const cell = this.getCell(gx, gy);
-        if (cell.prop === 'none') continue;
         const iso = worldToIso(gx + 0.5, gy + 0.5, 0);
         const sx = Math.round(originX + iso.sx);
         const sy = Math.round(originY + iso.sy);
-        if (sx < -32 || sx > this.viewW / PIXEL_SCALE + 32 || sy < -32 || sy > this.viewH / PIXEL_SCALE + 32) {
+        if (sx < -32 || sx > vPw + 32 || sy < -32 || sy > vPh + 32) {
           continue;
         }
-        if (cell.prop === 'wall_brick' || cell.prop === 'wall_wood' || cell.prop === 'door') {
+        const cell = this.getCell(gx, gy);
+        if (cell.prop === 'none') continue;
+        if (
+          cell.prop === 'wall_brick' ||
+          cell.prop === 'wall_wood' ||
+          cell.prop === 'wall_interior' ||
+          cell.prop === 'door'
+        ) {
           const door = cell.prop === 'door' ? this.doorByTile.get(`${gx}_${gy}`) : null;
           if (door && door.status === 'open') continue;
           // Cast a 2:1 isometric parallelogram shadow to the SE (+sx, +sy)
@@ -2910,12 +3089,13 @@ export class SurvivalEngine {
       ctx.globalAlpha = 1;
     }
 
-    // Subtle 2:1 isometric diamond highlight on the nearest interactive tile (door, loot container, or fishing pier)
+    // Subtle 2:1 isometric diamond highlight on the nearest interactive tile (door, loot container, or bed)
     if (this.phase === 'playing' && this.activeVehicleId === null && !this.player.buildMode) {
       const nearLoot = this.findNearestLootable();
       const nearDoor = !nearLoot ? this.findNearestDoor() : null;
-      const tgx = nearLoot ? nearLoot.gx : nearDoor ? nearDoor.gx : null;
-      const tgy = nearLoot ? nearLoot.gy : nearDoor ? nearDoor.gy : null;
+      const nearBed = !nearLoot && !nearDoor ? this.findNearestBed() : null;
+      const tgx = nearLoot ? nearLoot.gx : nearDoor ? nearDoor.gx : nearBed ? nearBed.gx : null;
+      const tgy = nearLoot ? nearLoot.gy : nearDoor ? nearDoor.gy : nearBed ? nearBed.gy : null;
       if (tgx !== null && tgy !== null) {
         const tIso = worldToIso(tgx + 0.5, tgy + 0.5, 0);
         const tx = Math.round(originX + tIso.sx);
@@ -3041,11 +3221,17 @@ export class SurvivalEngine {
     const animFrame = Math.floor(this.elapsedClock * 8);
     const isWallProp = (gx: number, gy: number) => {
       const p = this.getCell(gx, gy).prop;
-      return p === 'wall_brick' || p === 'wall_wood' || p === 'door';
+      return p === 'wall_brick' || p === 'wall_wood' || p === 'wall_interior' || p === 'door';
     };
 
     for (let gy = minGY; gy <= maxGY; gy++) {
       for (let gx = minGX; gx <= maxGX; gx++) {
+        const preIso = worldToIso(gx + 0.5, gy + 0.5, 0);
+        const preX = originX + preIso.sx;
+        const preY = originY + preIso.sy;
+        if (preX < -42 || preX > vPw + 42 || preY < -36 || preY > vPh + 56) {
+          continue;
+        }
         const cell = this.getCell(gx, gy);
         if (cell.prop === 'none') continue;
 
@@ -3079,7 +3265,8 @@ export class SurvivalEngine {
 
         let sprite: HTMLCanvasElement | undefined;
         let isWall = false;
-        if (cell.prop === 'wall_brick' || cell.prop === 'wall_wood') {
+        const container = containerByTile.get(`${gx}_${gy}`);
+        if (cell.prop === 'wall_brick' || cell.prop === 'wall_wood' || cell.prop === 'wall_interior') {
           isWall = true;
           const mask =
             (isWallProp(gx, gy - 1) ? 1 : 0) |
@@ -3088,39 +3275,60 @@ export class SurvivalEngine {
             (isWallProp(gx - 1, gy) ? 8 : 0);
           sprite = this.atlas.getWall(cell.prop, mask, cell.variant);
         } else {
-          const container = containerByTile.get(`${gx}_${gy}`);
           const isSearched = container ? container.searched : false;
-          sprite = this.atlas.getProp(cell.prop, isSearched, animFrame);
+          const openStage = container ? getLootOpenStage(container.searched, container.openAnim ?? 0) : undefined;
+          sprite = this.atlas.getProp(cell.prop, isSearched, animFrame, openStage);
         }
 
         if (!sprite) continue;
-        const container = containerByTile.get(`${gx}_${gy}`);
         const iso = worldToIso(gx + 0.5, gy + 0.5, 0);
-        const px = Math.round(originX + iso.sx - sprite.width * 0.5);
+        const anchorX = Math.round(originX + iso.sx);
+        const anchorY = Math.round(originY + iso.sy);
+        const px = Math.round(anchorX - sprite.width * 0.5);
         // Align each sprite's visual base anchor directly onto tile center (gx + 0.5, gy + 0.5)
-        let baseOffsetY = 23; // buildIsoObjectSprite (h=34, ground center at y=23)
-        if (isWall) baseOffsetY = sprite.height - 10; // wall south corner y=36 meets iso.sy + 8
+        let baseOffsetY = 26; // buildIsoObjectSprite & buildLootContainerSprite (34x38, ground center at y=26)
+        if (isWall) baseOffsetY = sprite.height - 10; // wall south corner meets iso.sy + 8
         else if (cell.prop === 'barrel_burn') baseOffsetY = 24;
         else if (cell.prop === 'streetlamp') baseOffsetY = 40;
-        else if (cell.prop === 'tree_pine' || cell.prop === 'tree_dead') baseOffsetY = 43;
-        const py = Math.round(originY + iso.sy - baseOffsetY);
+        else if (cell.prop === 'tree_pine' || cell.prop === 'tree_dead') baseOffsetY = 42;
+        const py = Math.round(anchorY - baseOffsetY);
         const occludesPlayer =
           isWall &&
           this.phase !== 'title' &&
           gx + gy > this.player.x + this.player.y + 0.15 &&
           Math.abs(gx + 0.5 - this.player.x) < 2.2 &&
           Math.abs(gy + 0.5 - this.player.y) < 2.2;
+        const occludesTallProp =
+          !isWall &&
+          (cell.prop === 'bookshelf' || cell.prop === 'fridge') &&
+          this.phase !== 'title' &&
+          gx + gy > this.player.x + this.player.y + 0.25 &&
+          Math.abs(gx + 0.5 - this.player.x) < 1.35 &&
+          Math.abs(gy + 0.5 - this.player.y) < 1.35;
+        const popTransform =
+          container && container.popTimer && container.popTimer > 0
+            ? getLootPopTransform(container.popTimer)
+            : null;
 
         renderList.push({
           depth: gx + gy + 1.0,
           draw: () => {
             if (occludesPlayer) ctx.globalAlpha = 0.42;
-            ctx.drawImage(sprite, px, py);
+            else if (occludesTallProp) ctx.globalAlpha = 0.58;
+            if (popTransform) {
+              ctx.save();
+              ctx.translate(anchorX, Math.round(anchorY + popTransform.offsetY));
+              ctx.scale(popTransform.scaleX, popTransform.scaleY);
+              ctx.drawImage(sprite, Math.round(-sprite.width * 0.5), -baseOffsetY);
+              ctx.restore();
+            } else {
+              ctx.drawImage(sprite, px, py);
+            }
             ctx.globalAlpha = 1;
             if (container && !container.searched && dist(this.player.x, this.player.y, gx + 0.5, gy + 0.5) < 8.5) {
               ctx.globalAlpha = glintPulse;
               ctx.fillStyle = '#f0d078';
-              ctx.fillRect(Math.round(originX + iso.sx - 1), py - 3, 2, 2);
+              ctx.fillRect(anchorX - 1, py + 4, 2, 2);
               ctx.globalAlpha = 1;
             }
           },
@@ -3158,13 +3366,14 @@ export class SurvivalEngine {
       });
     }
 
-    // Zombie loot drops (2:1 isometric scavenger pouch)
-    const dropSprite = this.atlas.getLootDrop();
+    // Zombie loot drops (animated 2:1 isometric scavenger pouch)
+    const dropSprite = this.atlas.getLootDrop(Math.floor(this.elapsedClock * 5));
     for (const c of this.containers) {
       if (c.kind !== 'zombie_drop' || c.searched) continue;
       const iso = worldToIso(c.gx + 0.5, c.gy + 0.5, 0);
+      const bobY = Math.round(Math.sin(this.elapsedClock * 4 + c.gx * 1.7 + c.gy) * 1.0);
       const sx = Math.round(originX + iso.sx - dropSprite.width * 0.5);
-      const sy = Math.round(originY + iso.sy - 12);
+      const sy = Math.round(originY + iso.sy - 14 + bobY);
       renderList.push({
         depth: c.gx + c.gy + 0.3,
         draw: () => {
@@ -3191,15 +3400,28 @@ export class SurvivalEngine {
       });
     }
 
-    // Zombies (4-quadrant isometric orientation)
+    // Zombies (4-quadrant isometric orientation & multi-state sprite animations)
     for (const z of this.zombies) {
       const iso = worldToIso(z.x, z.y, 0);
       const sx = Math.round(originX + iso.sx);
       const sy = Math.round(originY + iso.sy);
       const screenDir = z.facingX - z.facingY >= 0;
       const facingUp = z.facingX + z.facingY < -0.15;
-      const frame = Math.floor(z.walkCycle) % 4;
-      const sprite = this.atlas.getCharacter(z.archetype, frame, screenDir, facingUp);
+      const animState = resolveZombieAnimState({
+        state: z.state,
+        isMoving: z.state === 'chase' || z.state === 'wander' || z.state === 'alert',
+      });
+      const frame =
+        animState === 'dying'
+          ? getZombieDyingFrame(z.stateTimer, 0.52)
+          : animState === 'windup'
+            ? Math.floor(this.elapsedClock * 10) % 4
+            : animState === 'attack'
+              ? Math.min(2, Math.floor((1 - clamp(z.stateTimer / 0.14, 0, 1)) * 3))
+              : animState === 'walk'
+                ? Math.floor(z.walkCycle) % 8
+                : Math.floor(this.elapsedClock * 3 + z.id) % 4;
+      const sprite = this.atlas.getCharacter(z.archetype, frame, screenDir, facingUp, animState);
 
       renderList.push({
         depth: z.x + z.y,
@@ -3216,32 +3438,32 @@ export class SurvivalEngine {
           ctx.save();
           ctx.translate(sx, sy + 2);
           if (z.state === 'dying') {
-            ctx.rotate(z.koRotation);
-            ctx.globalAlpha = clamp(z.stateTimer * 2.6, 0, 1);
+            ctx.globalAlpha = clamp(z.stateTimer / 0.22, 0, 1);
           }
           ctx.scale(z.scaleX, z.scaleY);
-          ctx.drawImage(sprite, -Math.floor(sprite.width * 0.5), -sprite.height + 2);
+          const drawX = -Math.floor(sprite.width * 0.5);
+          const drawY = -sprite.height + 2;
+          ctx.drawImage(sprite, drawX, drawY);
           if (z.hitFlash > 0) {
-            ctx.globalCompositeOperation = 'source-atop';
-            ctx.fillStyle = 'rgba(255,255,255,0.75)';
-            ctx.fillRect(-14, -30, 28, 30);
+            this.drawTintedSprite(ctx, sprite, drawX, drawY, 'rgba(255, 255, 255, 0.72)');
           }
           ctx.restore();
 
           // Tiny health bar if damaged
           if (z.hp < z.maxHp && z.state !== 'dying') {
             const bw = 14;
+            const barY = sy - (z.archetype === 'bloater' ? 40 : 37);
             const pct = clamp(z.hp / z.maxHp, 0, 1);
             ctx.fillStyle = '#121518';
-            ctx.fillRect(sx - 7, sy - 31, bw, 3);
+            ctx.fillRect(sx - 7, barY, bw, 3);
             ctx.fillStyle = '#d6453a';
-            ctx.fillRect(sx - 6, sy - 30, Math.round((bw - 2) * pct), 1);
+            ctx.fillRect(sx - 6, barY + 1, Math.round((bw - 2) * pct), 1);
           }
         },
       });
     }
 
-    // Survivor (Player) — hidden when seated inside a vehicle
+    // Survivor (Player) — multi-state animated sprite, hidden when seated inside a vehicle
     if (this.phase !== 'title' && this.activeVehicleId === null) {
       const p = this.player;
       const iso = worldToIso(p.x, p.y, 0);
@@ -3251,17 +3473,42 @@ export class SurvivalEngine {
       const aimVecY = Math.sin(p.facingAngle);
       const facingRight = aimVecX - aimVecY >= 0;
       const facingUp = aimVecX + aimVecY < -0.15;
-      const frame = Math.floor(p.walkCycle) % 4;
-      const sprite = this.atlas.getCharacter('player', frame, facingRight, facingUp);
+      const animState = resolvePlayerAnimState({
+        dodgeTimer: p.dodgeTimer,
+        meleeSwingTimer: p.meleeSwingTimer,
+        attackCooldown: p.attackCooldown,
+        attackCooldownMax: WEAPONS[p.equippedWeapon].cooldown,
+        walkCycle: p.walkCycle,
+      });
+      const frame =
+        animState === 'dodge'
+          ? Math.floor((1 - clamp(p.dodgeTimer / 0.22, 0, 1)) * 2)
+          : animState === 'attack'
+            ? p.meleeSwingTimer > 0
+              ? Math.min(2, Math.floor((1 - clamp(p.meleeSwingTimer / 0.22, 0, 1)) * 3))
+              : 1
+            : animState === 'walk'
+              ? Math.floor(p.walkCycle) % 8
+              : Math.floor(this.elapsedClock * 3.5) % 4;
+      const sprite = this.atlas.getCharacter('player', frame, facingRight, facingUp, animState);
       const weaponSprite = this.atlas.getWeaponSprite(p.equippedWeapon);
-      let action=this.actionVisual;
-      if(this.fishing.phase!=='idle'){
-        const casting=this.fishing.phase==='casting';
-        action={kind:casting?'cast':'fish',label:casting?'CASTING':this.fishing.phase==='bite'?'REEL NOW':'FISHING',duration:casting?.32:1,remaining:casting?this.fishing.timer:1-(this.elapsedClock%1)};
-      }else if(p.reloadingTimer>0&&p.reloadingWeapon){
-        action={kind:'reload',label:'RELOADING',duration:WEAPONS[p.reloadingWeapon].reloadTime,remaining:p.reloadingTimer};
+      let action = this.actionVisual;
+      if (this.fishing.phase !== 'idle') {
+        const casting = this.fishing.phase === 'casting';
+        action = {
+          kind: casting ? 'cast' : 'fish',
+          label: casting ? 'CASTING' : this.fishing.phase === 'bite' ? 'REEL NOW' : 'FISHING',
+          duration: casting ? 0.32 : 1,
+          remaining: casting ? this.fishing.timer : 1 - (this.elapsedClock % 1),
+        };
+      } else if (p.reloadingTimer > 0 && p.reloadingWeapon) {
+        action = {
+          kind: 'reload',
+          label: 'RELOADING',
+          duration: WEAPONS[p.reloadingWeapon].reloadTime,
+          remaining: p.reloadingTimer,
+        };
       }
-
 
       renderList.push({
         depth: p.x + p.y,
@@ -3302,23 +3549,24 @@ export class SurvivalEngine {
           }
 
           ctx.save();
-          ctx.translate(sx, sy + 2 + (action ? Math.round(Math.sin(this.elapsedClock*12)) : 0));
+          ctx.translate(sx, sy + 2 + (action ? Math.round(Math.sin(this.elapsedClock * 12)) : 0));
           ctx.scale(p.scaleX, p.scaleY);
 
           const drawHeldWeapon = () => {
+            if (animState === 'dodge') return;
             const screenAimAngle = Math.atan2((aimVecX + aimVecY) * 0.5, aimVecX - aimVecY);
             const swingRot =
               p.meleeSwingTimer > 0
                 ? Math.sin((1 - p.meleeSwingTimer / 0.22) * Math.PI) * (facingRight ? 0.95 : -0.95)
                 : 0;
             ctx.save();
-            ctx.translate(facingRight ? 4 : -4, facingUp ? -15 : -13);
+            ctx.translate(facingRight ? 4 : -4, facingUp ? -16 : -14);
             ctx.rotate(
               (facingRight ? screenAimAngle * 0.55 : screenAimAngle * 0.55 - Math.PI * 0.15) + swingRot
             );
-            ctx.drawImage(weaponSprite, facingRight ? -2 : -14, -8);
+            ctx.drawImage(weaponSprite, facingRight ? -4 : -16, -10);
             if (this.muzzleFlashTimer > 0 && (p.equippedWeapon === 'pistol' || p.equippedWeapon === 'shotgun')) {
-              const fx = facingRight ? 11 : -15;
+              const fx = facingRight ? 13 : -17;
               ctx.fillStyle = '#fff3b0';
               ctx.fillRect(fx, -3, 4, 3);
               ctx.fillStyle = '#ff982b';
@@ -3327,36 +3575,43 @@ export class SurvivalEngine {
             ctx.restore();
           };
 
+          const pDrawX = -Math.floor(sprite.width * 0.5);
+          const pDrawY = -sprite.height + 2;
+
           // Layer weapon behind torso when facing NE/NW away from camera, in front when facing SE/SW
           if (facingUp) {
-            if(!action)drawHeldWeapon();
-            ctx.drawImage(sprite, -Math.floor(sprite.width * 0.5), -sprite.height + 2);
+            if (!action) drawHeldWeapon();
+            ctx.drawImage(sprite, pDrawX, pDrawY);
           } else {
-            ctx.drawImage(sprite, -Math.floor(sprite.width * 0.5), -sprite.height + 2);
-            if(!action)drawHeldWeapon();
+            ctx.drawImage(sprite, pDrawX, pDrawY);
+            if (!action) drawHeldWeapon();
           }
-          if(action)drawActionProp(ctx,action,facingRight);
+          if (action) drawActionProp(ctx, action, facingRight);
 
           if (p.hitFlash > 0) {
-            ctx.fillStyle = 'rgba(255, 90, 80, 0.45)';
-            ctx.fillRect(-8, -28, 16, 26);
+            this.drawTintedSprite(ctx, sprite, pDrawX, pDrawY, 'rgba(255, 86, 76, 0.58)');
           }
           ctx.restore();
 
-          if(action){
-            ctx.save();ctx.font='7px monospace';ctx.textAlign='center';
-            const w=ctx.measureText(action.label).width+10;
-            ctx.fillStyle='#10271cdd';ctx.fillRect(Math.round(sx-w/2),sy-48,w,12);
-            ctx.fillStyle='#e6dfad';ctx.fillText(action.label,sx,sy-39);ctx.restore();
+          if (action) {
+            ctx.save();
+            ctx.font = '7px monospace';
+            ctx.textAlign = 'center';
+            const w = ctx.measureText(action.label).width + 10;
+            ctx.fillStyle = '#10271cdd';
+            ctx.fillRect(Math.round(sx - w / 2), sy - 52, w, 12);
+            ctx.fillStyle = '#e6dfad';
+            ctx.fillText(action.label, sx, sy - 43);
+            ctx.restore();
           }
           // Diegetic reload progress bar right above survivor
           if (p.reloadingTimer > 0 && p.reloadingWeapon) {
             const total = WEAPONS[p.reloadingWeapon].reloadTime || 1;
             const prog = clamp(1 - p.reloadingTimer / total, 0, 1);
             ctx.fillStyle = '#121518';
-            ctx.fillRect(sx - 9, sy - 33, 18, 3);
+            ctx.fillRect(sx - 9, sy - 39, 18, 3);
             ctx.fillStyle = '#e8a849';
-            ctx.fillRect(sx - 8, sy - 32, Math.round(16 * prog), 1);
+            ctx.fillRect(sx - 8, sy - 38, Math.round(16 * prog), 1);
           }
         },
       });
@@ -3419,14 +3674,32 @@ export class SurvivalEngine {
 
     // Drifting atmospheric ashfall particles in pixel viewport space
     const { darkness } = getDaylightInfo(this.timeMinutes);
-    const vPw = Math.ceil(this.viewW / PIXEL_SCALE);
-    const vPh = Math.ceil(this.viewH / PIXEL_SCALE);
     for (const ash of this.ambientAsh) {
       ctx.globalAlpha = ash.alpha * (0.65 + darkness * 0.5);
       ctx.fillStyle = '#b9b5ab';
       ctx.fillRect(Math.floor(ash.x * vPw), Math.floor(ash.y * vPh), ash.size, ash.size);
     }
     ctx.globalAlpha = 1;
+
+    // Cozy sleep vignette & rising Zzz pixel feedback when resting in a bed
+    if (this.sleepTransitionTimer > 0) {
+      const restProg = clamp(1 - this.sleepTransitionTimer / 1.65, 0, 1);
+      const restFade = Math.sin(restProg * Math.PI) * 0.52;
+      ctx.fillStyle = `rgba(9, 12, 22, ${restFade.toFixed(3)})`;
+      ctx.fillRect(0, 0, vPw, vPh);
+
+      const pIso = worldToIso(this.player.x, this.player.y, 0.9);
+      const zx = Math.round(originX + pIso.sx + 6);
+      const zy = Math.round(originY + pIso.sy - 16 - restProg * 14);
+      ctx.save();
+      ctx.globalAlpha = Math.sin(restProg * Math.PI);
+      ctx.font = 'bold 8px "JetBrains Mono", monospace';
+      ctx.fillStyle = '#0d1012';
+      ctx.fillText('Z z z', zx + 1, zy + 1);
+      ctx.fillStyle = '#a8e6cf';
+      ctx.fillText('Z z z', zx, zy);
+      ctx.restore();
+    }
 
     ctx.restore();
 
@@ -3470,11 +3743,30 @@ export class SurvivalEngine {
     }
 
     // Pass 7: Tactical Minimap (throttled to ~8Hz for low CPU overhead)
-    this.minimapTimer += 0.016;
+    this.minimapTimer += this.lastFrameDt;
     if (this.minimapTimer >= 0.12) {
       this.minimapTimer = 0;
       this.renderMinimap();
     }
+  }
+
+  private drawTintedSprite(
+    targetCtx: CanvasRenderingContext2D,
+    sprite: HTMLCanvasElement,
+    dx: number,
+    dy: number,
+    tint: string
+  ): void {
+    const fctx = this.flashCtx;
+    const sw = sprite.width;
+    const sh = sprite.height;
+    fctx.globalCompositeOperation = 'source-over';
+    fctx.clearRect(0, 0, sw, sh);
+    fctx.drawImage(sprite, 0, 0);
+    fctx.globalCompositeOperation = 'source-atop';
+    fctx.fillStyle = tint;
+    fctx.fillRect(0, 0, sw, sh);
+    targetCtx.drawImage(this.flashCanvas, 0, 0, sw, sh, dx, dy, sw, sh);
   }
 
   private renderLighting(originX: number, originY: number): void {
@@ -3516,12 +3808,18 @@ export class SurvivalEngine {
 
     // Visible streetlamps, burn barrels, pier lanterns & kitchen stoves
     const centerWorld = isoToWorld(this.camX, this.camY);
+    const vLw = lw;
+    const vLh = lh;
     const minGX = Math.floor(centerWorld.wx - 22);
     const maxGX = Math.ceil(centerWorld.wx + 22);
     const minGY = Math.floor(centerWorld.wy - 22);
     const maxGY = Math.ceil(centerWorld.wy + 22);
     for (let gy = minGY; gy <= maxGY; gy++) {
       for (let gx = minGX; gx <= maxGX; gx++) {
+        const preIso = worldToIso(gx + 0.5, gy + 0.5, 0.3);
+        const preX = originX + preIso.sx;
+        const preY = originY + preIso.sy;
+        if (preX < -85 || preX > vLw + 85 || preY < -85 || preY > vLh + 85) continue;
         const prop = this.getCell(gx, gy).prop;
         if (prop === 'streetlamp') {
           punchRadial(gx + 0.5, gy + 0.5, 68 + flicker * 0.35, 0.78);
@@ -3643,9 +3941,18 @@ export class SurvivalEngine {
         } else if (cell.prop === 'door') {
           mctx.fillStyle = '#c98842';
         } else if (cell.solid) {
-          mctx.fillStyle = cell.prop.startsWith('wall') ? '#875548' : '#2c3d29';
+          if (cell.prop === 'wall_interior') mctx.fillStyle = '#a69e8e';
+          else if (cell.prop.startsWith('wall')) mctx.fillStyle = '#875548';
+          else if (cell.prop === 'tree_pine' || cell.prop === 'tree_dead') mctx.fillStyle = '#2c3d29';
+          else mctx.fillStyle = '#755b42';
         } else if (cell.tile === 'road' || cell.tile === 'crosswalk') {
           mctx.fillStyle = '#383d42';
+        } else if (cell.tile === 'floor_rug') {
+          mctx.fillStyle = '#75382e';
+        } else if (cell.tile === 'floor_bath') {
+          mctx.fillStyle = '#5f7e82';
+        } else if (cell.tile === 'floor_porch') {
+          mctx.fillStyle = '#6b4d34';
         } else if (cell.tile === 'floor' || cell.tile === 'tile_clinic' || cell.tile === 'tile_diner') {
           mctx.fillStyle = '#5c4a3d';
         } else {
@@ -3729,6 +4036,10 @@ export class SurvivalEngine {
       !activeCar && !nearby && !nearbyDoor && !nearbyTrunk && this.fishing.phase === 'idle'
         ? findFishingSpot(this.worldStore, this.player.x, this.player.y)
         : null;
+    const nearbyBed =
+      !activeCar && !nearby && !nearbyDoor && !nearbyTrunk && !nearbyFish && this.fishing.phase === 'idle'
+        ? this.findNearestBed()
+        : null;
     const nearCookingHeat = !activeCar && this.isNearCookingHeat();
     const nearbyDriveCar = activeCar ? null : this.findNearestVehicle();
 
@@ -3801,6 +4112,13 @@ export class SurvivalEngine {
       nearbyPrompt = {
         action: 'fishing',
         label: nearbyFish.onPier ? 'Cast Rod from Pier' : 'Cast Rod from Shore',
+        key: 'E',
+        progress: 0,
+      };
+    } else if (nearbyBed) {
+      nearbyPrompt = {
+        action: 'sleep',
+        label: 'Rest in Bed (+40 HP · +3h)',
         key: 'E',
         progress: 0,
       };

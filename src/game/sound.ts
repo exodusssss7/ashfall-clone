@@ -220,10 +220,39 @@ class SurvivalSoundEngine {
   playFishingBite(): void { this.splash(0.25); this.sample('beltHandle1', 0.16, 1, 0.04); }
   playFishingCatch(): void { this.splash(0.27); this.sample('beltHandle1', 0.24); this.sample('metalLatch', 0.1, 1.1, 0.13); }
   playCookingSizzle(): void { this.texture(3600, 0.65, 0.12); this.sample('metalPot1', 0.15); }
+  playCookBeatHit(judgement: 'perfect' | 'good' | 'miss'): void {
+    if (judgement === 'perfect') {
+      this.sample('metalPot1', 0.24, 1.18);
+      this.texture(4200, 0.26, 0.14);
+    } else if (judgement === 'good') {
+      this.sample('metalPot1', 0.16, 0.96);
+      this.texture(3000, 0.18, 0.08);
+    } else {
+      this.texture(680, 0.24, 0.16);
+      this.sample('punch0', 0.12, 0.72);
+    }
+  }
+  playCookOutcome(grade: 'perfect' | 'good' | 'burnt'): void {
+    if (grade === 'perfect') {
+      this.texture(4200, 0.75, 0.15);
+      this.sample('metalPot1', 0.24, 1.15);
+      this.sample('beltHandle1', 0.14, 1.05, 0.08);
+    } else if (grade === 'good') {
+      this.playCookingSizzle();
+    } else {
+      this.texture(550, 0.55, 0.2);
+      this.sample('metalPot1', 0.14, 0.68);
+    }
+  }
   playDoorSwing(opening: boolean): void { this.sample(opening ? 'doorOpen_1' : 'doorClose_1', 0.34); }
   playLockpickClick(unlocked: boolean): void { this.sample(unlocked ? 'metalLatch' : 'metalClick', unlocked ? 0.32 : 0.16); }
   playWrenchRepair(): void { this.sample('metalLatch', 0.22); this.sample(this.choose('metal', 2), 0.2, 1.1, 0.12); }
   playTurboSurge(): void { this.texture(280, 0.35, 0.24); }
+  playSleepRest(): void {
+    this.sample('cloth1', 0.28, 0.85);
+    this.sample('cloth3', 0.22, 0.78, 0.14);
+    this.texture(420, 0.55, 0.08, 0.08);
+  }
 
   /** Non-tonal filtered textures for liquids, flame, breath and tires. No pitch pings. */
   private texture(frequency: number, duration: number, volume: number, delay = 0): void {

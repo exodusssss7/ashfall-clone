@@ -277,7 +277,7 @@ export default function App() {
             soundEngine.playUiClick();
             setCookOpen(false);
           }}
-          onCook={(recipeId) => {if(engineRef.current?.cookRecipe(recipeId))setCookOpen(false);}}
+          onCook={(recipeId, grade) => Boolean(engineRef.current?.cookRecipe(recipeId, grade))}
           onUseConsumable={(item) => {if(engineRef.current?.useConsumable(item))setCookOpen(false);}}
         />
       )}

@@ -1,4 +1,7 @@
-export type ActionKind = 'heal'|'eat'|'drink'|'craft'|'cook'|'build'|'search'|'door'|'repair'|'refuel'|'reload'|'cast'|'fish'|'reel';
+import type { ZombieAIState } from './types';
+import type { CharacterAnimState } from './pixelArt';
+
+export type ActionKind = 'heal'|'eat'|'drink'|'craft'|'cook'|'build'|'search'|'door'|'repair'|'refuel'|'reload'|'cast'|'fish'|'reel'|'sleep';
 export interface ActionVisual {kind:ActionKind;label:string;duration:number;remaining:number}
 export function actionPose(action:ActionVisual) {
  const progress=Math.max(0,Math.min(1,1-action.remaining/action.duration));
@@ -32,7 +35,63 @@ export function drawActionProp(ctx:CanvasRenderingContext2D,a:ActionVisual,right
  }else if(a.kind==='refuel'){
   hands(6,-13);rect(1,-17,10,10,'#866d3a');rect(3,-20,5,3,'#bca575');line(11,-17,16,-12,'#bdbb88');
  }else{
-  hands(7,-11+Math.round(pulse*2));rect(3,-12,9,3,'#b4a076');
+  hands(6,-10+Math.round(pulse*1.5));rect(6,-12,4,4,'#9c7944');rect(7,-11,2,1,'#f0d078');
  }
  ctx.restore();
 }
+
+export function getLootOpenStage(searched: boolean, openAnim = 0): number {
+  if (!searched) return 0;
+  const prog = Math.max(0, Math.min(1, openAnim));
+  if (prog < 0.34) return 1;
+  if (prog < 0.68) return 2;
+  return 3;
+}
+
+export function getLootPopTransform(popTimer = 0, duration = 0.48): { scaleX: number; scaleY: number; offsetY: number } {
+  if (popTimer <= 0 || duration <= 0) {
+    return { scaleX: 1, scaleY: 1, offsetY: 0 };
+  }
+  const progress = Math.max(0, Math.min(1, 1 - popTimer / duration));
+  const decay = 1 - progress;
+  const bounce = Math.sin(progress * Math.PI * 2.5) * decay;
+  return {
+    scaleX: 1 + bounce * 0.14,
+    scaleY: 1 - bounce * 0.14,
+    offsetY: -Math.max(0, Math.sin(progress * Math.PI) * decay * 3.5),
+  };
+}
+
+export function resolvePlayerAnimState(input: {
+  dodgeTimer: number;
+  meleeSwingTimer: number;
+  attackCooldown: number;
+  attackCooldownMax: number;
+  walkCycle: number;
+}): CharacterAnimState {
+  if (input.dodgeTimer > 0) return 'dodge';
+  if (input.meleeSwingTimer > 0) return 'attack';
+  if (input.attackCooldownMax > 0 && input.attackCooldown > input.attackCooldownMax * 0.45) {
+    return 'attack';
+  }
+  if (input.walkCycle > 0) return 'walk';
+  return 'idle';
+}
+
+export function resolveZombieAnimState(input: {
+  state: ZombieAIState;
+  isMoving: boolean;
+}): CharacterAnimState {
+  if (input.state === 'dying') return 'dying';
+  if (input.state === 'windup') return 'windup';
+  if (input.state === 'attack') return 'attack';
+  if (input.isMoving || input.state === 'chase' || input.state === 'wander') return 'walk';
+  return 'idle';
+}
+
+export function getZombieDyingFrame(stateTimer: number, totalDuration = 0.52): number {
+  if (totalDuration <= 0) return 2;
+  const progress = Math.max(0, Math.min(0.999, 1 - stateTimer / totalDuration));
+  return Math.floor(progress * 3);
+}
+

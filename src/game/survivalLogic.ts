@@ -211,6 +211,37 @@ function createBaseCell(seed: number, gx: number, gy: number): TileCell {
   return cell;
 }
 
+interface RoomZoneSpec {
+  x0: number;
+  y0: number;
+  w: number;
+  h: number;
+  floorType: TileKind;
+  rug?: { x0: number; y0: number; w: number; h: number };
+}
+
+interface PartitionSpec {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+interface BuildingDoorSpec {
+  gx: number;
+  gy: number;
+  orientation: 'ns' | 'ew';
+  status: DoorStatus;
+}
+
+interface BuildingPropSpec {
+  gx: number;
+  gy: number;
+  prop: PropKind;
+  lootKind?: LootContainer['kind'];
+  lootItems?: Partial<Inventory>;
+}
+
 interface BuildingSpec {
   x0: number;
   y0: number;
@@ -218,12 +249,12 @@ interface BuildingSpec {
   h: number;
   wallType: 'wall_brick' | 'wall_wood';
   floorType: TileKind;
-  doorSide: 'n' | 's' | 'e' | 'w';
-  doorStatus: DoorStatus;
-  lootKind: LootContainer['kind'];
-  lootItems: Partial<Inventory>;
-  hasCounter?: boolean;
-  hasStove?: boolean;
+  doors: BuildingDoorSpec[];
+  archways?: Array<{ gx: number; gy: number }>;
+  partitions?: PartitionSpec[];
+  rooms?: RoomZoneSpec[];
+  porch?: { x0: number; y0: number; w: number; h: number };
+  props: BuildingPropSpec[];
 }
 
 function applyBuildingToSetter(
@@ -240,105 +271,143 @@ function applyBuildingToSetter(
   const midX = b.x0 + Math.floor(b.w / 2);
   const midY = b.y0 + Math.floor(b.h / 2);
 
+  // Optional exterior wooden porch outside entrance
+  if (b.porch) {
+    for (let y = b.porch.y0; y < b.porch.y0 + b.porch.h; y++) {
+      for (let x = b.porch.x0; x < b.porch.x0 + b.porch.w; x++) {
+        setCellProp(x, y, (cell) => {
+          cell.tile = 'floor_porch';
+          cell.prop = 'none';
+          cell.solid = false;
+          cell.blocksSight = false;
+        });
+      }
+    }
+  }
+
+  // Base footprint & exterior perimeter walls
+  const doorCoordSet = new Set(b.doors.map((d) => `${d.gx}_${d.gy}`));
   for (let y = b.y0; y < b.y0 + b.h; y++) {
     for (let x = b.x0; x < b.x0 + b.w; x++) {
       const isEdge = x === b.x0 || x === b.x0 + b.w - 1 || y === b.y0 || y === b.y0 + b.h - 1;
-      const isDoor =
-        (b.doorSide === 'n' && y === b.y0 && x === midX) ||
-        (b.doorSide === 's' && y === b.y0 + b.h - 1 && x === midX) ||
-        (b.doorSide === 'w' && x === b.x0 && y === midY) ||
-        (b.doorSide === 'e' && x === b.x0 + b.w - 1 && y === midY);
-
       setCellProp(x, y, (cell) => {
         cell.tile = b.floorType;
         cell.prop = 'none';
         cell.solid = false;
         cell.blocksSight = false;
 
-        if (isEdge) {
-          if (isDoor) {
-            const orientation = b.doorSide === 'n' || b.doorSide === 's' ? 'ew' : 'ns';
-            applyDoorCellState(cell, b.doorStatus);
-            const dKey = `${x}_${y}`;
-            if (!doorRegistry || !doorRegistry.has(dKey)) {
-              doorRegistry?.add(dKey);
-              doors.push(createDoorEntity(x, y, orientation, b.doorStatus));
-            }
-          } else {
-            cell.prop = b.wallType;
-            cell.solid = true;
-            cell.blocksSight = true;
-            const isCorner = (x === b.x0 || x === b.x0 + b.w - 1) && (y === b.y0 || y === b.y0 + b.h - 1);
-            if (
-              !isCorner &&
-              ((x === midX && (y === b.y0 || y === b.y0 + b.h - 1)) ||
-                (y === midY && (x === b.x0 || x === b.x0 + b.w - 1)))
-            ) {
-              cell.variant = 2; // boarded window
-            }
+        if (isEdge && !doorCoordSet.has(`${x}_${y}`)) {
+          cell.prop = b.wallType;
+          cell.solid = true;
+          cell.blocksSight = true;
+          const isCorner = (x === b.x0 || x === b.x0 + b.w - 1) && (y === b.y0 || y === b.y0 + b.h - 1);
+          const nearDoor = b.doors.some((d) => Math.abs(d.gx - x) <= 1 && Math.abs(d.gy - y) <= 1);
+          if (
+            !isCorner &&
+            !nearDoor &&
+            ((Math.abs(x - midX) === 2 && (y === b.y0 || y === b.y0 + b.h - 1)) ||
+              (Math.abs(y - midY) === 2 && (x === b.x0 || x === b.x0 + b.w - 1)) ||
+              (x === midX && (y === b.y0 || y === b.y0 + b.h - 1)) ||
+              (y === midY && (x === b.x0 || x === b.x0 + b.w - 1)))
+          ) {
+            cell.variant = 2; // boarded window
           }
         }
       });
     }
   }
 
-  // Primary loot container
-  const lx = b.x0 + 2;
-  const ly = b.y0 + 2;
-  setCellProp(lx, ly, (cell) => {
-    if (!cell.solid) {
-      cell.prop = b.lootKind === 'zombie_drop' ? 'crate_wood' : b.lootKind;
-      cell.solid = true;
-      containers.push({
-        id: `c_${lx}_${ly}`,
-        gx: lx,
-        gy: ly,
-        kind: b.lootKind,
-        items: { ...b.lootItems },
-        searched: false,
-        searchProgress: 0,
+  // Paint room-specific floor tiles & woven rugs inside interior bounds
+  if (b.rooms) {
+    for (const room of b.rooms) {
+      for (let y = room.y0; y < room.y0 + room.h; y++) {
+        for (let x = room.x0; x < room.x0 + room.w; x++) {
+          if (x <= b.x0 || x >= b.x0 + b.w - 1 || y <= b.y0 || y >= b.y0 + b.h - 1) continue;
+          setCellProp(x, y, (cell) => {
+            if (cell.prop === 'none') {
+              cell.tile = room.floorType;
+            }
+          });
+        }
+      }
+      if (room.rug) {
+        for (let y = room.rug.y0; y < room.rug.y0 + room.rug.h; y++) {
+          for (let x = room.rug.x0; x < room.rug.x0 + room.rug.w; x++) {
+            if (x <= b.x0 || x >= b.x0 + b.w - 1 || y <= b.y0 || y >= b.y0 + b.h - 1) continue;
+            setCellProp(x, y, (cell) => {
+              if (cell.prop === 'none') {
+                cell.tile = 'floor_rug';
+              }
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Interior partition walls separating rooms
+  if (b.partitions) {
+    for (const part of b.partitions) {
+      const minX = Math.min(part.x0, part.x1);
+      const maxX = Math.max(part.x0, part.x1);
+      const minY = Math.min(part.y0, part.y1);
+      const maxY = Math.max(part.y0, part.y1);
+      for (let y = minY; y <= maxY; y++) {
+        for (let x = minX; x <= maxX; x++) {
+          const isOuterEdge = x === b.x0 || x === b.x0 + b.w - 1 || y === b.y0 || y === b.y0 + b.h - 1;
+          if (isOuterEdge || doorCoordSet.has(`${x}_${y}`)) continue;
+          setCellProp(x, y, (cell) => {
+            cell.prop = 'wall_interior';
+            cell.solid = true;
+            cell.blocksSight = true;
+          });
+        }
+      }
+    }
+  }
+
+  // Open interior archways connecting adjoining rooms
+  if (b.archways) {
+    for (const arch of b.archways) {
+      setCellProp(arch.gx, arch.gy, (cell) => {
+        cell.prop = 'none';
+        cell.solid = false;
+        cell.blocksSight = false;
       });
     }
-  });
+  }
 
-  // Interior Stove for Diners & Cabins
-  if (b.hasStove) {
-    const sx = b.x0 + b.w - 3;
-    const sy = b.y0 + 2;
-    setCellProp(sx, sy, (cell) => {
-      if (!cell.solid) {
-        cell.prop = 'stove';
-        cell.solid = true;
-        cell.blocksSight = false;
-      }
-    });
-  } else if (b.hasCounter) {
-    const cx = b.x0 + b.w - 3;
-    const cy = b.y0 + 2;
-    setCellProp(cx, cy, (cell) => {
-      if (!cell.solid) {
-        cell.prop = 'counter';
-        cell.solid = true;
+  // Exterior & interior swingable doors
+  for (const d of b.doors) {
+    setCellProp(d.gx, d.gy, (cell) => {
+      applyDoorCellState(cell, d.status);
+      const dKey = `${d.gx}_${d.gy}`;
+      if (!doorRegistry || !doorRegistry.has(dKey)) {
+        doorRegistry?.add(dKey);
+        doors.push(createDoorEntity(d.gx, d.gy, d.orientation, d.status));
       }
     });
   }
 
-  if (b.hasCounter) {
-    const bx = b.x0 + b.w - 3;
-    const by = b.y0 + b.h - 3;
-    setCellProp(bx, by, (cell) => {
-      if (!cell.solid) {
-        cell.prop = 'crate_wood';
+  // Interior furniture & loot containers
+  for (const item of b.props) {
+    setCellProp(item.gx, item.gy, (cell) => {
+      if (!cell.solid && cell.prop === 'none') {
+        cell.prop = item.prop;
         cell.solid = true;
-        containers.push({
-          id: `c_${bx}_${by}`,
-          gx: bx,
-          gy: by,
-          kind: 'crate_wood',
-          items: { cloth: 2, scrap: 2, food: 1 },
-          searched: false,
-          searchProgress: 0,
-        });
+        cell.blocksSight = false;
+        if (item.lootKind && item.lootItems) {
+          containers.push({
+            id: `c_${item.gx}_${item.gy}`,
+            gx: item.gx,
+            gy: item.gy,
+            kind: item.lootKind,
+            items: { ...item.lootItems },
+            searched: false,
+            searchProgress: 0,
+            openAnim: 0,
+          });
+        }
       }
     });
   }
@@ -472,70 +541,143 @@ export function generateChunk(
           items: { wood: 2, water: 1, food: 1, raw_fish: 1 },
           searched: false,
           searchProgress: 0,
+          openAnim: 0,
         });
       }
     });
   } else if (!hasRoadInside && biomeRoll < 0.68) {
-    // Procedural Roadside Outpost / Diner / Clinic / Cabin with Swingable Door
-    const bx = startGX + 4;
-    const by = startGY + 4;
+    // Procedural Multi-Room Houses, Diners, Clinics & Ranger Cabins
+    const bx = startGX + 2;
+    const by = startGY + 3;
     const variant = Math.floor(rng() * 4);
     const spec: BuildingSpec =
       variant === 0
         ? {
+            // 3-Room Suburban House (Living Room, Kitchen, Bedroom)
             x0: bx,
             y0: by,
-            w: 8,
-            h: 7,
+            w: 12,
+            h: 10,
             wallType: 'wall_wood',
-            floorType: 'tile_diner',
-            doorSide: 's',
-            doorStatus: 'closed',
-            lootKind: 'fridge',
-            lootItems: { food: 2, water: 2, raw_fish: 1 },
-            hasStove: true,
-            hasCounter: true,
+            floorType: 'floor',
+            porch: { x0: bx + 2, y0: by + 10, w: 3, h: 1 },
+            doors: [
+              { gx: bx + 3, gy: by + 9, orientation: 'ew', status: 'closed' },
+              { gx: bx + 6, gy: by + 3, orientation: 'ns', status: 'open' },
+              { gx: bx + 8, gy: by + 5, orientation: 'ew', status: 'closed' },
+            ],
+            partitions: [
+              { x0: bx + 6, y0: by + 1, x1: bx + 6, y1: by + 8 },
+              { x0: bx + 6, y0: by + 5, x1: bx + 10, y1: by + 5 },
+            ],
+            rooms: [
+              { x0: bx + 1, y0: by + 1, w: 5, h: 8, floorType: 'floor', rug: { x0: bx + 2, y0: by + 3, w: 3, h: 3 } },
+              { x0: bx + 7, y0: by + 1, w: 4, h: 4, floorType: 'tile_diner' },
+              { x0: bx + 7, y0: by + 6, w: 4, h: 3, floorType: 'floor', rug: { x0: bx + 8, y0: by + 7, w: 2, h: 1 } },
+            ],
+            props: [
+              { gx: bx + 1, gy: by + 2, prop: 'couch' },
+              { gx: bx + 5, gy: by + 2, prop: 'tv_stand' },
+              { gx: bx + 1, gy: by + 1, prop: 'bookshelf' },
+              { gx: bx + 1, gy: by + 8, prop: 'crate_wood', lootKind: 'crate_wood', lootItems: { wood: 3, scrap: 2, cloth: 1 } },
+              { gx: bx + 10, gy: by + 1, prop: 'stove' },
+              { gx: bx + 7, gy: by + 1, prop: 'fridge', lootKind: 'fridge', lootItems: { food: 2, water: 2, raw_fish: 1 } },
+              { gx: bx + 7, gy: by + 8, prop: 'bed' },
+              { gx: bx + 10, gy: by + 8, prop: 'desk' },
+            ],
           }
         : variant === 1
           ? {
+              // 3-Room Rural Clinic & Pharmacy
               x0: bx,
               y0: by,
-              w: 8,
-              h: 7,
+              w: 12,
+              h: 10,
               wallType: 'wall_brick',
               floorType: 'tile_clinic',
-              doorSide: 'n',
-              doorStatus: 'locked',
-              lootKind: 'med_cabinet',
-              lootItems: { bandage: 2, cloth: 3, water: 1 },
-              hasCounter: true,
+              porch: { x0: bx + 4, y0: by - 1, w: 3, h: 1 },
+              doors: [
+                { gx: bx + 5, gy: by, orientation: 'ew', status: 'locked' },
+                { gx: bx + 6, gy: by + 4, orientation: 'ew', status: 'closed' },
+                { gx: bx + 6, gy: by + 6, orientation: 'ns', status: 'closed' },
+              ],
+              partitions: [
+                { x0: bx + 1, y0: by + 4, x1: bx + 10, y1: by + 4 },
+                { x0: bx + 6, y0: by + 4, x1: bx + 6, y1: by + 8 },
+              ],
+              rooms: [
+                { x0: bx + 1, y0: by + 1, w: 10, h: 3, floorType: 'tile_clinic' },
+                { x0: bx + 1, y0: by + 5, w: 5, h: 4, floorType: 'floor_bath' },
+                { x0: bx + 7, y0: by + 5, w: 4, h: 4, floorType: 'floor', rug: { x0: bx + 8, y0: by + 6, w: 2, h: 2 } },
+              ],
+              props: [
+                { gx: bx + 1, gy: by + 2, prop: 'counter' },
+                { gx: bx + 9, gy: by + 2, prop: 'bench' },
+                { gx: bx + 10, gy: by + 1, prop: 'med_cabinet', lootKind: 'med_cabinet', lootItems: { bandage: 2, cloth: 3, water: 1 } },
+                { gx: bx + 1, gy: by + 8, prop: 'sink_toilet' },
+                { gx: bx + 2, gy: by + 5, prop: 'med_cabinet', lootKind: 'med_cabinet', lootItems: { bandage: 1, water: 2 } },
+                { gx: bx + 7, gy: by + 8, prop: 'bed' },
+                { gx: bx + 10, gy: by + 5, prop: 'desk' },
+              ],
             }
           : variant === 2
             ? {
-                x0: bx,
+                // 2-Room Timber Cabin & Workshop
+                x0: bx + 1,
                 y0: by,
-                w: 7,
-                h: 7,
+                w: 10,
+                h: 9,
                 wallType: 'wall_wood',
                 floorType: 'floor',
-                doorSide: 'e',
-                doorStatus: 'closed',
-                lootKind: 'crate_wood',
-                lootItems: { wood: 4, scrap: 3, fuel: 1 },
-                hasStove: true,
+                porch: { x0: bx + 11, y0: by + 3, w: 1, h: 3 },
+                doors: [
+                  { gx: bx + 10, gy: by + 4, orientation: 'ns', status: 'closed' },
+                  { gx: bx + 5, gy: by + 4, orientation: 'ns', status: 'open' },
+                ],
+                partitions: [{ x0: bx + 5, y0: by + 1, x1: bx + 5, y1: by + 7 }],
+                rooms: [
+                  { x0: bx + 2, y0: by + 1, w: 3, h: 7, floorType: 'floor', rug: { x0: bx + 2, y0: by + 3, w: 2, h: 3 } },
+                  { x0: bx + 6, y0: by + 1, w: 4, h: 7, floorType: 'floor' },
+                ],
+                props: [
+                  { gx: bx + 2, gy: by + 1, prop: 'bed' },
+                  { gx: bx + 2, gy: by + 7, prop: 'bookshelf' },
+                  { gx: bx + 4, gy: by + 1, prop: 'crate_wood', lootKind: 'crate_wood', lootItems: { wood: 4, scrap: 3, fuel: 1 } },
+                  { gx: bx + 9, gy: by + 1, prop: 'stove' },
+                  { gx: bx + 7, gy: by + 1, prop: 'table' },
+                  { gx: bx + 6, gy: by + 7, prop: 'couch' },
+                ],
               }
             : {
+                // 3-Room Roadside Outpost & Armory
                 x0: bx,
                 y0: by,
-                w: 8,
-                h: 7,
+                w: 11,
+                h: 9,
                 wallType: 'wall_brick',
                 floorType: 'tile_clinic',
-                doorSide: 'w',
-                doorStatus: 'locked',
-                lootKind: 'crate_military',
-                lootItems: { ammo_9mm: 8, ammo_shell: 3, scrap: 3 },
-                hasCounter: true,
+                porch: { x0: bx - 1, y0: by + 3, w: 1, h: 3 },
+                doors: [
+                  { gx: bx, gy: by + 4, orientation: 'ns', status: 'locked' },
+                  { gx: bx + 5, gy: by + 3, orientation: 'ns', status: 'locked' },
+                  { gx: bx + 7, gy: by + 5, orientation: 'ew', status: 'closed' },
+                ],
+                partitions: [
+                  { x0: bx + 5, y0: by + 1, x1: bx + 5, y1: by + 7 },
+                  { x0: bx + 5, y0: by + 5, x1: bx + 9, y1: by + 5 },
+                ],
+                rooms: [
+                  { x0: bx + 1, y0: by + 1, w: 4, h: 7, floorType: 'tile_clinic' },
+                  { x0: bx + 6, y0: by + 1, w: 4, h: 4, floorType: 'tile_diner' },
+                  { x0: bx + 6, y0: by + 6, w: 4, h: 2, floorType: 'floor' },
+                ],
+                props: [
+                  { gx: bx + 1, gy: by + 1, prop: 'desk' },
+                  { gx: bx + 3, gy: by + 7, prop: 'counter' },
+                  { gx: bx + 9, gy: by + 1, prop: 'crate_military', lootKind: 'crate_military', lootItems: { ammo_9mm: 8, ammo_shell: 3, scrap: 3 } },
+                  { gx: bx + 6, gy: by + 7, prop: 'bed' },
+                  { gx: bx + 9, gy: by + 7, prop: 'crate_wood', lootKind: 'crate_wood', lootItems: { food: 1, water: 1, cloth: 2 } },
+                ],
               };
 
     applyBuildingToSetter(setLocal, spec, doors, containers);
@@ -608,6 +750,7 @@ export function generateChunk(
             },
             searched: false,
             searchProgress: 0,
+            openAnim: 0,
           });
         } else if (r < 0.095) {
           cell.prop = 'barrel_burn';
@@ -679,118 +822,293 @@ export function generateWorld(seed = 1994): GeneratedWorld {
     fn(getWorldCell(worldStore, gx, gy));
   };
 
-  // Curated post-apocalyptic town blocks around the crossroads (with Swingable Doors + Kitchen Stoves!)
+  // Curated multi-room post-apocalyptic houses, clinics, diners & outposts with interior rooms & furnishings
   const buildings: BuildingSpec[] = [
-    // NW Corner: Pharmacy / Clinic (Locked door for lockpicking!)
+    // 1. NW Corner: 3-Room Medical Clinic, Exam Lab & Doctor's Residence (x=14..22, y=7..22)
     {
       x0: 14,
-      y0: 15,
+      y0: 7,
       w: 9,
-      h: 8,
+      h: 16,
       wallType: 'wall_brick',
       floorType: 'tile_clinic',
-      doorSide: 's',
-      doorStatus: 'locked',
-      lootKind: 'med_cabinet',
-      lootItems: { bandage: 3, cloth: 3, water: 2 },
-      hasCounter: true,
+      porch: { x0: 17, y0: 23, w: 3, h: 1 },
+      doors: [
+        { gx: 18, gy: 22, orientation: 'ew', status: 'locked' },
+        { gx: 19, gy: 15, orientation: 'ew', status: 'open' },
+        { gx: 18, gy: 11, orientation: 'ns', status: 'closed' },
+      ],
+      partitions: [
+        { x0: 14, y0: 15, x1: 22, y1: 15 },
+        { x0: 18, y0: 7, x1: 18, y1: 15 },
+      ],
+      rooms: [
+        { x0: 15, y0: 16, w: 7, h: 6, floorType: 'tile_clinic' },
+        { x0: 15, y0: 8, w: 3, h: 7, floorType: 'floor', rug: { x0: 16, y0: 10, w: 1, h: 3 } },
+        { x0: 19, y0: 8, w: 3, h: 7, floorType: 'floor_bath' },
+      ],
+      props: [
+        // Front Waiting Room & Pharmacy
+        { gx: 16, gy: 16, prop: 'med_cabinet', lootKind: 'med_cabinet', lootItems: { bandage: 3, cloth: 3, water: 2 } },
+        { gx: 20, gy: 17, prop: 'counter' },
+        { gx: 21, gy: 16, prop: 'desk' },
+        { gx: 15, gy: 20, prop: 'bench' },
+        { gx: 21, gy: 21, prop: 'crate_wood', lootKind: 'crate_wood', lootItems: { cloth: 2, scrap: 2, water: 1 } },
+        // NW Doctor's Bedroom
+        { gx: 15, gy: 8, prop: 'bed' },
+        { gx: 17, gy: 8, prop: 'bookshelf' },
+        { gx: 15, gy: 13, prop: 'crate_wood', lootKind: 'crate_wood', lootItems: { food: 1, cloth: 2, ammo_9mm: 4 } },
+        // NE Exam & Bathroom
+        { gx: 21, gy: 8, prop: 'sink_toilet' },
+        { gx: 21, gy: 10, prop: 'med_cabinet', lootKind: 'med_cabinet', lootItems: { bandage: 2, water: 2 } },
+        { gx: 19, gy: 8, prop: 'desk' },
+      ],
     },
-    // NE Corner: Corner Diner / Market (Equipped with working Kitchen Stove!)
+    // 2. NE Corner: 3-Room Roadside Diner, Commercial Kitchen & Manager's Quarters (x=34..49, y=14..22)
     {
       x0: 34,
-      y0: 15,
-      w: 10,
-      h: 8,
-      wallType: 'wall_wood',
-      floorType: 'tile_diner',
-      doorSide: 's',
-      doorStatus: 'closed',
-      lootKind: 'fridge',
-      lootItems: { food: 3, water: 3, wood: 2, raw_fish: 1 },
-      hasCounter: true,
-      hasStove: true,
-    },
-    // SW Corner: Hardware & Timber Shed
-    {
-      x0: 14,
-      y0: 34,
-      w: 9,
-      h: 8,
-      wallType: 'wall_wood',
-      floorType: 'floor',
-      doorSide: 'n',
-      doorStatus: 'closed',
-      lootKind: 'crate_wood',
-      lootItems: { wood: 6, scrap: 5, fuel: 1 },
-      hasCounter: true,
-    },
-    // SE Corner: Police Outpost (Locked armory door!)
-    {
-      x0: 34,
-      y0: 34,
-      w: 10,
+      y0: 14,
+      w: 16,
       h: 9,
-      wallType: 'wall_brick',
-      floorType: 'tile_clinic',
-      doorSide: 'n',
-      doorStatus: 'locked',
-      lootKind: 'crate_military',
-      lootItems: { ammo_9mm: 12, ammo_shell: 5, bandage: 1, scrap: 3 },
-      hasCounter: true,
-    },
-    // West Safe Cabin (with Kitchen Stove)
-    {
-      x0: 6,
-      y0: 26,
-      w: 7,
-      h: 7,
-      wallType: 'wall_wood',
-      floorType: 'floor',
-      doorSide: 'e',
-      doorStatus: 'closed',
-      lootKind: 'crate_wood',
-      lootItems: { wood: 5, food: 2, cloth: 2 },
-      hasStove: true,
-    },
-    // East Checkpoint
-    {
-      x0: 44,
-      y0: 24,
-      w: 7,
-      h: 7,
-      wallType: 'wall_brick',
-      floorType: 'floor',
-      doorSide: 'w',
-      doorStatus: 'locked',
-      lootKind: 'crate_military',
-      lootItems: { ammo_9mm: 8, molotov: 1, fuel: 2 },
-    },
-    // North Diner
-    {
-      x0: 24,
-      y0: 6,
-      w: 8,
-      h: 7,
       wallType: 'wall_wood',
       floorType: 'tile_diner',
-      doorSide: 's',
-      doorStatus: 'closed',
-      lootKind: 'fridge',
-      lootItems: { food: 3, water: 2, scrap: 3 },
-      hasStove: true,
+      porch: { x0: 38, y0: 23, w: 3, h: 1 },
+      doors: [
+        { gx: 39, gy: 22, orientation: 'ew', status: 'closed' },
+        { gx: 49, gy: 20, orientation: 'ns', status: 'closed' },
+        { gx: 46, gy: 18, orientation: 'ew', status: 'closed' },
+      ],
+      archways: [{ gx: 42, gy: 18 }],
+      partitions: [
+        { x0: 42, y0: 14, x1: 42, y1: 22 },
+        { x0: 42, y0: 18, x1: 49, y1: 18 },
+      ],
+      rooms: [
+        { x0: 35, y0: 15, w: 7, h: 7, floorType: 'tile_diner' },
+        { x0: 43, y0: 15, w: 6, h: 3, floorType: 'tile_diner' },
+        { x0: 43, y0: 19, w: 6, h: 3, floorType: 'floor', rug: { x0: 45, y0: 20, w: 2, h: 1 } },
+      ],
+      props: [
+        // Main Dining Hall
+        { gx: 35, gy: 15, prop: 'tv_stand' },
+        { gx: 35, gy: 16, prop: 'counter' },
+        { gx: 37, gy: 15, prop: 'counter' },
+        { gx: 36, gy: 19, prop: 'table' },
+        { gx: 35, gy: 19, prop: 'bench' },
+        { gx: 40, gy: 16, prop: 'table' },
+        { gx: 40, gy: 19, prop: 'bench' },
+        // Kitchen
+        { gx: 47, gy: 15, prop: 'stove' },
+        { gx: 43, gy: 15, prop: 'fridge', lootKind: 'fridge', lootItems: { food: 3, water: 3, raw_fish: 1 } },
+        { gx: 45, gy: 15, prop: 'counter' },
+        // Manager's Backroom (bed headboard flush against West partition x=42)
+        { gx: 43, gy: 21, prop: 'bed' },
+        { gx: 48, gy: 21, prop: 'desk' },
+        { gx: 48, gy: 19, prop: 'crate_wood', lootKind: 'crate_wood', lootItems: { wood: 3, scrap: 2, food: 1 } },
+      ],
     },
-    // South Clinic
+    // 3. SW Corner: 4-Room Suburban Ranch House (Living Room, Kitchen, Master Bedroom, Bathroom)
     {
-      x0: 24,
-      y0: 44,
-      w: 8,
-      h: 7,
+      x0: 7,
+      y0: 34,
+      w: 16,
+      h: 12,
+      wallType: 'wall_wood',
+      floorType: 'floor',
+      porch: { x0: 17, y0: 33, w: 3, h: 1 },
+      doors: [
+        { gx: 18, gy: 34, orientation: 'ew', status: 'closed' },
+        { gx: 10, gy: 45, orientation: 'ew', status: 'closed' },
+        { gx: 18, gy: 40, orientation: 'ew', status: 'closed' },
+        { gx: 15, gy: 42, orientation: 'ns', status: 'closed' },
+      ],
+      archways: [{ gx: 15, gy: 37 }],
+      partitions: [
+        { x0: 15, y0: 34, x1: 15, y1: 45 },
+        { x0: 7, y0: 40, x1: 22, y1: 40 },
+      ],
+      rooms: [
+        { x0: 16, y0: 35, w: 6, h: 5, floorType: 'floor', rug: { x0: 17, y0: 36, w: 3, h: 3 } },
+        { x0: 8, y0: 35, w: 7, h: 5, floorType: 'tile_diner' },
+        { x0: 16, y0: 41, w: 6, h: 4, floorType: 'floor', rug: { x0: 18, y0: 42, w: 2, h: 2 } },
+        { x0: 8, y0: 41, w: 7, h: 4, floorType: 'floor_bath' },
+      ],
+      props: [
+        // Living Room
+        { gx: 17, gy: 38, prop: 'couch' },
+        { gx: 21, gy: 37, prop: 'tv_stand' },
+        { gx: 21, gy: 35, prop: 'bookshelf' },
+        { gx: 16, gy: 35, prop: 'crate_wood', lootKind: 'crate_wood', lootItems: { wood: 6, scrap: 5, fuel: 1 } },
+        // Kitchen & Dining
+        { gx: 8, gy: 35, prop: 'stove' },
+        { gx: 10, gy: 35, prop: 'fridge', lootKind: 'fridge', lootItems: { food: 2, water: 2 } },
+        { gx: 12, gy: 35, prop: 'counter' },
+        { gx: 9, gy: 38, prop: 'table' },
+        { gx: 11, gy: 38, prop: 'bench' },
+        // Master Bedroom (bed headboard against West partition x=15, clear access from bedroom rug)
+        { gx: 16, gy: 44, prop: 'bed' },
+        { gx: 21, gy: 44, prop: 'desk' },
+        { gx: 21, gy: 41, prop: 'bookshelf' },
+        { gx: 17, gy: 41, prop: 'crate_wood', lootKind: 'crate_wood', lootItems: { cloth: 3, bandage: 1, ammo_9mm: 4 } },
+        // Bathroom & Utility
+        { gx: 8, gy: 44, prop: 'sink_toilet' },
+        { gx: 8, gy: 41, prop: 'med_cabinet', lootKind: 'med_cabinet', lootItems: { bandage: 2, water: 1 } },
+        { gx: 13, gy: 44, prop: 'crate_wood', lootKind: 'crate_wood', lootItems: { scrap: 3, cloth: 2 } },
+      ],
+    },
+    // 4. SE Corner: 3-Room Police Outpost, Locked Armory & Barracks
+    {
+      x0: 34,
+      y0: 34,
+      w: 16,
+      h: 12,
       wallType: 'wall_brick',
       floorType: 'tile_clinic',
-      doorSide: 'n',
-      doorStatus: 'closed',
-      lootKind: 'med_cabinet',
-      lootItems: { bandage: 2, ammo_shell: 4, water: 2 },
+      porch: { x0: 37, y0: 33, w: 3, h: 1 },
+      doors: [
+        { gx: 38, gy: 34, orientation: 'ew', status: 'locked' },
+        { gx: 42, gy: 37, orientation: 'ns', status: 'locked' },
+        { gx: 38, gy: 40, orientation: 'ew', status: 'closed' },
+        { gx: 49, gy: 42, orientation: 'ns', status: 'closed' },
+      ],
+      partitions: [
+        { x0: 42, y0: 34, x1: 42, y1: 40 },
+        { x0: 34, y0: 40, x1: 49, y1: 40 },
+      ],
+      rooms: [
+        { x0: 35, y0: 35, w: 7, h: 5, floorType: 'tile_clinic' },
+        { x0: 43, y0: 35, w: 6, h: 5, floorType: 'tile_clinic' },
+        { x0: 35, y0: 41, w: 14, h: 4, floorType: 'floor', rug: { x0: 41, y0: 42, w: 3, h: 2 } },
+      ],
+      props: [
+        // Dispatch Lobby
+        { gx: 35, gy: 35, prop: 'desk' },
+        { gx: 40, gy: 35, prop: 'desk' },
+        { gx: 35, gy: 38, prop: 'counter' },
+        { gx: 40, gy: 38, prop: 'bench' },
+        // Locked Armory
+        { gx: 47, gy: 35, prop: 'crate_military', lootKind: 'crate_military', lootItems: { ammo_9mm: 12, ammo_shell: 5, bandage: 1, scrap: 3 } },
+        { gx: 44, gy: 35, prop: 'crate_military', lootKind: 'crate_military', lootItems: { ammo_9mm: 6, molotov: 1, scrap: 2 } },
+        { gx: 48, gy: 38, prop: 'counter' },
+        // Barracks & Mess (bunks neatly aligned along West brick wall x=34)
+        { gx: 35, gy: 42, prop: 'bed' },
+        { gx: 35, gy: 44, prop: 'bed' },
+        { gx: 37, gy: 44, prop: 'bookshelf' },
+        { gx: 43, gy: 43, prop: 'table' },
+        { gx: 46, gy: 41, prop: 'stove' },
+        { gx: 48, gy: 41, prop: 'fridge', lootKind: 'fridge', lootItems: { food: 2, water: 2 } },
+      ],
+    },
+    // 5. West Ranger Cabin (2-Room Homestead: Living/Kitchen + Bedroom)
+    {
+      x0: 2,
+      y0: 13,
+      w: 11,
+      h: 10,
+      wallType: 'wall_wood',
+      floorType: 'floor',
+      porch: { x0: 13, y0: 17, w: 1, h: 3 },
+      doors: [
+        { gx: 12, gy: 18, orientation: 'ns', status: 'closed' },
+        { gx: 7, gy: 18, orientation: 'ns', status: 'open' },
+      ],
+      partitions: [{ x0: 7, y0: 13, x1: 7, y1: 22 }],
+      rooms: [
+        { x0: 3, y0: 14, w: 4, h: 8, floorType: 'floor', rug: { x0: 4, y0: 16, w: 2, h: 3 } },
+        { x0: 8, y0: 14, w: 4, h: 8, floorType: 'floor' },
+      ],
+      props: [
+        { gx: 3, gy: 14, prop: 'bed' },
+        { gx: 3, gy: 21, prop: 'bookshelf' },
+        { gx: 5, gy: 14, prop: 'crate_wood', lootKind: 'crate_wood', lootItems: { wood: 5, food: 2, cloth: 2 } },
+        { gx: 11, gy: 14, prop: 'stove' },
+        { gx: 9, gy: 14, prop: 'table' },
+        { gx: 8, gy: 21, prop: 'couch' },
+        { gx: 11, gy: 21, prop: 'tv_stand' },
+      ],
+    },
+    // 6. Far NW Farmhouse (2-Room Homestead with Study & Bedroom)
+    {
+      x0: 2,
+      y0: 2,
+      w: 11,
+      h: 10,
+      wallType: 'wall_wood',
+      floorType: 'floor',
+      porch: { x0: 6, y0: 12, w: 3, h: 1 },
+      doors: [
+        { gx: 7, gy: 11, orientation: 'ew', status: 'closed' },
+        { gx: 7, gy: 6, orientation: 'ew', status: 'closed' },
+      ],
+      partitions: [{ x0: 2, y0: 6, x1: 12, y1: 6 }],
+      rooms: [
+        { x0: 3, y0: 7, w: 9, h: 4, floorType: 'floor', rug: { x0: 6, y0: 8, w: 3, h: 2 } },
+        { x0: 3, y0: 3, w: 9, h: 3, floorType: 'tile_diner' },
+      ],
+      props: [
+        { gx: 3, gy: 10, prop: 'bed' },
+        { gx: 8, gy: 8, prop: 'couch' },
+        { gx: 11, gy: 10, prop: 'tv_stand' },
+        { gx: 3, gy: 7, prop: 'desk' },
+        { gx: 11, gy: 7, prop: 'bookshelf' },
+        { gx: 3, gy: 3, prop: 'stove' },
+        { gx: 5, gy: 3, prop: 'fridge', lootKind: 'fridge', lootItems: { food: 3, water: 2, scrap: 3 } },
+        { gx: 11, gy: 3, prop: 'crate_wood', lootKind: 'crate_wood', lootItems: { wood: 4, fuel: 1, cloth: 2 } },
+      ],
+    },
+    // 7. South Apothecary & Living Quarters (2-Room Brick Townhouse)
+    {
+      x0: 12,
+      y0: 47,
+      w: 12,
+      h: 8,
+      wallType: 'wall_brick',
+      floorType: 'tile_clinic',
+      porch: { x0: 16, y0: 46, w: 3, h: 1 },
+      doors: [
+        { gx: 17, gy: 47, orientation: 'ew', status: 'closed' },
+        { gx: 18, gy: 51, orientation: 'ns', status: 'closed' },
+      ],
+      partitions: [{ x0: 18, y0: 47, x1: 18, y1: 54 }],
+      rooms: [
+        { x0: 13, y0: 48, w: 5, h: 6, floorType: 'tile_clinic' },
+        { x0: 19, y0: 48, w: 4, h: 6, floorType: 'floor', rug: { x0: 20, y0: 50, w: 2, h: 2 } },
+      ],
+      props: [
+        { gx: 13, gy: 48, prop: 'med_cabinet', lootKind: 'med_cabinet', lootItems: { bandage: 2, ammo_shell: 4, water: 2 } },
+        { gx: 13, gy: 53, prop: 'sink_toilet' },
+        { gx: 15, gy: 48, prop: 'counter' },
+        { gx: 19, gy: 48, prop: 'bed' },
+        { gx: 22, gy: 53, prop: 'bookshelf' },
+        { gx: 20, gy: 53, prop: 'couch' },
+      ],
+    },
+    // 8. SE Checkpoint & Guard Bunkhouse (2-Room Outpost)
+    {
+      x0: 34,
+      y0: 47,
+      w: 15,
+      h: 8,
+      wallType: 'wall_brick',
+      floorType: 'floor',
+      porch: { x0: 40, y0: 46, w: 3, h: 1 },
+      doors: [
+        { gx: 41, gy: 47, orientation: 'ew', status: 'locked' },
+        { gx: 41, gy: 51, orientation: 'ns', status: 'open' },
+      ],
+      partitions: [{ x0: 41, y0: 47, x1: 41, y1: 54 }],
+      rooms: [
+        { x0: 35, y0: 48, w: 6, h: 6, floorType: 'tile_clinic' },
+        { x0: 42, y0: 48, w: 6, h: 6, floorType: 'floor', rug: { x0: 44, y0: 50, w: 2, h: 2 } },
+      ],
+      props: [
+        { gx: 35, gy: 48, prop: 'crate_military', lootKind: 'crate_military', lootItems: { ammo_9mm: 8, molotov: 1, fuel: 2 } },
+        { gx: 35, gy: 53, prop: 'desk' },
+        { gx: 39, gy: 53, prop: 'counter' },
+        { gx: 42, gy: 48, prop: 'bed' },
+        { gx: 47, gy: 53, prop: 'stove' },
+        { gx: 44, gy: 53, prop: 'table' },
+      ],
     },
   ];
 
@@ -844,6 +1162,7 @@ export function generateWorld(seed = 1994): GeneratedWorld {
         items: { wood: 3, raw_fish: 1, water: 1 },
         searched: false,
         searchProgress: 0,
+        openAnim: 0,
       });
     }
   });
@@ -914,6 +1233,7 @@ export function generateWorld(seed = 1994): GeneratedWorld {
     items: { wood: 4, scrap: 3, food: 1, ammo_9mm: 6 },
     searched: false,
     searchProgress: 0,
+    openAnim: 0,
   });
 
   // Crossroads streetlamps
@@ -940,7 +1260,7 @@ export function generateWorld(seed = 1994): GeneratedWorld {
   // Urban survival scatter
   const urbanProps: Array<{ gx: number; gy: number; prop: TileCell['prop']; solid: boolean }> = [
     { gx: 23, gy: 16, prop: 'dumpster', solid: true },
-    { gx: 44, gy: 17, prop: 'dumpster', solid: true },
+    { gx: 50, gy: 17, prop: 'dumpster', solid: true },
     { gx: 13, gy: 37, prop: 'dumpster', solid: true },
     { gx: 33, gy: 38, prop: 'dumpster', solid: true },
     { gx: 25, gy: 22, prop: 'hydrant', solid: true },
@@ -995,6 +1315,7 @@ export function generateWorld(seed = 1994): GeneratedWorld {
               },
               searched: false,
               searchProgress: 0,
+              openAnim: 0,
             });
           }
         }
@@ -1221,6 +1542,7 @@ const PROP_HALF_EXTENTS: Record<PropKind, { hx: number; hy: number }> = {
   none: { hx: 0.4, hy: 0.3 }, // player-built solid barricade
   wall_brick: { hx: 0.5, hy: 0.5 },
   wall_wood: { hx: 0.5, hy: 0.5 },
+  wall_interior: { hx: 0.5, hy: 0.5 },
   door: { hx: 0.48, hy: 0.32 },
   stove: { hx: 0.34, hy: 0.32 },
   fishing_post: { hx: 0.14, hy: 0.14 },
@@ -1228,6 +1550,13 @@ const PROP_HALF_EXTENTS: Record<PropKind, { hx: number; hy: number }> = {
   concrete_barrier: { hx: 0.48, hy: 0.19 },
   counter: { hx: 0.44, hy: 0.25 },
   bench: { hx: 0.44, hy: 0.19 },
+  bed: { hx: 0.38, hy: 0.3 },
+  couch: { hx: 0.38, hy: 0.24 },
+  table: { hx: 0.32, hy: 0.26 },
+  bookshelf: { hx: 0.38, hy: 0.22 },
+  desk: { hx: 0.36, hy: 0.24 },
+  sink_toilet: { hx: 0.24, hy: 0.24 },
+  tv_stand: { hx: 0.32, hy: 0.22 },
   crate_wood: { hx: 0.36, hy: 0.36 },
   crate_military: { hx: 0.36, hy: 0.36 },
   fridge: { hx: 0.3, hy: 0.3 },
@@ -1592,4 +1921,58 @@ export function advanceDoorLockpick(
   }
   return { unlocked: false, progress: door.lockpickProgress };
 }
+
+export const BED_SLEEP_HEAL = 40;
+export const BED_SLEEP_MINUTES = 180;
+export const BED_SLEEP_DANGER_RADIUS = 4.0;
+
+export function canSleepSafely(
+  zombies: Array<{ x: number; y: number; state: string }>,
+  px: number,
+  py: number
+): boolean {
+  for (const z of zombies) {
+    if (z.state === 'dying') continue;
+    if (dist(z.x, z.y, px, py) <= BED_SLEEP_DANGER_RADIUS) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function applyBedSleep(
+  player: PlayerState,
+  timeMinutes: number,
+  day: number
+): {
+  player: PlayerState;
+  timeMinutes: number;
+  day: number;
+  dayWrapped: boolean;
+  healed: number;
+} {
+  const nextHp = Math.min(player.maxHp, player.hp + BED_SLEEP_HEAL);
+  const healed = Math.max(0, nextHp - player.hp);
+  let nextTime = timeMinutes + BED_SLEEP_MINUTES;
+  let nextDay = day;
+  let dayWrapped = false;
+  if (nextTime >= 1440) {
+    nextTime -= 1440;
+    nextDay += 1;
+    dayWrapped = true;
+  }
+  return {
+    player: {
+      ...player,
+      hp: nextHp,
+      hunger: Math.max(0, player.hunger - 4),
+      thirst: Math.max(0, player.thirst - 5),
+    },
+    timeMinutes: nextTime,
+    day: nextDay,
+    dayWrapped,
+    healed,
+  };
+}
+
 

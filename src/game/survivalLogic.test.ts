@@ -310,3 +310,81 @@ test('isCircleBlocked uses tight per-prop and rotated vehicle bounds without inv
   assert.equal(isCircleBlocked(world.grid, cruiser.x, cruiser.y, playerRadius, world.vehicles, null), true);
   assert.equal(isCircleBlocked(world.grid, cruiser.x, cruiser.y + 0.72, playerRadius, world.vehicles, null), false);
 });
+
+test('houses feature multi-room interiors with partition walls, room floors, porches, furniture, and valid doorways', () => {
+  const world = generateWorld(1994);
+  const propsSeen = new Set<string>();
+  const tilesSeen = new Set<string>();
+
+  for (let y = 0; y < world.grid.length; y++) {
+    for (let x = 0; x < world.grid[y].length; x++) {
+      propsSeen.add(world.grid[y][x].prop);
+      tilesSeen.add(world.grid[y][x].tile);
+    }
+  }
+
+  // Interior walls, furniture, and room-specific floor tiles exist
+  assert.ok(propsSeen.has('wall_interior'));
+  for (const furniture of ['bed', 'couch', 'table', 'bookshelf', 'desk', 'sink_toilet', 'tv_stand']) {
+    assert.ok(propsSeen.has(furniture), `Missing interior prop: ${furniture}`);
+  }
+  for (const floorTile of ['floor_rug', 'floor_bath', 'floor_porch']) {
+    assert.ok(tilesSeen.has(floorTile), `Missing room floor tile: ${floorTile}`);
+  }
+
+  // SW Suburban Ranch House (x=7..22, y=34..45): doorway & archway paths between rooms are clear and walkable
+  assert.equal(world.grid[33][18].tile, 'floor_porch');
+  assert.equal(world.grid[34][18].prop, 'door');
+  assert.equal(world.grid[37][15].prop, 'none'); // open archway between living room & kitchen
+  assert.equal(world.grid[37][15].solid, false);
+  assert.equal(world.grid[40][18].prop, 'door'); // door between living room & bedroom
+  assert.equal(world.grid[42][15].prop, 'door'); // door between bedroom & bathroom
+
+  // Loot containers initialize unsearched with openAnim === 0
+  const buildingContainers = world.containers.filter((c) => c.kind !== 'zombie_drop');
+  assert.ok(buildingContainers.length >= 12);
+  for (const c of buildingContainers) {
+    assert.equal(c.searched, false);
+    assert.equal(c.openAnim, 0);
+  }
+});
+
+test('all town beds sit flush against West bedroom walls with walkable access and allow sleeping for health', async () => {
+  const mod = await import('./survivalLogic');
+  const world = mod.generateWorld(1994);
+  const beds: Array<{ gx: number; gy: number }> = [];
+  for (let y = 1; y < world.grid.length - 1; y++) {
+    for (let x = 1; x < world.grid[y].length - 1; x++) {
+      if (world.grid[y][x].prop === 'bed') {
+        beds.push({ gx: x, gy: y });
+        const west = world.grid[y][x - 1].prop;
+        assert.ok(
+          west === 'wall_wood' || west === 'wall_brick' || west === 'wall_interior',
+          `Bed at (${x},${y}) should have headboard against a West wall/partition, found ${west}`
+        );
+        const adjacentFloor =
+          !world.grid[y][x + 1].solid ||
+          !world.grid[y - 1][x].solid ||
+          !world.grid[y + 1][x].solid;
+        assert.equal(adjacentFloor, true, `Bed at (${x},${y}) must have walkable floor beside it`);
+      }
+    }
+  }
+  assert.ok(beds.length >= 8, `Expected at least 8 town beds, got ${beds.length}`);
+
+  // Safety check blocks sleep only when non-dying zombies are within danger radius
+  assert.equal(mod.canSleepSafely([{ x: 18, y: 44, state: 'chase' }], 16.5, 44.5), false);
+  assert.equal(mod.canSleepSafely([{ x: 18, y: 44, state: 'dying' }], 16.5, 44.5), true);
+  assert.equal(mod.canSleepSafely([{ x: 30, y: 30, state: 'chase' }], 16.5, 44.5), true);
+
+  // Sleeping heals up to BED_SLEEP_HEAL and rolls clock cleanly across midnight
+  const injured = { ...mod.createInitialPlayer(16.5, 44.5), hp: 48 };
+  const res = mod.applyBedSleep(injured, 23 * 60 + 15, 1);
+  assert.equal(res.healed, mod.BED_SLEEP_HEAL);
+  assert.equal(res.player.hp, 48 + mod.BED_SLEEP_HEAL);
+  assert.equal(res.day, 2);
+  assert.equal(res.dayWrapped, true);
+  assert.equal(res.timeMinutes, 135);
+});
+
+

@@ -6,6 +6,9 @@ export type TileKind =
   | 'road'
   | 'sidewalk'
   | 'floor'
+  | 'floor_rug'
+  | 'floor_bath'
+  | 'floor_porch'
   | 'water'
   | 'pier'
   | 'crosswalk'
@@ -16,6 +19,7 @@ export type PropKind =
   | 'none'
   | 'wall_brick'
   | 'wall_wood'
+  | 'wall_interior'
   | 'door'
   | 'stove'
   | 'fishing_post'
@@ -33,7 +37,14 @@ export type PropKind =
   | 'concrete_barrier'
   | 'bench'
   | 'hydrant'
-  | 'counter';
+  | 'counter'
+  | 'bed'
+  | 'couch'
+  | 'table'
+  | 'bookshelf'
+  | 'desk'
+  | 'sink_toilet'
+  | 'tv_stand';
 
 export type StructureKind = 'barricade' | 'spike_trap' | 'campfire';
 
@@ -150,6 +161,8 @@ export interface LootContainer {
   items: Partial<Inventory>;
   searched: boolean;
   searchProgress: number; // 0..1
+  openAnim?: number; // 0 (closed) -> 1 (fully open) for animated sprite transition
+  popTimer?: number; // brief bounce/glint timer when looted
 }
 
 export interface WorldStructure {
@@ -306,7 +319,7 @@ export interface CraftRecipe {
 }
 
 export interface NearbyActionPrompt {
-  action: 'loot' | 'door' | 'fishing' | 'cook';
+  action: 'loot' | 'door' | 'fishing' | 'cook' | 'sleep';
   label: string;
   key: string;
   progress: number;
