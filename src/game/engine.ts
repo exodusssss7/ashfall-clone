@@ -1,3 +1,4 @@
+import { vehicleRelativeTouchInput } from './drivingControls';
 import {
   drawActionProp,
   getLootOpenStage,
@@ -19,7 +20,6 @@ import {
   PIXEL_SCALE,
   TILE_H,
   TILE_W,
-  angleDiff,
   clamp,
   dist,
   hasLineOfSight,
@@ -1270,14 +1270,12 @@ export class SurvivalEngine {
     if (this.keysHeld.has('KeyA') || this.keysHeld.has('ArrowLeft')) steer -= 1;
     if (this.keysHeld.has('KeyD') || this.keysHeld.has('ArrowRight')) steer += 1;
 
-    // Touch left joystick steers smoothly toward desired screen direction while driving
-    const vMag = Math.hypot(this.virtualMoveX, this.virtualMoveY);
-    if (vMag > 0.16 && throttle === 0 && steer === 0) {
-      const isoVec = screenVectorToIsoWorld(this.virtualMoveX, this.virtualMoveY);
-      const targetAngle = Math.atan2(isoVec.wy, isoVec.wx);
-      const diff = angleDiff(car.angle, targetAngle);
-      steer = clamp(diff * 1.9, -1, 1);
-      throttle = Math.abs(diff) > 2.35 ? -0.6 : clamp(vMag, 0, 1);
+    // Up/down throttle follows the car's nose; left/right turns its wheels.
+    // Keep keyboard priority and the on-foot screen-relative movement unchanged.
+    const keyboardDriving = ['KeyW', 'ArrowUp', 'KeyS', 'ArrowDown', 'KeyA', 'ArrowLeft', 'KeyD', 'ArrowRight']
+      .some((key) => this.keysHeld.has(key));
+    if (!keyboardDriving) {
+      ({ throttle, steer } = vehicleRelativeTouchInput(this.virtualMoveX, this.virtualMoveY));
     }
 
     if (car.fuel <= 0 && Math.abs(throttle) > 0.1 && this.inventory.fuel > 0) {
