@@ -105,6 +105,10 @@ export default function App() {
       }
     );
     engineRef.current = engine;
+    // Deterministic verification handle, only with ?debug=1 (never in normal play)
+    if (new URLSearchParams(window.location.search).get('debug') === '1') {
+      (window as any).__ash = engine;
+    }
     engine.start();
 
     // Boot persisted settings into the audio engine and keep mute state in sync
