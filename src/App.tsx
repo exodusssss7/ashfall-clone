@@ -7,6 +7,7 @@ import { PauseModal } from './components/PauseModal';
 import { QuickCookModal } from './components/QuickCookModal';
 import { TitleOverlay } from './components/TitleOverlay';
 import { TouchControls } from './components/TouchControls';
+import { TouchLookPad } from './components/TouchLookPad';
 import { SurvivalEngine } from './game/engine';
 import { soundEngine } from './game/sound';
 import { createInitialInventory } from './game/survivalLogic';
@@ -49,6 +50,7 @@ const INITIAL_HUD: HudSnapshot = {
   nearbyVehiclePrompt: null,
   drivingVehicle: null,
   statusBanner: null,
+  cameraMode: 'iso',
 };
 
 function detectTouchCapability(): boolean {
@@ -97,8 +99,11 @@ export default function App() {
     engineRef.current = engine;
     engine.start();
 
-    // Support ?autostart=1 for direct verification
+    // Support ?autostart=1 and ?fps=1 for direct verification
     const params = new URLSearchParams(window.location.search);
+    if (params.get('fps') === '1') {
+      engine.setCameraMode('fps', true);
+    }
     if (params.get('autostart') === '1') {
       engine.startGame(false);
     } else {
@@ -119,6 +124,10 @@ export default function App() {
       );
     }
   }, [phase, touchEnabled]);
+
+  useEffect(() => {
+    engineRef.current?.setModalOpen(craftOpen || cookOpen);
+  }, [craftOpen, cookOpen]);
 
   useEffect(() => {
     const onGlobalKey = (e: KeyboardEvent) => {
@@ -223,6 +232,10 @@ export default function App() {
             setTouchEnabled((prev) => !prev);
           }}
           onToggleMute={handleToggleMute}
+          onToggleCamera={() => {
+            soundEngine.playUiClick();
+            engineRef.current?.toggleCameraMode();
+          }}
           onPause={() => engineRef.current?.pauseGame()}
           onRestart={() => engineRef.current?.startGame()}
           onEnterExitVehicle={() => engineRef.current?.triggerEnterExitVehicle()}
@@ -237,7 +250,12 @@ export default function App() {
 
       {phase === 'playing' && touchEnabled && <NavigationRadar hud={hud} canvasRef={minimapRef} onWaypoint={(x,y)=>engineRef.current?.setWaypoint(x,y)} />}
 
-      {/* Mobile Horizontal Twin-Stick Touch Controls + Left-Hand Fire / Drift Button */}
+      {/* First-Person Right-Side Touch Camera Look Surface (behind HUD & combat buttons) */}
+      {phase === 'playing' && touchEnabled && hud.cameraMode === 'fps' && !craftOpen && !cookOpen && (
+        <TouchLookPad onLookDelta={(dx, dy) => engineRef.current?.applyVirtualLookDelta(dx, dy)} />
+      )}
+
+      {/* Mobile Touch Controls (Twin-Stick in ISO; Move + Touch Look Pad + Slash/Fire triggers in FPS) */}
       {phase === 'playing' && touchEnabled && !craftOpen && !cookOpen && (
         <TouchControls
           hud={hud}
@@ -290,6 +308,10 @@ export default function App() {
         <PauseModal
           hud={hud}
           onResume={() => engineRef.current?.resumeGame()}
+          onToggleCamera={() => {
+            soundEngine.playUiClick();
+            engineRef.current?.toggleCameraMode();
+          }}
           onRestart={() => engineRef.current?.startGame()}
           onTitle={() => engineRef.current?.returnToTitle()}
         />

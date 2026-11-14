@@ -4,6 +4,7 @@ import React from 'react';
 import {
   Backpack,
   Car,
+  Eye,
   Flame,
   Clock3,
   Skull,
@@ -39,6 +40,7 @@ interface GameHudProps {
   onToggleCook: () => void;
   onToggleTouch: () => void;
   onToggleMute: () => void;
+  onToggleCamera: () => void;
   onPause: () => void;
   onRestart: () => void;
   onEnterExitVehicle: () => void;
@@ -64,6 +66,7 @@ export const GameHud: React.FC<GameHudProps> = ({
   onToggleCook,
   onToggleTouch,
   onToggleMute,
+  onToggleCamera,
   onPause,
   onRestart,
   onEnterExitVehicle,
@@ -83,7 +86,7 @@ export const GameHud: React.FC<GameHudProps> = ({
   const weaponOrder: WeaponId[] = ['crowbar', 'pistol', 'shotgun', 'molotov'];
 
   return (
-    <div data-touch={touchEnabled} className="game-hud fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-3 md:p-4">
+    <div data-touch={touchEnabled} data-camera={hud.cameraMode} className="game-hud fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-3 md:p-4">
       {/* Low HP peripheral crimson vignette */}
       {hud.hp <= 30 && (
         <div
@@ -288,6 +291,22 @@ export const GameHud: React.FC<GameHudProps> = ({
               className="hidden sm:flex hud-slot w-10 h-10 items-center justify-center text-[#c7c2b6] hover:text-white transition-colors cursor-pointer"
             >
               <RotateCcw className="w-4 h-4" /><span className="utility-label">Reset</span>
+            </button>
+
+            <button
+              type="button"
+              tabIndex={-1}
+              onClick={(e) => {
+                e.currentTarget.blur();
+                onToggleCamera();
+              }}
+              aria-label={hud.cameraMode === 'fps' ? 'Switch to Isometric 3D View (Z)' : 'Switch to First-Person View (Z)'}
+              title="Toggle Camera View [Z]"
+              className={`hud-slot w-10 h-10 flex items-center justify-center transition-colors cursor-pointer ${
+                hud.cameraMode === 'fps' ? 'hud-slot-active text-[#f0d078]' : 'text-[#c7c2b6] hover:text-white'
+              }`}
+            >
+              <Eye className="w-4 h-4" /><span className="utility-label">{hud.cameraMode === 'fps' ? '1P' : 'ISO'}</span>
             </button>
 
             <button

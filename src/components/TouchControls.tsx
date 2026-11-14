@@ -15,8 +15,8 @@ import {
   LogOut,
   PackageOpen,
   RotateCw,
-  ShieldAlert,
   Siren,
+  Sword,
   Wrench,
   Zap,
 } from 'lucide-react';
@@ -60,6 +60,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
   onHorn,
 }) => {
   const [fireHeld, setFireHeld] = useState(false);
+  const [attackHeld, setAttackHeld] = useState(false);
   const [boostHeld, setBoostHeld] = useState(false);
   const [isPortrait, setIsPortrait] = useState(false);
   const [dismissRotateHint, setDismissRotateHint] = useState(false);
@@ -76,21 +77,34 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
   const cues = getActionCues(hud);
   const isDriving = Boolean(hud.drivingVehicle);
   const isFishing = Boolean(hud.fishing);
+  const isFps = hud.cameraMode === 'fps';
 
-  // Keep a separate left trigger like the reference; right outer-ring attacks remain.
+  // Keep a separate left trigger like the reference; right-hand attack button or aim stick handles primary right-thumb combat.
   const showLeftTrigger = true;
 
-  const fireLabel = isDriving
-    ? 'DRIFT'
-    : isFishing
-      ? hud.fishing?.canHook
-        ? 'REEL!'
-        : 'PULL'
-      : hud.buildMode
-        ? 'PLACE'
+  const combatActionLabel = isFishing
+    ? hud.fishing?.canHook
+      ? 'REEL!'
+      : 'PULL'
+    : hud.buildMode
+      ? 'PLACE'
+      : hud.equippedWeapon === 'crowbar'
+        ? 'SLASH'
         : hud.equippedWeapon === 'molotov'
           ? 'THROW'
           : 'FIRE';
+
+  const fireLabel = isDriving ? 'DRIFT' : isFps ? combatActionLabel : hud.buildMode ? 'PLACE' : hud.equippedWeapon === 'molotov' ? 'THROW' : isFishing ? (hud.fishing?.canHook ? 'REEL!' : 'PULL') : 'FIRE';
+
+  const renderAttackIcon = (className: string) => {
+    if (hud.buildMode) return <Hammer className={className} />;
+    if (hud.equippedWeapon === 'crowbar' && !isFishing) return <Sword className={className} />;
+    if (hud.equippedWeapon === 'molotov' && !isFishing) return <Flame className={className} />;
+    if ((hud.equippedWeapon === 'pistol' || hud.equippedWeapon === 'shotgun') && !isFishing) {
+      return <Crosshair className={className} />;
+    }
+    return <Flame className={className} />;
+  };
 
   const aimStickLabel = hud.buildMode
     ? 'Aim Build'
@@ -117,14 +131,14 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
           : 'LOOT';
 
   return (
-    <div className="touch-controls fixed inset-0 z-20 pointer-events-none">
+    <div data-camera={hud.cameraMode} className="touch-controls fixed inset-0 z-20 pointer-events-none">
       <FloatingStick testId="touch-move-stick" side="left" label={isDriving?'Drive':'Move'} accentColor="#b7d994" onChange={(x,y)=>onMoveStick(x,y)} />
-      {!isDriving && <FloatingStick testId="touch-aim-stick" side="right" label={aimStickLabel} accentColor="#ead39b" onChange={onAimStick} />}
+      {!isDriving && !isFps && <FloatingStick testId="touch-aim-stick" side="right" label={aimStickLabel} accentColor="#ead39b" onChange={onAimStick} />}
       {/* Horizontal orientation recommendation banner if device is held vertically */}
       {isPortrait && !dismissRotateHint && (
         <div className="rotation-hint absolute top-16 left-1/2 -translate-x-1/2 pointer-events-auto hud-panel px-3 py-1.5 flex items-center gap-2 text-[11px] font-telemetry text-[#f0d078] whitespace-nowrap">
           <RotateCw className="w-3.5 h-3.5 shrink-0" />
-          <span>Rotate horizontally for twin-stick play</span>
+          <span>{isFps ? 'Rotate horizontally for FPS controls' : 'Rotate horizontally for twin-stick play'}</span>
           <button
             type="button"
             onClick={() => setDismissRotateHint(true)}
@@ -135,7 +149,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
         </div>
       )}
 
-      {/* LEFT HAND CLUSTER: Movement / Steering Joystick + Contextual Left-Hand Trigger (Fire / Drift / Reel / Place) */}
+      {/* LEFT HAND CLUSTER: Movement / Steering Joystick + Contextual Left-Hand Trigger (Slash / Fire / Drift / Reel / Place) */}
       <div className="left-control-cluster absolute left-3 bottom-3 flex items-end gap-3 pointer-events-none">
         <div className="stick-spacer" style={{width:108,height:108,pointerEvents:'none'}} />
 
@@ -143,7 +157,15 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
           <button
             type="button"
             data-testid="touch-fire-btn" {...actionCueProps((isFishing ? cues.fishing! : { state: 'idle' as const, reason: fireLabel }))}
-            aria-label={isDriving ? 'Handbrake Drift Button' : isFishing ? 'Reel Fishing Line' : 'Left Hand Fire Button'}
+            aria-label={
+              isDriving
+                ? 'Handbrake Drift Button'
+                : isFishing
+                  ? 'Reel Fishing Line'
+                  : hud.equippedWeapon === 'crowbar' && isFps
+                    ? 'Left Hand Slash Button'
+                    : 'Left Hand Fire Button'
+            }
             onPointerDown={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -177,7 +199,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                   : 'bg-[#1a1f22]/90 border-[#d9822b] text-[#f0ece1] shadow-[0_4px_14px_rgba(0,0,0,0.6)]'
             }`}
           >
-            <Flame className="w-5 h-5" />
+            {isDriving ? <Flame className="w-5 h-5" /> : isFps ? renderAttackIcon('w-5 h-5') : <Flame className="w-5 h-5" />}
             <span className="font-telemetry text-[10px] font-bold tracking-wider mt-0.5">
               {fireLabel}
             </span>
@@ -481,7 +503,61 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               </div>
             </div>
 
-            <div className="stick-spacer" style={{width:104,height:104,pointerEvents:'none'}} />
+            {isFps ? (
+              <button
+                type="button"
+                data-testid="touch-attack-btn"
+                data-weapon={hud.buildMode ? 'build' : hud.equippedWeapon}
+                {...actionCueProps(isFishing ? cues.fishing! : { state: 'idle' as const, reason: combatActionLabel })}
+                aria-label={
+                  isFishing
+                    ? 'Reel Fishing Line'
+                    : hud.buildMode
+                      ? 'Place Structure'
+                      : hud.equippedWeapon === 'crowbar'
+                        ? 'Slash Crowbar'
+                        : hud.equippedWeapon === 'molotov'
+                          ? 'Throw Molotov'
+                          : 'Fire Weapon'
+                }
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  try {
+                    e.currentTarget.setPointerCapture?.(e.pointerId);
+                  } catch {
+                    // Synthetic PointerEvents may not register an active pointer id
+                  }
+                  setAttackHeld(true);
+                  if (isFishing) onLoot();
+                  else onFireChange(true);
+                }}
+                onPointerUp={(e) => {
+                  e.preventDefault();
+                  setAttackHeld(false);
+                  if (!isFishing) onFireChange(false);
+                }}
+                onPointerCancel={() => {
+                  setAttackHeld(false);
+                  if (!isFishing) onFireChange(false);
+                }}
+                style={{ touchAction: 'none' }}
+                className={`fps-attack-btn w-[72px] h-[72px] rounded-full border-2 flex flex-col items-center justify-center transition-transform select-none cursor-pointer ${
+                  attackHeld
+                    ? 'bg-[#c9453e] border-[#ffd266] text-white scale-95 shadow-[0_0_18px_rgba(201,69,62,0.75)]'
+                    : hud.fishing?.canHook
+                      ? 'bg-[#45310f]/95 border-[#ffd266] text-[#ffd266] animate-pulse shadow-[0_0_18px_rgba(255,210,102,0.55)]'
+                      : 'bg-[#1a1f22]/90 border-[#d9822b] text-[#f0ece1] shadow-[0_4px_16px_rgba(0,0,0,0.65)]'
+                }`}
+              >
+                {renderAttackIcon('w-6 h-6')}
+                <span className="font-telemetry text-[11px] font-bold tracking-wider mt-0.5">
+                  {combatActionLabel}
+                </span>
+              </button>
+            ) : (
+              <div className="stick-spacer" style={{width:104,height:104,pointerEvents:'none'}} />
+            )}
           </>
         )}
       </div>

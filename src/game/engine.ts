@@ -2,12 +2,6 @@ import { footstepSurfaceForTile } from './footstepSurfaces';
 import { BED_REST_COOLDOWN_SECONDS, formatRestCooldown, tickRestCooldown } from './restCooldown';
 import { vehicleRelativeTouchInput } from './drivingControls';
 import {
-  drawActionProp,
-  getLootOpenStage,
-  getLootPopTransform,
-  getZombieDyingFrame,
-  resolvePlayerAnimState,
-  resolveZombieAnimState,
   type ActionKind,
   type ActionVisual,
 } from './actionAnimation';
@@ -19,9 +13,6 @@ import { AIM_DIRECTION_DEADZONE, touchAimAttack } from './touchAim';
 import { findZombieRoute, type RoutePoint } from './navigation';
 import {
   CHUNK_SIZE,
-  PIXEL_SCALE,
-  TILE_H,
-  TILE_W,
   clamp,
   dist,
   hasLineOfSight,
@@ -30,7 +21,29 @@ import {
   screenVectorToIsoWorld,
   worldToIso,
 } from './isometric';
-import { PixelArtAtlas } from './pixelArt';
+import {
+  BULLET_SPEED,
+  HEADSHOT_MULTIPLIER_BULLET,
+  HEADSHOT_MULTIPLIER_PELLET,
+  PELLET_SPEED,
+  computeProjectileVelocity3D,
+  mapMaterialToDecalKind,
+  traceSegmentWorldHit,
+  traceSegmentZombieHit,
+  type WorldHitResult,
+} from './ballistics';
+import {
+  FPS_EYE_HEIGHT,
+  FPS_PITCH_MAX,
+  FPS_PITCH_MIN,
+  applyFirstPersonLookDelta,
+  applyFirstPersonTouchLookDelta,
+  computeFirstPersonAimWorldTarget,
+  computeFirstPersonMoveVector,
+  pickBestDirectionalTarget,
+  wrapAngleRad,
+} from './firstPerson';
+import { ThreeIsometricRenderer } from './threeRenderer';
 import { COOK_RECIPES, CRAFT_RECIPES, STRUCTURES, WEAPONS, ZOMBIE_CONFIGS } from './recipes';
 import { soundEngine } from './sound';
 import {
@@ -66,6 +79,8 @@ import {
 } from './survivalLogic';
 import type {
   BloodDecal,
+  BulletImpactEffect,
+  CameraMode,
   ConsumableItemId,
   DoorEntity,
   FirePatch,
@@ -81,6 +96,7 @@ import type {
   Projectile,
   SoundRipple,
   StructureKind,
+  SurfaceImpactDecal,
   TileCell,
   Vehicle,
   WeaponId,
@@ -110,13 +126,9 @@ const BEST_SCORE_KEY = 'ashfall_best_score_v1';
 
 export class SurvivalEngine {
   private canvas: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D;
-  private lightCanvas: HTMLCanvasElement;
-  private lightCtx: CanvasRenderingContext2D;
-  private flashCanvas: HTMLCanvasElement;
-  private flashCtx: CanvasRenderingContext2D;
   private minimapCanvas: HTMLCanvasElement | null = null;
-  private atlas: PixelArtAtlas;
+  private threeRenderer: ThreeIsometricRenderer;
+  private destroyed = false;
 
   private zombieRoutes = new Map<number, { points: RoutePoint[]; target: string; expires: number }>();
   private waypoint: { x: number; y: number } | null = null;
@@ -169,6 +181,8 @@ export class SurvivalEngine {
   private nextVehicleIdRef = { nextId: 100 };
   private activeVehicleId: number | null = null;
   private decals: BloodDecal[] = [];
+  private impactDecals: SurfaceImpactDecal[] = [];
+  private impactEffects: BulletImpactEffect[] = [];
   private zombies: Zombie[] = [];
   private projectiles: Projectile[] = [];
   private firePatches: FirePatch[] = [];
@@ -193,6 +207,7 @@ export class SurvivalEngine {
   private muzzleFlashTimer = 0;
   private hitMarkerTimer = 0;
   private hitMarkerCrit = false;
+  private hitMarkerHeadshot = false;
   private screechCooldown = 0;
   private heartbeatTimer = 0;
   private crackleTimer = 0;
@@ -205,10 +220,21 @@ export class SurvivalEngine {
   private restCooldownSeconds = 0;
   private playerVelX = 0;
   private playerVelY = 0;
+  private isSprinting = false;
   private lastFrameDt = 0.016;
   private ambientAsh: Array<{ x: number; y: number; speed: number; drift: number; size: number; alpha: number }> = [];
 
-  // Camera in unscaled isometric pixel coordinates
+  // Camera in unscaled isometric pixel coordinates + First-Person mode state
+  private cameraMode: CameraMode = 'iso';
+  private fpsPitch = -0.05;
+  private fpsCarLookOffset = 0;
+  private fpsStrafeInput = 0;
+  private weaponSwapTimer = 0;
+  private isMouseDraggingLook = false;
+  private skipNextPointerLockDelta = false;
+  private lastDragX = 0;
+  private lastDragY = 0;
+  private modalOpen = false;
   private camX = 0;
   private camY = 0;
   private viewW = 1280;
@@ -244,19 +270,7 @@ export class SurvivalEngine {
     onRequestOpenCook?: () => void
   ) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d', { alpha: false })!;
-    this.ctx.imageSmoothingEnabled = false;
-
-    this.lightCanvas = document.createElement('canvas');
-    this.lightCtx = this.lightCanvas.getContext('2d')!;
-
-    this.flashCanvas = document.createElement('canvas');
-    this.flashCanvas.width = 48;
-    this.flashCanvas.height = 48;
-    this.flashCtx = this.flashCanvas.getContext('2d')!;
-    this.flashCtx.imageSmoothingEnabled = false;
-
-    this.atlas = new PixelArtAtlas();
+    this.threeRenderer = new ThreeIsometricRenderer(canvas);
     this.onHudUpdate = onHudUpdate;
     this.onPhaseChange = onPhaseChange;
     this.onRequestOpenCook = onRequestOpenCook;
@@ -329,6 +343,7 @@ export class SurvivalEngine {
   }
 
   private initWorld(titleMode: boolean): void {
+    this.threeRenderer?.clearSceneCaches();
     this.zombieRoutes.clear();
     const world = generateWorld(1994);
     this.worldStore = world.worldStore;
@@ -351,6 +366,11 @@ export class SurvivalEngine {
     this.player = createInitialPlayer(world.spawnX, world.spawnY);
     this.inventory = createInitialInventory();
     this.decals = [];
+    this.impactDecals = [];
+    this.impactEffects = [];
+    this.hitMarkerTimer = 0;
+    this.hitMarkerCrit = false;
+    this.hitMarkerHeadshot = false;
     this.zombies = [];
     this.projectiles = [];
     this.firePatches = [];
@@ -404,24 +424,36 @@ export class SurvivalEngine {
   start(): void {
     this.lastTimestamp = performance.now();
     const loop = (now: number) => {
+      if (this.destroyed) return;
       const rawDt = (now - this.lastTimestamp) / 1000;
       this.lastTimestamp = now;
       const dt = Math.min(Math.max(rawDt, 0.001), 0.05);
       this.lastFrameDt = dt;
       this.update(dt);
       this.render();
-      this.rafId = requestAnimationFrame(loop);
+      if (this.threeRenderer.isSoftwareGl) {
+        this.threeRenderer.afterDraw(() => {
+          if (!this.destroyed) {
+            this.rafId = requestAnimationFrame(loop);
+          }
+        });
+      } else {
+        this.rafId = requestAnimationFrame(loop);
+      }
     };
     this.rafId = requestAnimationFrame(loop);
   }
 
   destroy(): void {
+    this.destroyed = true;
+    this.releasePointerLock();
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }
     soundEngine.stop();
     this.unbindEvents();
+    this.threeRenderer.dispose();
   }
 
   startGame(fromGesture = true): void {
@@ -430,9 +462,12 @@ export class SurvivalEngine {
       soundEngine.playUiClick();
     }
     this.initWorld(false);
+    this.fpsPitch = -0.05;
+    this.fpsCarLookOffset = 0;
     this.setPhase('playing');
     this.clearInputs();
     this.emitHud();
+    this.render();
   }
 
   resumeGame(): void {
@@ -446,6 +481,7 @@ export class SurvivalEngine {
 
   pauseGame(): void {
     if (this.phase !== 'playing') return;
+    this.releasePointerLock();
     soundEngine.playUiClick();
     soundEngine.updateEngineSound(false, 0, false);
     this.setPhase('paused');
@@ -454,22 +490,100 @@ export class SurvivalEngine {
   }
 
   returnToTitle(): void {
+    this.releasePointerLock();
     soundEngine.playUiClick();
     soundEngine.updateEngineSound(false, 0, false);
     this.initWorld(true);
     this.setPhase('title');
     this.clearInputs();
     this.emitHud();
+    this.render();
   }
 
   private setPhase(next: GamePhase): void {
     this.phase = next;
+    if (next !== 'playing') {
+      this.releasePointerLock();
+    }
     document.body.dataset.state = next;
     this.onPhaseChange(next);
   }
 
   getPhase(): GamePhase {
     return this.phase;
+  }
+
+  getCameraMode(): CameraMode {
+    return this.cameraMode;
+  }
+
+  setCameraMode(mode: CameraMode, silent = false): void {
+    if (this.cameraMode === mode) return;
+    this.cameraMode = mode;
+    this.isMouseDraggingLook = false;
+    this.virtualAimActive = false;
+    this.virtualAimJustPressed = false;
+    this.virtualAimMag = 0;
+    this.fpsStrafeInput = 0;
+    if (mode === 'fps') {
+      this.fpsPitch = -0.05;
+      this.fpsCarLookOffset = 0;
+      if (!silent && this.phase === 'playing') {
+        soundEngine.playUiClick();
+        this.showBanner(
+          this.usingVirtualAim
+            ? 'FIRST-PERSON MODE · DRAG RIGHT SIDE TO AIM'
+            : 'FIRST-PERSON MODE · CLICK TO LOCK AIM · [Z] ISO',
+          2.8
+        );
+      }
+    } else {
+      this.releasePointerLock();
+      if (!silent && this.phase === 'playing') {
+        soundEngine.playUiClick();
+        this.showBanner('ISOMETRIC 3D MODE · [Z] FIRST-PERSON', 2.2);
+      }
+    }
+    this.updateMouseWorld();
+    this.emitHud();
+    this.render();
+  }
+
+  toggleCameraMode(): void {
+    this.setCameraMode(this.cameraMode === 'iso' ? 'fps' : 'iso');
+  }
+
+  setModalOpen(open: boolean): void {
+    this.modalOpen = open;
+    if (open) {
+      this.releasePointerLock();
+      this.clearInputs();
+    }
+  }
+
+  private requestPointerLock(): void {
+    if (this.cameraMode !== 'fps' || this.phase !== 'playing' || this.modalOpen) return;
+    if (document.pointerLockElement === this.canvas) return;
+    try {
+      const maybePromise = (this.canvas as HTMLCanvasElement & {
+        requestPointerLock?: () => Promise<void> | void;
+      }).requestPointerLock?.();
+      if (maybePromise && typeof (maybePromise as Promise<void>).catch === 'function') {
+        (maybePromise as Promise<void>).catch(() => {});
+      }
+    } catch {
+      // Ignore browser gesture/sandbox pointer lock restrictions
+    }
+  }
+
+  private releasePointerLock(): void {
+    try {
+      if (document.pointerLockElement === this.canvas) {
+        document.exitPointerLock?.();
+      }
+    } catch {
+      // ignore
+    }
   }
 
   selectWeapon(weapon: WeaponId): void {
@@ -479,6 +593,7 @@ export class SurvivalEngine {
       this.player.equippedWeapon = weapon;
       this.player.reloadingTimer = 0;
       this.player.reloadingWeapon = null;
+      this.weaponSwapTimer = 0.22;
       soundEngine.playUiClick();
       this.emitHud();
     }
@@ -634,6 +749,8 @@ export class SurvivalEngine {
     this.justPressed.clear();
     this.mouseDown = false;
     this.mouseJustClicked = false;
+    this.isMouseDraggingLook = false;
+    this.isSprinting = false;
     this.virtualMoveX = 0;
     this.virtualMoveY = 0;
     this.virtualAimActive = false;
@@ -679,6 +796,26 @@ export class SurvivalEngine {
       this.mouseWorldX = this.player.x + Math.cos(this.virtualAimAngle) * 4.5;
       this.mouseWorldY = this.player.y + Math.sin(this.virtualAimAngle) * 4.5;
     }
+  }
+
+  applyVirtualLookDelta(dx: number, dy: number): void {
+    soundEngine.unlock();
+    this.usingVirtualAim = true;
+    if (this.phase !== 'playing' || this.modalOpen || this.cameraMode !== 'fps') return;
+    if (this.activeVehicleId !== null) {
+      const car = this.getActiveVehicle();
+      const res = applyFirstPersonTouchLookDelta(this.fpsCarLookOffset, this.fpsPitch, dx, dy);
+      this.fpsCarLookOffset = clamp(res.yaw, -Math.PI * 0.65, Math.PI * 0.65);
+      this.fpsPitch = clamp(res.pitch, -0.22, 0.28);
+      if (car) {
+        this.player.facingAngle = wrapAngleRad(car.angle + this.fpsCarLookOffset);
+      }
+    } else {
+      const res = applyFirstPersonTouchLookDelta(this.player.facingAngle, this.fpsPitch, dx, dy);
+      this.player.facingAngle = res.yaw;
+      this.fpsPitch = res.pitch;
+    }
+    this.updateMouseWorld();
   }
 
   setVirtualFire(held: boolean): void {
@@ -843,6 +980,8 @@ export class SurvivalEngine {
       this.prevBoostActive = false;
       this.player.x = exitPos.x;
       this.player.y = exitPos.y;
+      this.player.facingAngle = current.angle;
+      this.fpsCarLookOffset = 0;
       this.player.invulnTimer = Math.max(this.player.invulnTimer, 0.3);
       this.activeVehicleId = null;
       soundEngine.updateEngineSound(false, 0, false);
@@ -863,8 +1002,10 @@ export class SurvivalEngine {
     this.player.reloadingTimer = 0;
     this.player.reloadingWeapon = null;
     this.activeVehicleId = nearest.id;
+    this.fpsCarLookOffset = 0;
     this.player.x = nearest.x;
     this.player.y = nearest.y;
+    this.player.facingAngle = nearest.angle;
     soundEngine.playCarDoor();
     const label = nearest.kind === 'police' ? 'POLICE CRUISER' : 'SEDAN';
     this.showBanner(
@@ -925,6 +1066,16 @@ export class SurvivalEngine {
   }
 
   private findNearestDoor(): DoorEntity | null {
+    if (this.cameraMode === 'fps') {
+      return pickBestDirectionalTarget(
+        this.player.x,
+        this.player.y,
+        this.player.facingAngle,
+        this.doors,
+        (d) => ({ x: d.gx + 0.5, y: d.gy + 0.5 }),
+        1.65
+      );
+    }
     let best: DoorEntity | null = null;
     let bestD = 1.65;
     for (const d of this.doors) {
@@ -943,13 +1094,7 @@ export class SurvivalEngine {
     const h = Math.max(240, Math.floor(rect?.height ?? window.innerHeight));
     this.viewW = w;
     this.viewH = h;
-    this.canvas.width = w;
-    this.canvas.height = h;
-    this.ctx.imageSmoothingEnabled = false;
-
-    this.lightCanvas.width = Math.max(160, Math.floor(w / PIXEL_SCALE));
-    this.lightCanvas.height = Math.max(120, Math.floor(h / PIXEL_SCALE));
-    this.lightCtx.imageSmoothingEnabled = false;
+    this.threeRenderer.resize(w, h);
   };
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -981,15 +1126,17 @@ export class SurvivalEngine {
       return;
     }
 
-    if (this.phase !== 'playing') return;
+    if (this.phase !== 'playing' || this.modalOpen) return;
 
     if (!this.keysHeld.has(code)) {
       this.justPressed.add(code);
     }
     this.keysHeld.add(code);
 
-    // Hotbar weapon, consumable, door, cooking & vehicle switches
-    if (code === 'KeyG') {
+    // Hotbar weapon, consumable, door, cooking, camera & vehicle switches
+    if (code === 'KeyZ') {
+      this.toggleCameraMode();
+    } else if (code === 'KeyG') {
       this.triggerEnterExitVehicle();
     } else if (code === 'KeyQ') {
       this.triggerHorn();
@@ -1029,8 +1176,51 @@ export class SurvivalEngine {
     this.keysHeld.delete(e.code);
   };
 
+  private applyFpsMouseLookDelta(dx: number, dy: number): void {
+    if (this.activeVehicleId !== null) {
+      const car = this.getActiveVehicle();
+      const res = applyFirstPersonLookDelta(this.fpsCarLookOffset, this.fpsPitch, dx, dy);
+      this.fpsCarLookOffset = clamp(res.yaw, -Math.PI * 0.65, Math.PI * 0.65);
+      this.fpsPitch = res.pitch;
+      if (car) {
+        this.player.facingAngle = wrapAngleRad(car.angle + this.fpsCarLookOffset);
+      }
+    } else {
+      const res = applyFirstPersonLookDelta(this.player.facingAngle, this.fpsPitch, dx, dy);
+      this.player.facingAngle = res.yaw;
+      this.fpsPitch = res.pitch;
+    }
+    this.updateMouseWorld();
+  }
+
+  private onPointerLockChange = (): void => {
+    if (document.pointerLockElement === this.canvas) {
+      this.skipNextPointerLockDelta = true;
+      this.isMouseDraggingLook = false;
+    }
+  };
+
   private onMouseMove = (e: MouseEvent): void => {
     this.usingVirtualAim = false;
+    if (this.cameraMode === 'fps' && this.phase === 'playing' && !this.modalOpen) {
+      if (document.pointerLockElement === this.canvas) {
+        if (this.skipNextPointerLockDelta) {
+          this.skipNextPointerLockDelta = false;
+          return;
+        }
+        // Guard against Chromium/OS cursor-warp spikes on pointer lock transition
+        if (Math.abs(e.movementX) > 160 || Math.abs(e.movementY) > 160) return;
+        this.applyFpsMouseLookDelta(clamp(e.movementX, -60, 60), clamp(e.movementY, -60, 60));
+      } else if (this.isMouseDraggingLook) {
+        const dx = e.clientX - this.lastDragX;
+        const dy = e.clientY - this.lastDragY;
+        this.lastDragX = e.clientX;
+        this.lastDragY = e.clientY;
+        if (Math.abs(dx) > 160 || Math.abs(dy) > 160) return;
+        this.applyFpsMouseLookDelta(clamp(dx, -60, 60) * 1.35, clamp(dy, -60, 60) * 1.35);
+      }
+      return;
+    }
     const rect = this.canvas.getBoundingClientRect();
     this.mouseScreenX = e.clientX - rect.left;
     this.mouseScreenY = e.clientY - rect.top;
@@ -1040,6 +1230,15 @@ export class SurvivalEngine {
   private onMouseDown = (e: MouseEvent): void => {
     soundEngine.unlock();
     this.usingVirtualAim = false;
+    if (this.phase !== 'playing' || this.modalOpen) return;
+
+    if (this.cameraMode === 'fps') {
+      this.requestPointerLock();
+      this.isMouseDraggingLook = true;
+      this.lastDragX = e.clientX;
+      this.lastDragY = e.clientY;
+    }
+
     if (e.button === 2) {
       if (this.player.buildMode) {
         this.player.buildMode = null;
@@ -1058,6 +1257,7 @@ export class SurvivalEngine {
 
   private onMouseUp = (e: MouseEvent): void => {
     if (e.button === 0) this.mouseDown = false;
+    this.isMouseDraggingLook = false;
   };
 
   private onContextMenu = (e: MouseEvent): void => {
@@ -1069,7 +1269,10 @@ export class SurvivalEngine {
   };
 
   private onVisibilityChange = (): void => {
-    if (document.hidden) this.clearInputs();
+    if (document.hidden) {
+      this.releasePointerLock();
+      this.clearInputs();
+    }
   };
 
   private bindEvents(): void {
@@ -1078,6 +1281,7 @@ export class SurvivalEngine {
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('blur', this.onBlur);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
+    document.addEventListener('pointerlockchange', this.onPointerLockChange);
     this.canvas.addEventListener('mousemove', this.onMouseMove);
     this.canvas.addEventListener('mousedown', this.onMouseDown);
     window.addEventListener('mouseup', this.onMouseUp);
@@ -1090,6 +1294,7 @@ export class SurvivalEngine {
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('blur', this.onBlur);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     this.canvas.removeEventListener('mousemove', this.onMouseMove);
     this.canvas.removeEventListener('mousedown', this.onMouseDown);
     window.removeEventListener('mouseup', this.onMouseUp);
@@ -1097,6 +1302,17 @@ export class SurvivalEngine {
   }
 
   private updateMouseWorld(): void {
+    if (this.cameraMode === 'fps') {
+      const aim = computeFirstPersonAimWorldTarget(
+        this.player.x,
+        this.player.y,
+        this.player.facingAngle,
+        this.fpsPitch
+      );
+      this.mouseWorldX = aim.wx;
+      this.mouseWorldY = aim.wy;
+      return;
+    }
     // Camera look-ahead calls this after movement. Preserve touch aim rather than
     // overwriting the flashlight target with the last desktop cursor position.
     if (this.usingVirtualAim) {
@@ -1105,9 +1321,12 @@ export class SurvivalEngine {
       this.mouseWorldY = this.player.y + Math.sin(angle) * 4.5;
       return;
     }
-    const isoX = (this.mouseScreenX - this.viewW * 0.5) / PIXEL_SCALE + this.camX;
-    const isoY = (this.mouseScreenY - this.viewH * 0.5) / PIXEL_SCALE + this.camY;
-    const wp = isoToWorld(isoX, isoY);
+    const wp = this.threeRenderer.screenToWorld(
+      this.mouseScreenX,
+      this.mouseScreenY,
+      this.camX,
+      this.camY
+    );
     this.mouseWorldX = wp.wx;
     this.mouseWorldY = wp.wy;
   }
@@ -1127,8 +1346,14 @@ export class SurvivalEngine {
     this.sleepTransitionTimer = Math.max(0, this.sleepTransitionTimer - dt);
     this.muzzleFlashTimer = Math.max(0, this.muzzleFlashTimer - dt);
     this.hitMarkerTimer = Math.max(0, this.hitMarkerTimer - dt);
+    if (this.hitMarkerTimer <= 0) {
+      this.hitMarkerCrit = false;
+      this.hitMarkerHeadshot = false;
+    }
     this.screechCooldown = Math.max(0, this.screechCooldown - dt);
+    this.weaponSwapTimer = Math.max(0, this.weaponSwapTimer - dt);
     this.updateParticles(dt);
+    this.updateImpactEffects(dt);
     this.updateFloatingTexts(dt);
     this.updateSoundRipples(dt);
     for (const ash of this.ambientAsh) {
@@ -1404,7 +1629,14 @@ export class SurvivalEngine {
     // Sync survivor inside cabin
     this.player.x = next.x;
     this.player.y = next.y;
-    this.player.facingAngle = next.angle;
+    if (this.cameraMode === 'fps') {
+      if (Math.abs(steer) > 0.1 && document.pointerLockElement !== this.canvas && !this.isMouseDraggingLook) {
+        this.fpsCarLookOffset *= Math.exp(-dt * 1.8);
+      }
+      this.player.facingAngle = wrapAngleRad(next.angle + this.fpsCarLookOffset);
+    } else {
+      this.player.facingAngle = next.angle;
+    }
     this.player.hitFlash = Math.max(0, this.player.hitFlash - dt);
     this.player.invulnTimer = Math.max(0, this.player.invulnTimer - dt);
     this.player = tickSurvivalNeeds(this.player, dt, false, false);
@@ -1438,31 +1670,59 @@ export class SurvivalEngine {
       }
     }
 
-    // Screen-aligned isometric WASD + virtual joystick vector
-    let moveX = 0;
-    let moveY = 0;
-    if (this.keysHeld.has('KeyW') || this.keysHeld.has('ArrowUp')) {
-      moveX -= 1;
-      moveY -= 1;
-    }
-    if (this.keysHeld.has('KeyS') || this.keysHeld.has('ArrowDown')) {
-      moveX += 1;
-      moveY += 1;
-    }
-    if (this.keysHeld.has('KeyA') || this.keysHeld.has('ArrowLeft')) {
-      moveX -= 1;
-      moveY += 1;
-    }
-    if (this.keysHeld.has('KeyD') || this.keysHeld.has('ArrowRight')) {
-      moveX += 1;
-      moveY -= 1;
+    // Keyboard turning in FPS mode (ArrowLeft / ArrowRight); mobile look uses right-side drag pad
+    if (this.cameraMode === 'fps') {
+      let yawTurn = 0;
+      if (this.keysHeld.has('ArrowLeft')) yawTurn -= 1;
+      if (this.keysHeld.has('ArrowRight')) yawTurn += 1;
+      if (yawTurn !== 0) {
+        p.facingAngle = wrapAngleRad(p.facingAngle + yawTurn * 2.35 * dt);
+      }
     }
 
+    // Movement vector: FPS camera-relative WASD OR classic screen-aligned isometric WASD
+    let moveX = 0;
+    let moveY = 0;
     const vMag = Math.hypot(this.virtualMoveX, this.virtualMoveY);
-    if (vMag > 0.14) {
-      const isoVec = screenVectorToIsoWorld(this.virtualMoveX, this.virtualMoveY);
-      moveX += isoVec.wx;
-      moveY += isoVec.wy;
+
+    if (this.cameraMode === 'fps') {
+      let fwd = 0;
+      let strafe = 0;
+      if (this.keysHeld.has('KeyW') || this.keysHeld.has('ArrowUp')) fwd += 1;
+      if (this.keysHeld.has('KeyS') || this.keysHeld.has('ArrowDown')) fwd -= 1;
+      if (this.keysHeld.has('KeyA')) strafe -= 1;
+      if (this.keysHeld.has('KeyD')) strafe += 1;
+      if (vMag > 0.14) {
+        fwd -= this.virtualMoveY;
+        strafe += this.virtualMoveX;
+      }
+      this.fpsStrafeInput = clamp(strafe, -1, 1);
+      const vec = computeFirstPersonMoveVector(fwd, strafe, p.facingAngle);
+      moveX = vec.wx;
+      moveY = vec.wy;
+    } else {
+      this.fpsStrafeInput = 0;
+      if (this.keysHeld.has('KeyW') || this.keysHeld.has('ArrowUp')) {
+        moveX -= 1;
+        moveY -= 1;
+      }
+      if (this.keysHeld.has('KeyS') || this.keysHeld.has('ArrowDown')) {
+        moveX += 1;
+        moveY += 1;
+      }
+      if (this.keysHeld.has('KeyA') || this.keysHeld.has('ArrowLeft')) {
+        moveX -= 1;
+        moveY += 1;
+      }
+      if (this.keysHeld.has('KeyD') || this.keysHeld.has('ArrowRight')) {
+        moveX += 1;
+        moveY -= 1;
+      }
+      if (vMag > 0.14) {
+        const isoVec = screenVectorToIsoWorld(this.virtualMoveX, this.virtualMoveY);
+        moveX += isoVec.wx;
+        moveY += isoVec.wy;
+      }
     }
 
     const moveLen = Math.hypot(moveX, moveY);
@@ -1492,6 +1752,7 @@ export class SurvivalEngine {
     const wantsSprint =
       ((this.keysHeld.has('ShiftLeft') || this.keysHeld.has('ShiftRight')) || vMag > 0.85) &&
       moveLen > 0;
+    this.isSprinting = wantsSprint;
 
     if (p.dodgeTimer > 0) {
       p.dodgeTimer -= dt;
@@ -1536,17 +1797,19 @@ export class SurvivalEngine {
       }
     }
 
-    // Aim facing toward right touch stick, movement direction (when using touch), or mouse cursor
-    if (this.virtualAimActive) {
-      p.facingAngle = this.virtualAimAngle;
-      this.mouseWorldX = p.x + Math.cos(this.virtualAimAngle) * 4.5;
-      this.mouseWorldY = p.y + Math.sin(this.virtualAimAngle) * 4.5;
-    } else if (this.usingVirtualAim && vMag > 0.14 && moveLen > 0) {
-      p.facingAngle = Math.atan2(moveY, moveX);
-      this.mouseWorldX = p.x + Math.cos(p.facingAngle) * 4.0;
-      this.mouseWorldY = p.y + Math.sin(p.facingAngle) * 4.0;
-    } else if (!this.usingVirtualAim) {
-      p.facingAngle = Math.atan2(this.mouseWorldY - p.y, this.mouseWorldX - p.x);
+    // Aim facing: in FPS mode yaw is controlled by mouse-look/arrows; in ISO by cursor/touch stick
+    if (this.cameraMode !== 'fps') {
+      if (this.virtualAimActive) {
+        p.facingAngle = this.virtualAimAngle;
+        this.mouseWorldX = p.x + Math.cos(this.virtualAimAngle) * 4.5;
+        this.mouseWorldY = p.y + Math.sin(this.virtualAimAngle) * 4.5;
+      } else if (this.usingVirtualAim && vMag > 0.14 && moveLen > 0) {
+        p.facingAngle = Math.atan2(moveY, moveX);
+        this.mouseWorldX = p.x + Math.cos(p.facingAngle) * 4.0;
+        this.mouseWorldY = p.y + Math.sin(p.facingAngle) * 4.0;
+      } else if (!this.usingVirtualAim) {
+        p.facingAngle = Math.atan2(this.mouseWorldY - p.y, this.mouseWorldX - p.x);
+      }
     }
 
     // Survival needs update
@@ -1590,8 +1853,9 @@ export class SurvivalEngine {
     }
 
     // Handle Fishing Hook/Reel, Build Mode, or Combat Action
-    // Inner ring aims only for every weapon. Outer ring aims and attacks.
-    const aimStickAttack = touchAimAttack(this.virtualAimActive, this.virtualAimMag);
+    // Inner ring aims only for every weapon in ISO. FPS uses separate look pad + Slash/Fire buttons.
+    const aimStickAttack =
+      this.cameraMode === 'fps' ? false : touchAimAttack(this.virtualAimActive, this.virtualAimMag);
 
     const triggerAction =
       this.mouseJustClicked ||
@@ -1785,10 +2049,19 @@ export class SurvivalEngine {
       soundEngine.playGunshot('pistol');
       this.trauma = Math.min(1, this.trauma + 0.24);
       this.emitSound(p.x, p.y, spec.noiseRadius, true);
-      this.fireProjectiles('bullet', p.x, p.y, p.facingAngle, 1, spec.spreadRad, spec.damage, 21);
+      this.fireProjectiles('bullet', p.x, p.y, p.facingAngle, 1, spec.spreadRad, spec.damage, BULLET_SPEED);
+      if (this.cameraMode === 'fps') {
+        this.fpsPitch = clamp(this.fpsPitch + 0.011, FPS_PITCH_MIN, FPS_PITCH_MAX);
+      }
       // Muzzle flash & ejecting brass casing
-      this.spawnParticles(p.x + Math.cos(p.facingAngle) * 0.4, p.y + Math.sin(p.facingAngle) * 0.4, 0.65, 5, '#ffd978', 3.4, 0.6);
-      this.spawnParticles(p.x - Math.sin(p.facingAngle) * 0.25, p.y + Math.cos(p.facingAngle) * 0.25, 0.75, 1, '#e6be53', 1.6, 2.4, 14);
+      const cosF = Math.cos(p.facingAngle);
+      const sinF = Math.sin(p.facingAngle);
+      if (this.cameraMode === 'fps') {
+        this.spawnParticles(p.x + cosF * 0.45 - sinF * 0.32, p.y + sinF * 0.45 + cosF * 0.32, 0.62, 1, '#e6be53', 1.4, 1.8, 14);
+      } else {
+        this.spawnParticles(p.x + cosF * 0.4, p.y + sinF * 0.4, 0.65, 5, '#ffd978', 3.4, 0.6);
+        this.spawnParticles(p.x - sinF * 0.25, p.y + cosF * 0.25, 0.75, 1, '#e6be53', 1.6, 2.4, 14);
+      }
       this.emitHud();
       return;
     }
@@ -1809,9 +2082,18 @@ export class SurvivalEngine {
       this.trauma = Math.min(1, this.trauma + 0.55);
       this.hitstopTimer = 0.032;
       this.emitSound(p.x, p.y, spec.noiseRadius, true);
-      this.fireProjectiles('pellet', p.x, p.y, p.facingAngle, spec.pellets, spec.spreadRad, spec.damage, 19);
-      this.spawnParticles(p.x + Math.cos(p.facingAngle) * 0.5, p.y + Math.sin(p.facingAngle) * 0.5, 0.65, 11, '#ffbc52', 4.6, 0.8);
-      this.spawnParticles(p.x - Math.sin(p.facingAngle) * 0.25, p.y + Math.cos(p.facingAngle) * 0.25, 0.75, 1, '#d1493b', 1.9, 2.7, 14);
+      this.fireProjectiles('pellet', p.x, p.y, p.facingAngle, spec.pellets, spec.spreadRad, spec.damage, PELLET_SPEED);
+      if (this.cameraMode === 'fps') {
+        this.fpsPitch = clamp(this.fpsPitch + 0.026, FPS_PITCH_MIN, FPS_PITCH_MAX);
+      }
+      const cosF = Math.cos(p.facingAngle);
+      const sinF = Math.sin(p.facingAngle);
+      if (this.cameraMode === 'fps') {
+        this.spawnParticles(p.x + cosF * 0.45 - sinF * 0.32, p.y + sinF * 0.45 + cosF * 0.32, 0.62, 1, '#d1493b', 1.7, 2.0, 14);
+      } else {
+        this.spawnParticles(p.x + cosF * 0.5, p.y + sinF * 0.5, 0.65, 11, '#ffbc52', 4.6, 0.8);
+        this.spawnParticles(p.x - sinF * 0.25, p.y + cosF * 0.25, 0.75, 1, '#d1493b', 1.9, 2.7, 14);
+      }
       this.emitHud();
       return;
     }
@@ -1824,10 +2106,11 @@ export class SurvivalEngine {
       this.inventory.molotov -= 1;
       p.attackCooldown = spec.cooldown;
       soundEngine.playMeleeSwing();
-      const tx = this.usingVirtualAim
+      const useForwardTarget = this.usingVirtualAim && this.cameraMode !== 'fps';
+      const tx = useForwardTarget
         ? p.x + Math.cos(p.facingAngle) * 4.5
         : clamp(this.mouseWorldX, p.x - spec.range, p.x + spec.range);
-      const ty = this.usingVirtualAim
+      const ty = useForwardTarget
         ? p.y + Math.sin(p.facingAngle) * 4.5
         : clamp(this.mouseWorldY, p.y - spec.range, p.y + spec.range);
       const d = Math.max(1.2, dist(p.x, p.y, tx, ty));
@@ -1861,21 +2144,46 @@ export class SurvivalEngine {
     damage: number,
     speed: number
   ): void {
+    const isFps = this.cameraMode === 'fps';
+    const spawnZ = isFps ? FPS_EYE_HEIGHT : 0.65;
+    const maxLife = kind === 'pellet' ? 0.28 : 0.45;
     for (let i = 0; i < count; i++) {
-      const a = angle + (Math.random() - 0.5) * spread;
-      this.projectiles.push({
-        id: this.nextEntityId++,
-        kind,
-        x: sx + Math.cos(a) * 0.35,
-        y: sy + Math.sin(a) * 0.35,
-        z: 0.65,
-        vx: Math.cos(a) * speed,
-        vy: Math.sin(a) * speed,
-        vz: 0,
-        damage,
-        life: kind === 'pellet' ? 0.48 : 0.75,
-        maxLife: kind === 'pellet' ? 0.48 : 0.75,
-      });
+      const yawOffset = (Math.random() - 0.5) * spread;
+      if (isFps) {
+        const pitchOffset = (Math.random() - 0.5) * spread * (kind === 'pellet' ? 0.55 : 0.42);
+        const vel = computeProjectileVelocity3D(angle, this.fpsPitch, yawOffset, pitchOffset, speed);
+        const leadT = 0.22 / speed;
+        this.projectiles.push({
+          id: this.nextEntityId++,
+          kind,
+          x: sx + vel.vx * leadT,
+          y: sy + vel.vy * leadT,
+          z: spawnZ + vel.vz * leadT,
+          vx: vel.vx,
+          vy: vel.vy,
+          vz: vel.vz,
+          damage,
+          life: maxLife,
+          maxLife,
+          canHeadshot: true,
+        });
+      } else {
+        const a = angle + yawOffset;
+        this.projectiles.push({
+          id: this.nextEntityId++,
+          kind,
+          x: sx + Math.cos(a) * 0.35,
+          y: sy + Math.sin(a) * 0.35,
+          z: spawnZ,
+          vx: Math.cos(a) * speed,
+          vy: Math.sin(a) * speed,
+          vz: 0,
+          damage,
+          life: maxLife,
+          maxLife,
+          canHeadshot: false,
+        });
+      }
     }
   }
 
@@ -2068,6 +2376,17 @@ export class SurvivalEngine {
   }
 
   private findNearestLootable(): LootContainer | null {
+    if (this.cameraMode === 'fps') {
+      const candidates = this.containers.filter((c) => !c.searched);
+      return pickBestDirectionalTarget(
+        this.player.x,
+        this.player.y,
+        this.player.facingAngle,
+        candidates,
+        (c) => ({ x: c.gx + 0.5, y: c.gy + 0.5 }),
+        1.95
+      );
+    }
     let best: LootContainer | null = null;
     let bestD = 1.95;
     for (const c of this.containers) {
@@ -2082,6 +2401,17 @@ export class SurvivalEngine {
   }
 
   private findNearestVehicleTrunk(): Vehicle | null {
+    if (this.cameraMode === 'fps') {
+      const candidates = this.vehicles.filter((v) => !v.trunkSearched);
+      return pickBestDirectionalTarget(
+        this.player.x,
+        this.player.y,
+        this.player.facingAngle,
+        candidates,
+        (v) => ({ x: v.x, y: v.y }),
+        2.3
+      );
+    }
     let best: Vehicle | null = null;
     let bestD = 2.3;
     for (const v of this.vehicles) {
@@ -2226,13 +2556,14 @@ export class SurvivalEngine {
   }
 
   private updateProjectiles(dt: number): void {
+    const isFps = this.cameraMode === 'fps';
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const pr = this.projectiles[i];
       pr.life -= dt;
-      pr.x += pr.vx * dt;
-      pr.y += pr.vy * dt;
 
       if (pr.kind === 'molotov' || pr.kind === 'acid') {
+        pr.x += pr.vx * dt;
+        pr.y += pr.vy * dt;
         pr.z += pr.vz * dt;
         pr.vz -= 9.5 * dt;
         if (pr.life <= 0 || pr.z <= 0.05) {
@@ -2258,42 +2589,262 @@ export class SurvivalEngine {
         continue;
       }
 
-      // Bullet / Pellet wall collision across infinite world
-      const gx = Math.floor(pr.x);
-      const gy = Math.floor(pr.y);
-      if (dist(pr.x, pr.y, this.player.x, this.player.y) > 28 || this.getCell(gx, gy).blocksSight) {
-        this.spawnParticles(pr.x, pr.y, 0.5, 4, '#d9b566', 2.4, 1.4);
+      // Swept 3D ballistic collision so high-speed bullets never tunnel
+      const prevX = pr.x;
+      const prevY = pr.y;
+      const prevZ = pr.z;
+      const nextX = prevX + pr.vx * dt;
+      const nextY = prevY + pr.vy * dt;
+      const nextZ = prevZ + pr.vz * dt;
+
+      const worldHit = traceSegmentWorldHit(
+        prevX,
+        prevY,
+        prevZ,
+        nextX,
+        nextY,
+        nextZ,
+        isFps,
+        (gx, gy) => this.getCell(gx, gy),
+        this.doors,
+        this.structures,
+        this.vehicles,
+        this.activeVehicleId
+      );
+
+      const zombieHit = traceSegmentZombieHit(
+        prevX,
+        prevY,
+        prevZ,
+        nextX,
+        nextY,
+        nextZ,
+        this.zombies,
+        Boolean(pr.canHeadshot),
+        worldHit ? worldHit.t : 1
+      );
+
+      if (zombieHit) {
+        const speed3D = Math.hypot(pr.vx, pr.vy, pr.vz) || 1;
+        const speed2D = Math.hypot(pr.vx, pr.vy) || 1;
+        const dirX = pr.vx / speed3D;
+        const dirY = pr.vy / speed3D;
+        const dirZ = pr.vz / speed3D;
+
+        if (zombieHit.isHeadshot) {
+          const mult = pr.kind === 'bullet' ? HEADSHOT_MULTIPLIER_BULLET : HEADSHOT_MULTIPLIER_PELLET;
+          const dmg = Math.round(pr.damage * mult);
+          this.damageZombie(
+            zombieHit.zombie,
+            dmg,
+            (pr.vx / speed2D) * 4.4,
+            (pr.vy / speed2D) * 4.4,
+            true,
+            true,
+            true,
+            zombieHit.hz
+          );
+          this.pushImpactEffect(
+            zombieHit.hx,
+            zombieHit.hy,
+            zombieHit.hz,
+            -dirX,
+            -dirY,
+            -dirZ,
+            'headshot',
+            1.28
+          );
+          soundEngine.playBulletImpact('headshot');
+
+          if (isFps) {
+            const backHit = traceSegmentWorldHit(
+              zombieHit.hx,
+              zombieHit.hy,
+              zombieHit.hz,
+              zombieHit.hx + dirX * 1.45,
+              zombieHit.hy + dirY * 1.45,
+              zombieHit.hz + dirZ * 1.45,
+              true,
+              (gx, gy) => this.getCell(gx, gy),
+              this.doors,
+              this.structures,
+              this.vehicles,
+              this.activeVehicleId
+            );
+            if (backHit && backHit.allowDecal) {
+              this.pushImpactDecal(
+                backHit.hx,
+                backHit.hy,
+                backHit.hz,
+                backHit.nx,
+                backHit.ny,
+                backHit.nz,
+                'blood_wall',
+                0.38 + Math.random() * 0.14
+              );
+            }
+          }
+        } else {
+          const { damage, isCrit } = computeCombatDamage(
+            pr.damage,
+            Math.random(),
+            pr.canHeadshot ? 0.1 : pr.kind === 'bullet' ? 0.22 : 0.12
+          );
+          this.damageZombie(
+            zombieHit.zombie,
+            damage,
+            (pr.vx / speed2D) * (isCrit ? 3.4 : 2.5),
+            (pr.vy / speed2D) * (isCrit ? 3.4 : 2.5),
+            isCrit,
+            isCrit,
+            false,
+            zombieHit.hz
+          );
+          this.pushImpactEffect(
+            zombieHit.hx,
+            zombieHit.hy,
+            zombieHit.hz,
+            -dirX,
+            -dirY,
+            -dirZ,
+            'flesh',
+            0.9
+          );
+          soundEngine.playBulletImpact('flesh');
+        }
+
         this.projectiles.splice(i, 1);
         continue;
       }
 
-      // Bullet / Pellet zombie hit
-      let hit = false;
-      for (const z of this.zombies) {
-        if (z.state === 'dying') continue;
-        const hitRadius = z.archetype === 'bloater' ? 0.55 : 0.42;
-        if (dist(pr.x, pr.y, z.x, z.y) <= hitRadius) {
-          const speed = Math.hypot(pr.vx, pr.vy) || 1;
-          const { damage, isCrit } = computeCombatDamage(
-            pr.damage,
-            Math.random(),
-            pr.kind === 'bullet' ? 0.22 : 0.12
-          );
-          this.damageZombie(
-            z,
-            damage,
-            (pr.vx / speed) * (isCrit ? 3.4 : 2.5),
-            (pr.vy / speed) * (isCrit ? 3.4 : 2.5),
-            isCrit,
-            isCrit
-          );
-          hit = true;
-          break;
-        }
+      if (worldHit) {
+        this.handleBulletWorldImpact(worldHit, pr.kind, pr.damage, isFps);
+        this.projectiles.splice(i, 1);
+        continue;
       }
 
-      if (hit || pr.life <= 0) {
+      pr.x = nextX;
+      pr.y = nextY;
+      pr.z = nextZ;
+
+      if (pr.life <= 0 || dist(pr.x, pr.y, this.player.x, this.player.y) > 30) {
         this.projectiles.splice(i, 1);
+      }
+    }
+  }
+
+  private handleBulletWorldImpact(
+    hit: WorldHitResult,
+    kind: 'bullet' | 'pellet',
+    damage: number,
+    isFps: boolean
+  ): void {
+    const scale = kind === 'bullet' ? 1.0 : 0.78;
+    this.pushImpactEffect(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, hit.material, scale);
+    soundEngine.playBulletImpact(hit.material);
+
+    if (hit.material === 'stone') {
+      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, kind === 'bullet' ? 6 : 4, '#ffd98a', 2.4, 4.4);
+      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, kind === 'bullet' ? 5 : 3, '#8f969c', 1.1, 2.4);
+    } else if (hit.material === 'wood') {
+      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, kind === 'bullet' ? 7 : 4, '#b88252', 1.8, 3.6);
+      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, 3, '#dec8a4', 1.0, 2.0);
+    } else if (hit.material === 'metal') {
+      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, kind === 'bullet' ? 9 : 5, '#fff0a6', 3.2, 5.6);
+      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, 3, '#ff9d3b', 2.2, 4.0);
+      if (hit.vehicleId !== undefined) {
+        const v = this.vehicles.find((car) => car.id === hit.vehicleId);
+        if (v && v.hp > 0) {
+          v.hp = Math.max(0, v.hp - Math.max(1, Math.round(damage * 0.1)));
+          v.hitFlash = 0.08;
+        }
+      }
+    } else if (hit.material === 'water') {
+      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, 8, '#a6e4f5', 1.6, 3.4);
+    } else {
+      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, 6, '#6e543a', 1.4, 3.0);
+    }
+
+    if (isFps && hit.allowDecal) {
+      const decalKind = mapMaterialToDecalKind(hit.material);
+      if (decalKind) {
+        const baseSize = kind === 'bullet' ? 0.21 : 0.16;
+        this.pushImpactDecal(
+          hit.hx,
+          hit.hy,
+          hit.hz,
+          hit.nx,
+          hit.ny,
+          hit.nz,
+          decalKind,
+          baseSize + Math.random() * 0.05
+        );
+      }
+    }
+  }
+
+  private pushImpactDecal(
+    x: number,
+    y: number,
+    z: number,
+    nx: number,
+    ny: number,
+    nz: number,
+    kind: SurfaceImpactDecal['kind'],
+    size: number
+  ): void {
+    this.impactDecals.push({
+      id: this.nextEntityId++,
+      x,
+      y,
+      z,
+      nx,
+      ny,
+      nz,
+      kind,
+      size,
+      rotation: Math.random() * Math.PI * 2,
+      alpha: 0.92,
+    });
+    if (this.impactDecals.length > 96) {
+      this.impactDecals.shift();
+    }
+  }
+
+  private pushImpactEffect(
+    x: number,
+    y: number,
+    z: number,
+    nx: number,
+    ny: number,
+    nz: number,
+    material: BulletImpactEffect['material'],
+    scale: number
+  ): void {
+    const maxLife = material === 'headshot' ? 0.22 : 0.15;
+    this.impactEffects.push({
+      id: this.nextEntityId++,
+      x,
+      y,
+      z,
+      nx,
+      ny,
+      nz,
+      material,
+      life: maxLife,
+      maxLife,
+      scale,
+    });
+    if (this.impactEffects.length > 24) {
+      this.impactEffects.shift();
+    }
+  }
+
+  private updateImpactEffects(dt: number): void {
+    for (let i = this.impactEffects.length - 1; i >= 0; i--) {
+      this.impactEffects[i].life -= dt;
+      if (this.impactEffects[i].life <= 0) {
+        this.impactEffects.splice(i, 1);
       }
     }
   }
@@ -2365,30 +2916,44 @@ export class SurvivalEngine {
     kbX: number,
     kbY: number,
     heavy: boolean,
-    isCrit = false
+    isCrit = false,
+    isHeadshot = false,
+    hitZ = 0.58
   ): void {
     z.hp -= amount;
-    z.hitFlash = 0.08;
-    z.scaleX = 1.22;
-    z.scaleY = 0.8;
+    z.hitFlash = isHeadshot ? 0.12 : 0.08;
+    z.scaleX = isHeadshot ? 1.28 : 1.22;
+    z.scaleY = isHeadshot ? 0.76 : 0.8;
     z.vx += kbX;
     z.vy += kbY;
     if (z.state === 'wander' || z.state === 'alert') {
       z.state = 'chase';
     }
-    if (heavy || isCrit || amount >= 10) {
+    if (isHeadshot) {
+      this.hitMarkerTimer = 0.22;
+      this.hitMarkerCrit = true;
+      this.hitMarkerHeadshot = true;
+      this.hitstopTimer = Math.max(this.hitstopTimer, 0.024);
+    } else if (heavy || isCrit || amount >= 10) {
       this.hitMarkerTimer = 0.14;
       this.hitMarkerCrit = isCrit;
+      this.hitMarkerHeadshot = false;
     }
 
-    this.spawnParticles(z.x, z.y, 0.55, heavy ? 12 : 7, isCrit ? '#d93829' : '#a32222', 3.4, 2.2);
-    this.addFloatingText(
-      z.x,
-      z.y,
-      1.2,
-      isCrit ? `CRIT -${Math.round(amount)}` : `-${Math.round(amount)}`,
-      isCrit ? '#ffd266' : heavy ? '#f0d078' : '#e6e2d8'
-    );
+    if (isHeadshot) {
+      this.spawnParticles(z.x, z.y, hitZ, 15, '#d92b23', 4.0, 2.8);
+      this.spawnParticles(z.x, z.y, hitZ, 5, '#e6dcc8', 3.1, 2.4);
+      this.addFloatingText(z.x, z.y, 1.38, `HEADSHOT -${Math.round(amount)}`, '#ff5a36');
+    } else {
+      this.spawnParticles(z.x, z.y, hitZ, heavy ? 12 : 7, isCrit ? '#d93829' : '#a32222', 3.4, 2.2);
+      this.addFloatingText(
+        z.x,
+        z.y,
+        1.2,
+        isCrit ? `CRIT -${Math.round(amount)}` : `-${Math.round(amount)}`,
+        isCrit ? '#ffd266' : heavy ? '#f0d078' : '#e6e2d8'
+      );
+    }
 
     if (z.hp <= 0 && z.state !== 'dying') {
       z.state = 'dying';
@@ -2895,6 +3460,48 @@ export class SurvivalEngine {
     }
   }
 
+  private spawnDirectionalParticles(
+    x: number,
+    y: number,
+    z: number,
+    nx: number,
+    ny: number,
+    nz: number,
+    count: number,
+    color: string,
+    minSpeed: number,
+    maxSpeed: number,
+    gravity = 9.8
+  ): void {
+    for (let i = 0; i < count; i++) {
+      const p = this.particles[this.particleCursor];
+      this.particleCursor = (this.particleCursor + 1) % PARTICLE_POOL_SIZE;
+      const spd = minSpeed + Math.random() * (maxSpeed - minSpeed);
+      const jx = (Math.random() - 0.5) * 1.15;
+      const jy = (Math.random() - 0.5) * 1.15;
+      const jz = (Math.random() - 0.25) * 1.05;
+      let vx = nx * 1.35 + jx;
+      let vy = ny * 1.35 + jy;
+      let vz = nz * 1.15 + jz;
+      const len = Math.hypot(vx, vy, vz) || 1;
+      vx = (vx / len) * spd;
+      vy = (vy / len) * spd;
+      vz = (vz / len) * spd + 0.6;
+      p.active = true;
+      p.x = x + nx * 0.03;
+      p.y = y + ny * 0.03;
+      p.z = Math.max(0.03, z + nz * 0.03);
+      p.vx = vx;
+      p.vy = vy;
+      p.vz = vz;
+      p.size = 1 + Math.floor(Math.random() * 2);
+      p.color = color;
+      p.maxLife = 0.18 + Math.random() * 0.24;
+      p.life = p.maxLife;
+      p.gravity = gravity;
+    }
+  }
+
   private emitCampfireEmbers(dt: number): void {
     for (const s of this.structures) {
       if (s.kind === 'campfire' && Math.random() < dt * 7) {
@@ -2978,947 +3585,69 @@ export class SurvivalEngine {
   }
 
   private render(): void {
-    const ctx = this.ctx;
-    ctx.imageSmoothingEnabled = false;
-    ctx.fillStyle = '#0d1012';
-    ctx.fillRect(0, 0, this.viewW, this.viewH);
-
-    // Trauma camera shake
-    const shakeMag = this.trauma * this.trauma * 7;
-    const shakeX = shakeMag > 0.1 ? (Math.random() * 2 - 1) * shakeMag : 0;
-    const shakeY = shakeMag > 0.1 ? (Math.random() * 2 - 1) * shakeMag : 0;
-
-    const originX = this.viewW * 0.5 / PIXEL_SCALE - this.camX + shakeX;
-    const originY = this.viewH * 0.5 / PIXEL_SCALE - this.camY + shakeY;
-
-    ctx.save();
-    ctx.scale(PIXEL_SCALE, PIXEL_SCALE);
-
-    // Determine visible diamond tile bounds for fast infinite isometric culling (cull before getCell!)
-    const vPw = Math.ceil(this.viewW / PIXEL_SCALE);
-    const vPh = Math.ceil(this.viewH / PIXEL_SCALE);
-    const centerWorld = isoToWorld(this.camX, this.camY);
-    const span = 22;
-    const minGX = Math.floor(centerWorld.wx - span);
-    const maxGX = Math.ceil(centerWorld.wx + span);
-    const minGY = Math.floor(centerWorld.wy - span);
-    const maxGY = Math.ceil(centerWorld.wy + span);
-
-    // Pass 1: Isometric Ground Tiles
-    for (let gy = minGY; gy <= maxGY; gy++) {
-      for (let gx = minGX; gx <= maxGX; gx++) {
-        const iso = worldToIso(gx, gy, 0);
-        const drawX = Math.round(originX + iso.sx - TILE_W * 0.5);
-        const drawY = Math.round(originY + iso.sy);
-        if (drawX < -TILE_W || drawX > vPw + TILE_W || drawY < -TILE_H || drawY > vPh + TILE_H) {
-          continue;
-        }
-        const cell = this.getCell(gx, gy);
-        ctx.drawImage(this.atlas.getTile(cell.tile, cell.variant), drawX, drawY);
-        // Subtle animated pixel water shimmer on lake tiles
-        if (cell.tile === 'water' && ((gx * 7 + gy * 13 + Math.floor(this.elapsedClock * 3)) % 11) === 0) {
-          ctx.fillStyle = 'rgba(138, 212, 235, 0.34)';
-          ctx.fillRect(drawX + 13 + ((gx + gy) % 5), drawY + 7 + (gy % 3), 3, 1);
-        }
-      }
-    }
-
-    // Pass 1.5: True 2:1 Isometric Directional Ground Cast Shadows (NW sun casts diagonal SE shadows)
-    const { darkness: shadowDarkness } = getDaylightInfo(this.timeMinutes);
-    const shadowAlpha = clamp(0.24 * (1 - shadowDarkness * 0.55), 0.08, 0.25);
-    ctx.fillStyle = `rgba(6, 8, 11, ${shadowAlpha.toFixed(2)})`;
-    for (let gy = minGY; gy <= maxGY; gy++) {
-      for (let gx = minGX; gx <= maxGX; gx++) {
-        const iso = worldToIso(gx + 0.5, gy + 0.5, 0);
-        const sx = Math.round(originX + iso.sx);
-        const sy = Math.round(originY + iso.sy);
-        if (sx < -32 || sx > vPw + 32 || sy < -32 || sy > vPh + 32) {
-          continue;
-        }
-        const cell = this.getCell(gx, gy);
-        if (cell.prop === 'none') continue;
-        if (
-          cell.prop === 'wall_brick' ||
-          cell.prop === 'wall_wood' ||
-          cell.prop === 'wall_interior' ||
-          cell.prop === 'door'
-        ) {
-          const door = cell.prop === 'door' ? this.doorByTile.get(`${gx}_${gy}`) : null;
-          if (door && door.status === 'open') continue;
-          // Cast a 2:1 isometric parallelogram shadow to the SE (+sx, +sy)
-          ctx.beginPath();
-          ctx.moveTo(sx, sy + 7);
-          ctx.lineTo(sx + 16, sy - 1);
-          ctx.lineTo(sx + 23, sy + 3);
-          ctx.lineTo(sx + 7, sy + 11);
-          ctx.closePath();
-          ctx.fill();
-        } else if (cell.prop === 'tree_pine' || cell.prop === 'tree_dead') {
-          ctx.beginPath();
-          ctx.ellipse(sx + 6, sy + 3, 11, 5.5, 0, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-    }
-
-    // Pass 2: Ground decals (projected in 2:1 isometric aspect), fire/acid patches, sound ripples, fishing bobber, target highlight
-    for (const d of this.decals) {
-      const iso = worldToIso(d.x, d.y, 0);
-      const sx = Math.round(originX + iso.sx);
-      const sy = Math.round(originY + iso.sy);
-      ctx.globalAlpha = d.alpha;
-      if (d.kind === 'tire') {
-        ctx.fillStyle = '#131618';
-        // 2:1 isometric diagonal skid tracks
-        ctx.fillRect(sx - 4, sy - 1, 4, 1);
-        ctx.fillRect(sx - 2, sy, 4, 1);
-        ctx.fillRect(sx + 1, sy + 1, 4, 1);
-      } else {
-        ctx.fillStyle = d.kind === 'blood' ? '#6e1919' : d.kind === 'acid' ? '#4fb848' : '#1b1d1f';
-        // 2:1 isometric diamond/ellipse splatter
-        ctx.fillRect(sx - 5, sy - 1, 10, 2);
-        ctx.fillRect(sx - 3, sy - 2, 6, 4);
-        if (d.variant > 0) {
-          ctx.fillStyle = d.kind === 'blood' ? '#4a0f0f' : d.kind === 'acid' ? '#85e655' : '#101214';
-          ctx.fillRect(sx - 2 + d.variant, sy - 1, 3, 2);
-        }
-      }
-      ctx.globalAlpha = 1;
-    }
-
-    for (const fp of this.firePatches) {
-      const iso = worldToIso(fp.x, fp.y, 0);
-      const sx = Math.round(originX + iso.sx);
-      const sy = Math.round(originY + iso.sy);
-      const rx = Math.round(fp.radius * 14);
-      const ry = Math.round(fp.radius * 7);
-      ctx.globalAlpha = Math.min(0.45, fp.life * 0.2);
-      ctx.fillStyle = fp.kind === 'fire' ? '#f57e20' : '#4ee674';
-      ctx.beginPath();
-      ctx.ellipse(sx, sy, rx, ry, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-
-    // Subtle 2:1 isometric diamond highlight on the nearest interactive tile (door, loot container, or bed)
+    let nearInteractTile: { gx: number; gy: number } | null = null;
     if (this.phase === 'playing' && this.activeVehicleId === null && !this.player.buildMode) {
       const nearLoot = this.findNearestLootable();
       const nearDoor = !nearLoot ? this.findNearestDoor() : null;
       const nearBed = !nearLoot && !nearDoor ? this.findNearestBed() : null;
-      const tgx = nearLoot ? nearLoot.gx : nearDoor ? nearDoor.gx : nearBed ? nearBed.gx : null;
-      const tgy = nearLoot ? nearLoot.gy : nearDoor ? nearDoor.gy : nearBed ? nearBed.gy : null;
-      if (tgx !== null && tgy !== null) {
-        const tIso = worldToIso(tgx + 0.5, tgy + 0.5, 0);
-        const tx = Math.round(originX + tIso.sx);
-        const ty = Math.round(originY + tIso.sy);
-        ctx.strokeStyle = 'rgba(240, 208, 120, 0.55)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(tx, ty - 8);
-        ctx.lineTo(tx + 16, ty);
-        ctx.lineTo(tx, ty + 8);
-        ctx.lineTo(tx - 16, ty);
-        ctx.closePath();
-        ctx.stroke();
-      }
+      if (nearLoot) nearInteractTile = { gx: nearLoot.gx, gy: nearLoot.gy };
+      else if (nearDoor) nearInteractTile = { gx: nearDoor.gx, gy: nearDoor.gy };
+      else if (nearBed) nearInteractTile = { gx: nearBed.gx, gy: nearBed.gy };
     }
 
-    for (const sr of this.soundRipples) {
-      const iso = worldToIso(sr.x, sr.y, 0);
-      const sx = Math.round(originX + iso.sx);
-      const sy = Math.round(originY + iso.sy);
-      ctx.strokeStyle = sr.color;
-      ctx.globalAlpha = sr.alpha;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.ellipse(sx, sy, sr.radius * 14, sr.radius * 7, 0, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-
-    // Fishing line, ripples & bobber on water
-    if (this.fishing.phase !== 'idle') {
-      const bIso = worldToIso(this.fishing.bobberX, this.fishing.bobberY, 0);
-      const bx = Math.round(originX + bIso.sx);
-      const by = Math.round(originY + bIso.sy);
-      const pIso = worldToIso(this.player.x, this.player.y, 0.55);
-      const px = Math.round(originX + pIso.sx + 4);
-      const py = Math.round(originY + pIso.sy - 6);
-
-      // Expanding water ripples
-      const rip = (this.fishing.ripplePhase * 1.4) % 1;
-      ctx.strokeStyle = this.fishing.phase === 'bite' ? '#ffd266' : 'rgba(138, 212, 235, 0.65)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.ellipse(bx, by, 3 + rip * 9, 1.5 + rip * 4.5, 0, 0, Math.PI * 2);
-      ctx.stroke();
-
-      // Fishing rod + taut line
-      ctx.strokeStyle = '#6e4d30';
-      ctx.beginPath();
-      ctx.moveTo(px - 2, py + 4);
-      ctx.lineTo(px + 5, py - 4);
-      ctx.stroke();
-      ctx.strokeStyle = 'rgba(225, 235, 240, 0.72)';
-      ctx.beginPath();
-      ctx.moveTo(px + 5, py - 4);
-      ctx.lineTo(bx, by - (this.fishing.phase === 'bite' ? 0 : 1));
-      ctx.stroke();
-
-      // Pixel bobber (dips & pulses on bite!)
-      const bobDip = this.fishing.phase === 'bite' ? Math.sin(this.elapsedClock * 26) * 2 + 1 : Math.sin(this.elapsedClock * 4);
-      ctx.fillStyle = this.fishing.phase === 'bite' ? '#ffd266' : '#e0483e';
-      ctx.fillRect(bx - 1, Math.round(by - 2 + bobDip), 3, 2);
-      ctx.fillStyle = '#f0ece1';
-      ctx.fillRect(bx - 1, Math.round(by - 3 + bobDip), 3, 1);
-    }
-
-    if (this.phase === 'playing' && this.player.buildMode) {
-      const { gx, gy } = getBuildTargetTile(
-        this.player.x,
-        this.player.y,
-        this.player.facingAngle,
-        this.mouseWorldX,
-        this.mouseWorldY,
-        this.usingVirtualAim
-      );
-      const valid =
-        canPlaceStructureAt(this.worldStore, this.structures, gx, gy, this.player.x, this.player.y) &&
-        canAffordCost(this.inventory, STRUCTURES[this.player.buildMode].cost);
-      const iso = worldToIso(gx + 0.5, gy + 0.5, 0);
-      const cx = Math.round(originX + iso.sx);
-      const cy = Math.round(originY + iso.sy);
-      ctx.strokeStyle = valid ? '#5ef28f' : '#eb4d4b';
-      ctx.fillStyle = valid ? 'rgba(94, 242, 143, 0.22)' : 'rgba(235, 77, 75, 0.22)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy - 8);
-      ctx.lineTo(cx + 16, cy);
-      ctx.lineTo(cx, cy + 8);
-      ctx.lineTo(cx - 16, cy);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-    } else if (this.phase === 'playing' && this.player.equippedWeapon === 'molotov') {
-      // Subtle Molotov landing blast-radius preview reticle
-      const spec = WEAPONS.molotov;
-      const tx = this.usingVirtualAim
-        ? this.player.x + Math.cos(this.player.facingAngle) * 4.5
-        : clamp(this.mouseWorldX, this.player.x - spec.range, this.player.x + spec.range);
-      const ty = this.usingVirtualAim
-        ? this.player.y + Math.sin(this.player.facingAngle) * 4.5
-        : clamp(this.mouseWorldY, this.player.y - spec.range, this.player.y + spec.range);
-      const iso = worldToIso(tx, ty, 0);
-      const cx = Math.round(originX + iso.sx);
-      const cy = Math.round(originY + iso.sy);
-      ctx.strokeStyle = 'rgba(245, 142, 43, 0.65)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, 24, 12, 0, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    // Pass 3: Depth-Sorted Isometric Entities (Props, Doors, Structures, Loot Drops, Player, Zombies, Projectiles)
-    const renderList: Array<{ depth: number; draw: () => void }> = [];
-    const containerByTile = new Map<string, LootContainer>();
-    for (const c of this.containers) {
-      if (c.kind !== 'zombie_drop') {
-        containerByTile.set(`${c.gx}_${c.gy}`, c);
-      }
-    }
-
-    // Static props, connected walls, swingable doors & loot containers
-    const glintPulse = 0.55 + Math.sin(this.elapsedClock * 5) * 0.35;
-    const animFrame = Math.floor(this.elapsedClock * 8);
-    const isWallProp = (gx: number, gy: number) => {
-      const p = this.getCell(gx, gy).prop;
-      return p === 'wall_brick' || p === 'wall_wood' || p === 'wall_interior' || p === 'door';
-    };
-
-    for (let gy = minGY; gy <= maxGY; gy++) {
-      for (let gx = minGX; gx <= maxGX; gx++) {
-        const preIso = worldToIso(gx + 0.5, gy + 0.5, 0);
-        const preX = originX + preIso.sx;
-        const preY = originY + preIso.sy;
-        if (preX < -42 || preX > vPw + 42 || preY < -36 || preY > vPh + 56) {
-          continue;
-        }
-        const cell = this.getCell(gx, gy);
-        if (cell.prop === 'none') continue;
-
-        if (cell.prop === 'door') {
-          const door = this.doorByTile.get(`${gx}_${gy}`);
-          if (!door) continue;
-          const sprite = this.atlas.getDoor(door.orientation, door.status);
-          const iso = worldToIso(gx + 0.5, gy + 0.5, 0);
-          const swingSlideX = door.openProgress * (door.orientation === 'ew' ? 3 : -2);
-          const swingSlideY = door.openProgress * -1;
-          const px = Math.round(originX + iso.sx - sprite.width * 0.5 + swingSlideX);
-          const py = Math.round(originY + iso.sy - (sprite.height - 10) + swingSlideY);
-          renderList.push({
-            depth: gx + gy + 0.92,
-            draw: () => {
-              ctx.drawImage(sprite, px, py);
-              if (door.hitFlash > 0) {
-                ctx.fillStyle = 'rgba(255, 220, 160, 0.45)';
-                ctx.fillRect(px + 8, py + 8, 16, 18);
-              }
-              if (door.status === 'locked' && door.lockpickProgress > 0) {
-                ctx.fillStyle = '#121518';
-                ctx.fillRect(Math.round(originX + iso.sx - 8), py - 3, 16, 3);
-                ctx.fillStyle = '#ffd266';
-                ctx.fillRect(Math.round(originX + iso.sx - 7), py - 2, Math.round(14 * door.lockpickProgress), 1);
-              }
-            },
-          });
-          continue;
-        }
-
-        let sprite: HTMLCanvasElement | undefined;
-        let isWall = false;
-        const container = containerByTile.get(`${gx}_${gy}`);
-        if (cell.prop === 'wall_brick' || cell.prop === 'wall_wood' || cell.prop === 'wall_interior') {
-          isWall = true;
-          const mask =
-            (isWallProp(gx, gy - 1) ? 1 : 0) |
-            (isWallProp(gx + 1, gy) ? 2 : 0) |
-            (isWallProp(gx, gy + 1) ? 4 : 0) |
-            (isWallProp(gx - 1, gy) ? 8 : 0);
-          sprite = this.atlas.getWall(cell.prop, mask, cell.variant);
-        } else {
-          const isSearched = container ? container.searched : false;
-          const openStage = container ? getLootOpenStage(container.searched, container.openAnim ?? 0) : undefined;
-          sprite = this.atlas.getProp(cell.prop, isSearched, animFrame, openStage);
-        }
-
-        if (!sprite) continue;
-        const iso = worldToIso(gx + 0.5, gy + 0.5, 0);
-        const anchorX = Math.round(originX + iso.sx);
-        const anchorY = Math.round(originY + iso.sy);
-        const px = Math.round(anchorX - sprite.width * 0.5);
-        // Align each sprite's visual base anchor directly onto tile center (gx + 0.5, gy + 0.5)
-        let baseOffsetY = 26; // buildIsoObjectSprite & buildLootContainerSprite (34x38, ground center at y=26)
-        if (isWall) baseOffsetY = sprite.height - 10; // wall south corner meets iso.sy + 8
-        else if (cell.prop === 'barrel_burn') baseOffsetY = 24;
-        else if (cell.prop === 'streetlamp') baseOffsetY = 40;
-        else if (cell.prop === 'tree_pine' || cell.prop === 'tree_dead') baseOffsetY = 42;
-        const py = Math.round(anchorY - baseOffsetY);
-        const occludesPlayer =
-          isWall &&
-          this.phase !== 'title' &&
-          gx + gy > this.player.x + this.player.y + 0.15 &&
-          Math.abs(gx + 0.5 - this.player.x) < 2.2 &&
-          Math.abs(gy + 0.5 - this.player.y) < 2.2;
-        const occludesTallProp =
-          !isWall &&
-          (cell.prop === 'bookshelf' || cell.prop === 'fridge') &&
-          this.phase !== 'title' &&
-          gx + gy > this.player.x + this.player.y + 0.25 &&
-          Math.abs(gx + 0.5 - this.player.x) < 1.35 &&
-          Math.abs(gy + 0.5 - this.player.y) < 1.35;
-        const popTransform =
-          container && container.popTimer && container.popTimer > 0
-            ? getLootPopTransform(container.popTimer)
-            : null;
-
-        renderList.push({
-          depth: gx + gy + 1.0,
-          draw: () => {
-            if (occludesPlayer) ctx.globalAlpha = 0.42;
-            else if (occludesTallProp) ctx.globalAlpha = 0.58;
-            if (popTransform) {
-              ctx.save();
-              ctx.translate(anchorX, Math.round(anchorY + popTransform.offsetY));
-              ctx.scale(popTransform.scaleX, popTransform.scaleY);
-              ctx.drawImage(sprite, Math.round(-sprite.width * 0.5), -baseOffsetY);
-              ctx.restore();
-            } else {
-              ctx.drawImage(sprite, px, py);
-            }
-            ctx.globalAlpha = 1;
-            if (container && !container.searched && dist(this.player.x, this.player.y, gx + 0.5, gy + 0.5) < 8.5) {
-              ctx.globalAlpha = glintPulse;
-              ctx.fillStyle = '#f0d078';
-              ctx.fillRect(anchorX - 1, py + 4, 2, 2);
-              ctx.globalAlpha = 1;
-            }
-          },
-        });
-      }
-    }
-
-    // Drivable vehicles
-    const sirenTick = Math.floor(this.elapsedClock * 7);
-    for (const v of this.vehicles) {
-      const sprite = this.atlas.getVehicle(
-        v.kind,
-        v.angle,
-        Boolean(v.trunkSearched),
-        v.sirenOn ? sirenTick % 2 : 0
-      );
-      const iso = worldToIso(v.x, v.y, 0);
-      const px = Math.round(originX + iso.sx - sprite.width * 0.5);
-      const py = Math.round(originY + iso.sy - sprite.height * 0.64);
-      renderList.push({
-        depth: v.x + v.y + 0.25,
-        draw: () => {
-          ctx.drawImage(sprite, px, py);
-          if (v.hitFlash > 0) {
-            ctx.fillStyle = 'rgba(255, 230, 190, 0.36)';
-            ctx.fillRect(px + 10, py + 12, sprite.width - 20, sprite.height - 20);
-          }
-          if (!v.trunkSearched && this.activeVehicleId !== v.id && dist(this.player.x, this.player.y, v.x, v.y) < 8.5) {
-            ctx.globalAlpha = glintPulse;
-            ctx.fillStyle = '#f0d078';
-            ctx.fillRect(Math.round(originX + iso.sx - 1), py + 2, 2, 2);
-            ctx.globalAlpha = 1;
-          }
-        },
-      });
-    }
-
-    // Zombie loot drops (animated 2:1 isometric scavenger pouch)
-    const dropSprite = this.atlas.getLootDrop(Math.floor(this.elapsedClock * 5));
-    for (const c of this.containers) {
-      if (c.kind !== 'zombie_drop' || c.searched) continue;
-      const iso = worldToIso(c.gx + 0.5, c.gy + 0.5, 0);
-      const bobY = Math.round(Math.sin(this.elapsedClock * 4 + c.gx * 1.7 + c.gy) * 1.0);
-      const sx = Math.round(originX + iso.sx - dropSprite.width * 0.5);
-      const sy = Math.round(originY + iso.sy - 14 + bobY);
-      renderList.push({
-        depth: c.gx + c.gy + 0.3,
-        draw: () => {
-          ctx.drawImage(dropSprite, sx, sy);
-        },
-      });
-    }
-
-    // Player-built structures + Campfire (32x34 isometric voxel sprites anchored at y=23)
-    for (const s of this.structures) {
-      const sprite = this.atlas.getStructure(s.kind, animFrame);
-      const iso = worldToIso(s.gx + 0.5, s.gy + 0.5, 0);
-      const sx = Math.round(originX + iso.sx - sprite.width * 0.5);
-      const sy = Math.round(originY + iso.sy - 23);
-      renderList.push({
-        depth: s.gx + s.gy + 1.0,
-        draw: () => {
-          ctx.drawImage(sprite, sx, sy);
-          if (s.hitFlash > 0) {
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-            ctx.fillRect(sx + 6, sy + 10, 20, 14);
-          }
-        },
-      });
-    }
-
-    // Zombies (4-quadrant isometric orientation & multi-state sprite animations)
-    for (const z of this.zombies) {
-      const iso = worldToIso(z.x, z.y, 0);
-      const sx = Math.round(originX + iso.sx);
-      const sy = Math.round(originY + iso.sy);
-      const screenDir = z.facingX - z.facingY >= 0;
-      const facingUp = z.facingX + z.facingY < -0.15;
-      const animState = resolveZombieAnimState({
-        state: z.state,
-        isMoving: z.state === 'chase' || z.state === 'wander' || z.state === 'alert',
-      });
-      const frame =
-        animState === 'dying'
-          ? getZombieDyingFrame(z.stateTimer, 0.52)
-          : animState === 'windup'
-            ? Math.floor(this.elapsedClock * 10) % 4
-            : animState === 'attack'
-              ? Math.min(2, Math.floor((1 - clamp(z.stateTimer / 0.14, 0, 1)) * 3))
-              : animState === 'walk'
-                ? Math.floor(z.walkCycle) % 8
-                : Math.floor(this.elapsedClock * 3 + z.id) % 4;
-      const sprite = this.atlas.getCharacter(z.archetype, frame, screenDir, facingUp, animState);
-
-      renderList.push({
-        depth: z.x + z.y,
-        draw: () => {
-          // Windup telegraph ground ring
-          if (z.state === 'windup') {
-            ctx.strokeStyle = z.archetype === 'spitter' ? '#5ef2b5' : '#ff4d42';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.ellipse(sx, sy, 9, 4.5, 0, 0, Math.PI * 2);
-            ctx.stroke();
-          }
-
-          ctx.save();
-          ctx.translate(sx, sy + 2);
-          if (z.state === 'dying') {
-            ctx.globalAlpha = clamp(z.stateTimer / 0.22, 0, 1);
-          }
-          ctx.scale(z.scaleX, z.scaleY);
-          const drawX = -Math.floor(sprite.width * 0.5);
-          const drawY = -sprite.height + 2;
-          ctx.drawImage(sprite, drawX, drawY);
-          if (z.hitFlash > 0) {
-            this.drawTintedSprite(ctx, sprite, drawX, drawY, 'rgba(255, 255, 255, 0.72)');
-          }
-          ctx.restore();
-
-          // Tiny health bar if damaged
-          if (z.hp < z.maxHp && z.state !== 'dying') {
-            const bw = 14;
-            const barY = sy - (z.archetype === 'bloater' ? 40 : 37);
-            const pct = clamp(z.hp / z.maxHp, 0, 1);
-            ctx.fillStyle = '#121518';
-            ctx.fillRect(sx - 7, barY, bw, 3);
-            ctx.fillStyle = '#d6453a';
-            ctx.fillRect(sx - 6, barY + 1, Math.round((bw - 2) * pct), 1);
-          }
-        },
-      });
-    }
-
-    // Survivor (Player) — multi-state animated sprite, hidden when seated inside a vehicle
-    if (this.phase !== 'title' && this.activeVehicleId === null) {
-      const p = this.player;
-      const iso = worldToIso(p.x, p.y, 0);
-      const sx = Math.round(originX + iso.sx);
-      const sy = Math.round(originY + iso.sy);
-      const aimVecX = Math.cos(p.facingAngle);
-      const aimVecY = Math.sin(p.facingAngle);
-      const facingRight = aimVecX - aimVecY >= 0;
-      const facingUp = aimVecX + aimVecY < -0.15;
-      const animState = resolvePlayerAnimState({
-        dodgeTimer: p.dodgeTimer,
-        meleeSwingTimer: p.meleeSwingTimer,
-        attackCooldown: p.attackCooldown,
-        attackCooldownMax: WEAPONS[p.equippedWeapon].cooldown,
-        walkCycle: p.walkCycle,
-      });
-      const frame =
-        animState === 'dodge'
-          ? Math.floor((1 - clamp(p.dodgeTimer / 0.22, 0, 1)) * 2)
-          : animState === 'attack'
-            ? p.meleeSwingTimer > 0
-              ? Math.min(2, Math.floor((1 - clamp(p.meleeSwingTimer / 0.22, 0, 1)) * 3))
-              : 1
-            : animState === 'walk'
-              ? Math.floor(p.walkCycle) % 8
-              : Math.floor(this.elapsedClock * 3.5) % 4;
-      const sprite = this.atlas.getCharacter('player', frame, facingRight, facingUp, animState);
-      const weaponSprite = this.atlas.getWeaponSprite(p.equippedWeapon);
-      let action = this.actionVisual;
-      if (this.fishing.phase !== 'idle') {
-        const casting = this.fishing.phase === 'casting';
-        action = {
-          kind: casting ? 'cast' : 'fish',
-          label: casting ? 'CASTING' : this.fishing.phase === 'bite' ? 'REEL NOW' : 'FISHING',
-          duration: casting ? 0.32 : 1,
-          remaining: casting ? this.fishing.timer : 1 - (this.elapsedClock % 1),
-        };
-      } else if (p.reloadingTimer > 0 && p.reloadingWeapon) {
-        action = {
-          kind: 'reload',
-          label: 'RELOADING',
-          duration: WEAPONS[p.reloadingWeapon].reloadTime,
-          remaining: p.reloadingTimer,
-        };
-      }
-
-      renderList.push({
-        depth: p.x + p.y,
-        draw: () => {
-          // True 2:1 Isometric projected melee crescent slash ribbon in world space
-          if (p.meleeSwingTimer > 0) {
-            const prog = 1 - clamp(p.meleeSwingTimer / 0.22, 0, 1);
-            const startAng = p.facingAngle - 0.9;
-            const endAng = p.facingAngle - 0.9 + 1.8 * clamp(prog * 1.35, 0.25, 1);
-            const steps = 8;
-            ctx.save();
-            ctx.strokeStyle = 'rgba(242, 238, 226, 0.85)';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            for (let i = 0; i <= steps; i++) {
-              const a = startAng + ((endAng - startAng) * i) / steps;
-              const sPt = worldToIso(p.x + Math.cos(a) * 1.18, p.y + Math.sin(a) * 1.18, 0.42);
-              const pxArc = originX + sPt.sx;
-              const pyArc = originY + sPt.sy;
-              if (i === 0) ctx.moveTo(pxArc, pyArc);
-              else ctx.lineTo(pxArc, pyArc);
-            }
-            ctx.stroke();
-
-            ctx.strokeStyle = 'rgba(235, 87, 87, 0.55)';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            for (let i = 0; i <= steps; i++) {
-              const a = startAng + ((endAng - startAng) * i) / steps;
-              const sPt = worldToIso(p.x + Math.cos(a) * 0.92, p.y + Math.sin(a) * 0.92, 0.38);
-              const pxArc = originX + sPt.sx;
-              const pyArc = originY + sPt.sy;
-              if (i === 0) ctx.moveTo(pxArc, pyArc);
-              else ctx.lineTo(pxArc, pyArc);
-            }
-            ctx.stroke();
-            ctx.restore();
-          }
-
-          ctx.save();
-          ctx.translate(sx, sy + 2 + (action ? Math.round(Math.sin(this.elapsedClock * 12)) : 0));
-          ctx.scale(p.scaleX, p.scaleY);
-
-          const drawHeldWeapon = () => {
-            if (animState === 'dodge') return;
-            const screenAimAngle = Math.atan2((aimVecX + aimVecY) * 0.5, aimVecX - aimVecY);
-            const swingRot =
-              p.meleeSwingTimer > 0
-                ? Math.sin((1 - p.meleeSwingTimer / 0.22) * Math.PI) * (facingRight ? 0.95 : -0.95)
-                : 0;
-            ctx.save();
-            ctx.translate(facingRight ? 4 : -4, facingUp ? -16 : -14);
-            ctx.rotate(
-              (facingRight ? screenAimAngle * 0.55 : screenAimAngle * 0.55 - Math.PI * 0.15) + swingRot
-            );
-            ctx.drawImage(weaponSprite, facingRight ? -4 : -16, -10);
-            if (this.muzzleFlashTimer > 0 && (p.equippedWeapon === 'pistol' || p.equippedWeapon === 'shotgun')) {
-              const fx = facingRight ? 13 : -17;
-              ctx.fillStyle = '#fff3b0';
-              ctx.fillRect(fx, -3, 4, 3);
-              ctx.fillStyle = '#ff982b';
-              ctx.fillRect(fx + (facingRight ? 3 : -2), -2, 3, 2);
-            }
-            ctx.restore();
-          };
-
-          const pDrawX = -Math.floor(sprite.width * 0.5);
-          const pDrawY = -sprite.height + 2;
-
-          // Layer weapon behind torso when facing NE/NW away from camera, in front when facing SE/SW
-          if (facingUp) {
-            if (!action) drawHeldWeapon();
-            ctx.drawImage(sprite, pDrawX, pDrawY);
-          } else {
-            ctx.drawImage(sprite, pDrawX, pDrawY);
-            if (!action) drawHeldWeapon();
-          }
-          if (action) drawActionProp(ctx, action, facingRight);
-
-          if (p.hitFlash > 0) {
-            this.drawTintedSprite(ctx, sprite, pDrawX, pDrawY, 'rgba(255, 86, 76, 0.58)');
-          }
-          ctx.restore();
-
-          if (action) {
-            ctx.save();
-            ctx.font = '7px monospace';
-            ctx.textAlign = 'center';
-            const w = ctx.measureText(action.label).width + 10;
-            ctx.fillStyle = '#10271cdd';
-            ctx.fillRect(Math.round(sx - w / 2), sy - 52, w, 12);
-            ctx.fillStyle = '#e6dfad';
-            ctx.fillText(action.label, sx, sy - 43);
-            ctx.restore();
-          }
-          // Diegetic reload progress bar right above survivor
-          if (p.reloadingTimer > 0 && p.reloadingWeapon) {
-            const total = WEAPONS[p.reloadingWeapon].reloadTime || 1;
-            const prog = clamp(1 - p.reloadingTimer / total, 0, 1);
-            ctx.fillStyle = '#121518';
-            ctx.fillRect(sx - 9, sy - 39, 18, 3);
-            ctx.fillStyle = '#e8a849';
-            ctx.fillRect(sx - 8, sy - 38, Math.round(16 * prog), 1);
-          }
-        },
-      });
-    }
-
-    // Projectiles
-    for (const pr of this.projectiles) {
-      const iso = worldToIso(pr.x, pr.y, pr.z);
-      const sx = Math.round(originX + iso.sx);
-      const sy = Math.round(originY + iso.sy);
-      renderList.push({
-        depth: pr.x + pr.y + 0.1,
-        draw: () => {
-          if (pr.kind === 'molotov') {
-            ctx.fillStyle = '#5f8a4b';
-            ctx.fillRect(sx - 2, sy - 2, 4, 4);
-            ctx.fillStyle = '#ffae38';
-            ctx.fillRect(sx - 1, sy - 4, 2, 2);
-          } else if (pr.kind === 'acid') {
-            ctx.fillStyle = '#5ef2b5';
-            ctx.fillRect(sx - 2, sy - 2, 4, 4);
-          } else {
-            ctx.fillStyle = '#ffe58f';
-            ctx.fillRect(sx - 1, sy - 1, 2, 2);
-          }
-        },
-      });
-    }
-
-    renderList.sort((a, b) => a.depth - b.depth);
-    for (const item of renderList) {
-      item.draw();
-    }
-
-    // Pass 4: Pooled Particles & Floating Texts
-    for (const pt of this.particles) {
-      if (!pt.active) continue;
-      const iso = worldToIso(pt.x, pt.y, pt.z);
-      const sx = Math.round(originX + iso.sx);
-      const sy = Math.round(originY + iso.sy);
-      ctx.globalAlpha = clamp(pt.life / pt.maxLife, 0, 1);
-      ctx.fillStyle = pt.color;
-      ctx.fillRect(sx, sy, pt.size, pt.size);
-    }
-    ctx.globalAlpha = 1;
-
-    ctx.font = 'bold 7px "JetBrains Mono", monospace';
-    ctx.textAlign = 'center';
-    for (const ft of this.floatingTexts) {
-      const iso = worldToIso(ft.x, ft.y, ft.z);
-      const sx = Math.round(originX + iso.sx);
-      const sy = Math.round(originY + iso.sy);
-      ctx.globalAlpha = clamp(ft.life / ft.maxLife, 0, 1);
-      ctx.fillStyle = '#0d1012';
-      ctx.fillText(ft.text, sx + 1, sy + 1);
-      ctx.fillStyle = ft.color;
-      ctx.fillText(ft.text, sx, sy);
-    }
-    ctx.globalAlpha = 1;
-
-    // Drifting atmospheric ashfall particles in pixel viewport space
-    const { darkness } = getDaylightInfo(this.timeMinutes);
-    for (const ash of this.ambientAsh) {
-      ctx.globalAlpha = ash.alpha * (0.65 + darkness * 0.5);
-      ctx.fillStyle = '#b9b5ab';
-      ctx.fillRect(Math.floor(ash.x * vPw), Math.floor(ash.y * vPh), ash.size, ash.size);
-    }
-    ctx.globalAlpha = 1;
-
-    // Cozy sleep vignette & rising Zzz pixel feedback when resting in a bed
-    if (this.sleepTransitionTimer > 0) {
-      const restProg = clamp(1 - this.sleepTransitionTimer / 1.65, 0, 1);
-      const restFade = Math.sin(restProg * Math.PI) * 0.52;
-      ctx.fillStyle = `rgba(9, 12, 22, ${restFade.toFixed(3)})`;
-      ctx.fillRect(0, 0, vPw, vPh);
-
-      const pIso = worldToIso(this.player.x, this.player.y, 0.9);
-      const zx = Math.round(originX + pIso.sx + 6);
-      const zy = Math.round(originY + pIso.sy - 16 - restProg * 14);
-      ctx.save();
-      ctx.globalAlpha = Math.sin(restProg * Math.PI);
-      ctx.font = 'bold 8px "JetBrains Mono", monospace';
-      ctx.fillStyle = '#0d1012';
-      ctx.fillText('Z z z', zx + 1, zy + 1);
-      ctx.fillStyle = '#a8e6cf';
-      ctx.fillText('Z z z', zx, zy);
-      ctx.restore();
-    }
-
-    ctx.restore();
-
-    // Pass 5: Dynamic Day/Night Lighting, Headlights, Sirens & Burn Barrels
-    this.renderLighting(originX, originY);
-
-    // Pass 6: Crisp Tactical Crosshair & Hit-Marker Feedback
-    if (this.phase === 'playing' && this.activeVehicleId === null && !this.usingVirtualAim) {
-      const mx = Math.round(this.mouseScreenX);
-      const my = Math.round(this.mouseScreenY);
-      ctx.strokeStyle = this.hitMarkerTimer > 0 ? (this.hitMarkerCrit ? '#ffd266' : '#f0ece1') : 'rgba(240, 236, 225, 0.85)';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(mx - 7, my);
-      ctx.lineTo(mx - 3, my);
-      ctx.moveTo(mx + 3, my);
-      ctx.lineTo(mx + 7, my);
-      ctx.moveTo(mx, my - 7);
-      ctx.lineTo(mx, my - 3);
-      ctx.moveTo(mx, my + 3);
-      ctx.lineTo(mx, my + 7);
-      ctx.stroke();
-      ctx.fillStyle = '#d9822b';
-      ctx.fillRect(mx - 1, my - 1, 2, 2);
-    }
-    if (this.phase === 'playing' && this.hitMarkerTimer > 0) {
-      const hx = this.usingVirtualAim ? Math.round(this.viewW * 0.5) : Math.round(this.mouseScreenX);
-      const hy = this.usingVirtualAim ? Math.round(this.viewH * 0.5) : Math.round(this.mouseScreenY);
-      ctx.strokeStyle = this.hitMarkerCrit ? '#ffd266' : '#eb4d4b';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(hx - 10, hy - 10);
-      ctx.lineTo(hx - 5, hy - 5);
-      ctx.moveTo(hx + 10, hy - 10);
-      ctx.lineTo(hx + 5, hy - 5);
-      ctx.moveTo(hx - 10, hy + 10);
-      ctx.lineTo(hx - 5, hy + 5);
-      ctx.moveTo(hx + 10, hy + 10);
-      ctx.lineTo(hx + 5, hy + 5);
-      ctx.stroke();
-    }
+    this.threeRenderer.render({
+      phase: this.phase,
+      cameraMode: this.cameraMode,
+      fpsPitch: this.fpsPitch,
+      strafeInput: this.activeVehicleId !== null ? 0 : this.fpsStrafeInput,
+      weaponSwapTimer: this.weaponSwapTimer,
+      playerVelX: this.playerVelX,
+      playerVelY: this.playerVelY,
+      isSprinting: this.isSprinting,
+      elapsedClock: this.elapsedClock,
+      timeMinutes: this.timeMinutes,
+      camX: this.camX,
+      camY: this.camY,
+      trauma: this.trauma,
+      worldStore: this.worldStore,
+      getCell: (gx, gy) => this.getCell(gx, gy),
+      player: this.player,
+      inventory: this.inventory,
+      activeVehicleId: this.activeVehicleId,
+      vehicles: this.vehicles,
+      doors: this.doors,
+      containers: this.containers,
+      structures: this.structures,
+      zombies: this.zombies,
+      projectiles: this.projectiles,
+      firePatches: this.firePatches,
+      decals: this.decals,
+      soundRipples: this.soundRipples,
+      fishing: this.fishing,
+      particles: this.particles,
+      ambientAsh: this.ambientAsh,
+      floatingTexts: this.floatingTexts,
+      actionVisual: this.actionVisual,
+      muzzleFlashTimer: this.muzzleFlashTimer,
+      hitMarkerTimer: this.hitMarkerTimer,
+      hitMarkerCrit: this.hitMarkerCrit,
+      hitMarkerHeadshot: this.hitMarkerHeadshot,
+      impactDecals: this.impactDecals,
+      impactEffects: this.impactEffects,
+      sleepTransitionTimer: this.sleepTransitionTimer,
+      mouseScreenX: this.mouseScreenX,
+      mouseScreenY: this.mouseScreenY,
+      mouseWorldX: this.mouseWorldX,
+      mouseWorldY: this.mouseWorldY,
+      usingVirtualAim: this.usingVirtualAim && this.cameraMode !== 'fps',
+      nearInteractTile,
+    });
 
     // Pass 7: Tactical Minimap (throttled to ~8Hz for low CPU overhead)
     this.minimapTimer += this.lastFrameDt;
     if (this.minimapTimer >= 0.12) {
       this.minimapTimer = 0;
       this.renderMinimap();
-    }
-  }
-
-  private drawTintedSprite(
-    targetCtx: CanvasRenderingContext2D,
-    sprite: HTMLCanvasElement,
-    dx: number,
-    dy: number,
-    tint: string
-  ): void {
-    const fctx = this.flashCtx;
-    const sw = sprite.width;
-    const sh = sprite.height;
-    fctx.globalCompositeOperation = 'source-over';
-    fctx.clearRect(0, 0, sw, sh);
-    fctx.drawImage(sprite, 0, 0);
-    fctx.globalCompositeOperation = 'source-atop';
-    fctx.fillStyle = tint;
-    fctx.fillRect(0, 0, sw, sh);
-    targetCtx.drawImage(this.flashCanvas, 0, 0, sw, sh, dx, dy, sw, sh);
-  }
-
-  private renderLighting(originX: number, originY: number): void {
-    const { darkness } = getDaylightInfo(this.timeMinutes);
-    if (darkness <= 0.09) return;
-
-    const lw = this.lightCanvas.width;
-    const lh = this.lightCanvas.height;
-    const lctx = this.lightCtx;
-
-    lctx.globalCompositeOperation = 'source-over';
-    lctx.clearRect(0, 0, lw, lh);
-    lctx.fillStyle = `rgba(8, 12, 22, ${darkness.toFixed(2)})`;
-    lctx.fillRect(0, 0, lw, lh);
-
-    lctx.globalCompositeOperation = 'destination-out';
-
-    const punchRadial = (wx: number, wy: number, radiusPx: number, strength = 1) => {
-      const iso = worldToIso(wx, wy, 0.3);
-      const cx = Math.round(originX + iso.sx);
-      const cy = Math.round(originY + iso.sy);
-      const grad = lctx.createRadialGradient(cx, cy, radiusPx * 0.15, cx, cy, radiusPx);
-      grad.addColorStop(0, `rgba(0,0,0,${strength})`);
-      grad.addColorStop(0.65, `rgba(0,0,0,${strength * 0.55})`);
-      grad.addColorStop(1, 'rgba(0,0,0,0)');
-      lctx.fillStyle = grad;
-      lctx.beginPath();
-      lctx.arc(cx, cy, radiusPx, 0, Math.PI * 2);
-      lctx.fill();
-    };
-
-    // Campfire warm holes
-    const flicker = Math.sin(this.elapsedClock * 11) * 4;
-    for (const s of this.structures) {
-      if (s.kind === 'campfire') {
-        punchRadial(s.gx + 0.5, s.gy + 0.5, 92 + flicker, 0.95);
-      }
-    }
-
-    // Visible streetlamps, burn barrels, pier lanterns & kitchen stoves
-    const centerWorld = isoToWorld(this.camX, this.camY);
-    const vLw = lw;
-    const vLh = lh;
-    const minGX = Math.floor(centerWorld.wx - 22);
-    const maxGX = Math.ceil(centerWorld.wx + 22);
-    const minGY = Math.floor(centerWorld.wy - 22);
-    const maxGY = Math.ceil(centerWorld.wy + 22);
-    for (let gy = minGY; gy <= maxGY; gy++) {
-      for (let gx = minGX; gx <= maxGX; gx++) {
-        const preIso = worldToIso(gx + 0.5, gy + 0.5, 0.3);
-        const preX = originX + preIso.sx;
-        const preY = originY + preIso.sy;
-        if (preX < -85 || preX > vLw + 85 || preY < -85 || preY > vLh + 85) continue;
-        const prop = this.getCell(gx, gy).prop;
-        if (prop === 'streetlamp') {
-          punchRadial(gx + 0.5, gy + 0.5, 68 + flicker * 0.35, 0.78);
-        } else if (prop === 'barrel_burn') {
-          punchRadial(gx + 0.5, gy + 0.5, 74 + flicker * 0.6, 0.88);
-        } else if (prop === 'fishing_post') {
-          punchRadial(gx + 0.5, gy + 0.5, 64 + flicker * 0.3, 0.8);
-        } else if (prop === 'stove') {
-          punchRadial(gx + 0.5, gy + 0.5, 52 + flicker * 0.25, 0.65);
-        }
-      }
-    }
-
-    // Vehicle headlight cones
-    for (const v of this.vehicles) {
-      if (!v.headlightsOn || v.hp <= 0) continue;
-      const vIso = worldToIso(v.x + Math.cos(v.angle) * 0.55, v.y + Math.sin(v.angle) * 0.55, 0.35);
-      const fwdIso = worldToIso(v.x + Math.cos(v.angle) * 3.0, v.y + Math.sin(v.angle) * 3.0, 0);
-      const vx = originX + vIso.sx;
-      const vy = originY + vIso.sy;
-      const beamAngle = Math.atan2(originY + fwdIso.sy - vy, originX + fwdIso.sx - vx);
-      const beamLen = 215;
-      const halfSpread = 0.32;
-      const grad = lctx.createRadialGradient(vx, vy, 10, vx, vy, beamLen);
-      grad.addColorStop(0, 'rgba(0,0,0,0.96)');
-      grad.addColorStop(0.75, 'rgba(0,0,0,0.72)');
-      grad.addColorStop(1, 'rgba(0,0,0,0)');
-      lctx.fillStyle = grad;
-      lctx.beginPath();
-      lctx.moveTo(vx, vy);
-      lctx.arc(vx, vy, beamLen, beamAngle - halfSpread, beamAngle + halfSpread);
-      lctx.closePath();
-      lctx.fill();
-    }
-
-    // Molotov fire patches
-    for (const fp of this.firePatches) {
-      if (fp.kind === 'fire') {
-        punchRadial(fp.x, fp.y, 75, 0.9);
-      }
-    }
-
-    if (this.phase !== 'title' && this.activeVehicleId === null) {
-      const p = this.player;
-      punchRadial(p.x, p.y, 44, 0.85);
-
-      // Flashlight beam follows the shared right-stick/mouse aim target
-      if (p.flashlightOn && p.battery > 0) {
-        const pIso = worldToIso(p.x, p.y, 0.45);
-        const px = originX + pIso.sx;
-        const py = originY + pIso.sy;
-        const aimIso = worldToIso(this.mouseWorldX, this.mouseWorldY, 0);
-        const ax = originX + aimIso.sx;
-        const ay = originY + aimIso.sy;
-        const screenAngle = Math.atan2(ay - py, ax - px);
-
-        const beamLen = 185;
-        const halfSpread = 0.36;
-        const grad = lctx.createRadialGradient(px, py, 8, px, py, beamLen);
-        grad.addColorStop(0, 'rgba(0,0,0,0.96)');
-        grad.addColorStop(0.7, 'rgba(0,0,0,0.72)');
-        grad.addColorStop(1, 'rgba(0,0,0,0)');
-        lctx.fillStyle = grad;
-        lctx.beginPath();
-        lctx.moveTo(px, py);
-        lctx.arc(px, py, beamLen, screenAngle - halfSpread, screenAngle + halfSpread);
-        lctx.closePath();
-        lctx.fill();
-      }
-    }
-
-    this.ctx.drawImage(this.lightCanvas, 0, 0, this.viewW, this.viewH);
-
-    // Police cruiser siren atmospheric red/blue pulse
-    const sirenPhase = Math.floor(this.elapsedClock * 7) % 2;
-    for (const v of this.vehicles) {
-      if (!v.sirenOn || v.hp <= 0) continue;
-      const iso = worldToIso(v.x, v.y, 0.7);
-      const sx = (originX + iso.sx) * PIXEL_SCALE;
-      const sy = (originY + iso.sy) * PIXEL_SCALE;
-      const rad = 110 * (PIXEL_SCALE / 3);
-      const grad = this.ctx.createRadialGradient(sx, sy, 4, sx, sy, rad);
-      grad.addColorStop(0, sirenPhase === 0 ? 'rgba(235, 58, 52, 0.36)' : 'rgba(54, 148, 255, 0.36)');
-      grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-      this.ctx.fillStyle = grad;
-      this.ctx.beginPath();
-      this.ctx.arc(sx, sy, rad, 0, Math.PI * 2);
-      this.ctx.fill();
     }
   }
 
@@ -4148,6 +3877,7 @@ export class SurvivalEngine {
 
     this.onHudUpdate({
       phase: this.phase,
+      cameraMode: this.cameraMode,
       hp: Math.round(this.player.hp),
       maxHp: this.player.maxHp,
       hunger: Math.round(this.player.hunger),

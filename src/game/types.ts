@@ -230,6 +230,37 @@ export interface Projectile {
   maxLife: number;
   targetX?: number;
   targetY?: number;
+  canHeadshot?: boolean;
+}
+
+export type ImpactMaterial = 'stone' | 'wood' | 'metal' | 'dirt' | 'water';
+
+export interface SurfaceImpactDecal {
+  id: number;
+  x: number;
+  y: number;
+  z: number;
+  nx: number;
+  ny: number;
+  nz: number;
+  kind: 'stone' | 'wood' | 'metal' | 'blood_wall';
+  size: number;
+  rotation: number;
+  alpha: number;
+}
+
+export interface BulletImpactEffect {
+  id: number;
+  x: number;
+  y: number;
+  z: number;
+  nx: number;
+  ny: number;
+  nz: number;
+  material: ImpactMaterial | 'flesh' | 'headshot';
+  life: number;
+  maxLife: number;
+  scale: number;
 }
 
 export interface FirePatch {
@@ -327,8 +358,11 @@ export interface NearbyActionPrompt {
   secondaryKey?: string;
 }
 
+export type CameraMode = 'iso' | 'fps';
+
 export interface HudSnapshot {
   phase: GamePhase;
+  cameraMode: CameraMode;
   hp: number;
   maxHp: number;
   hunger: number;

@@ -4,6 +4,7 @@ import type { HudSnapshot } from '../game/types';
 interface PauseModalProps {
   hud: HudSnapshot;
   onResume: () => void;
+  onToggleCamera: () => void;
   onRestart: () => void;
   onTitle: () => void;
 }
@@ -11,6 +12,7 @@ interface PauseModalProps {
 export const PauseModal: React.FC<PauseModalProps> = ({
   hud,
   onResume,
+  onToggleCamera,
   onRestart,
   onTitle,
 }) => {
@@ -46,6 +48,13 @@ export const PauseModal: React.FC<PauseModalProps> = ({
             className="w-full py-2.5 bg-[#d9822b] hover:bg-[#e8943c] text-[#0d1012] font-pixel font-bold text-base tracking-wide cursor-pointer"
           >
             Resume
+          </button>
+          <button
+            type="button"
+            onClick={onToggleCamera}
+            className="w-full py-2.5 hud-slot hover:border-[#d9822b] text-[#e6e2d8] font-tactical font-semibold text-sm cursor-pointer"
+          >
+            View: {hud.cameraMode === 'fps' ? 'First-Person [Z]' : 'Isometric 3D [Z]'}
           </button>
           <button
             type="button"

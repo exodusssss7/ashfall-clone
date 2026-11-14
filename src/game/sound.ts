@@ -1,5 +1,5 @@
 import type { FootstepSurface } from './footstepSurfaces';
-import type { ZombieArchetype } from './types';
+import type { ImpactMaterial, ZombieArchetype } from './types';
 import { ambienceMix } from './audioMix';
 
 const SAMPLE_NAMES = [
@@ -200,6 +200,36 @@ class SurvivalSoundEngine {
   playDodge(): void { this.sample('cloth2', 0.22, 0.85); this.sample('cloth3', 0.14, 1.05, 0.06); }
   playMeleeHit(heavy = false): void { this.sample(this.choose('punch', 2), heavy ? 0.54 : 0.4, heavy ? 0.88 : 1); }
   playGunshot(kind: 'pistol' | 'shotgun'): void { this.sample(this.choose(kind, 2), kind === 'pistol' ? 0.75 : 0.85); }
+  playBulletImpact(kind: ImpactMaterial | 'flesh' | 'headshot'): void {
+    if (kind === 'headshot') {
+      this.sample(this.choose('punch', 2), 0.52, 0.86);
+      this.sample('glass0', 0.2, 1.65);
+      return;
+    }
+    if (kind === 'flesh') {
+      this.sample(this.choose('punch', 2), 0.28, 1.12);
+      return;
+    }
+    if (kind === 'metal') {
+      this.sample(this.choose('metal', 2), 0.34, 1.38);
+      this.texture(4200, 0.08, 0.12);
+      return;
+    }
+    if (kind === 'wood') {
+      this.sample(this.choose('wood', 2), 0.3, 1.32);
+      return;
+    }
+    if (kind === 'water') {
+      this.sample('splash', 0.26, 1.28);
+      return;
+    }
+    if (kind === 'dirt') {
+      this.sample(this.choose('dirt', 4), 0.24, 1.15);
+      return;
+    }
+    this.sample(this.choose('concrete', 4), 0.28, 1.42);
+    this.texture(3200, 0.06, 0.09);
+  }
   playDryFire(): void { this.sample('metalClick', 0.22); }
   playReload(): void { this.sample('reload', 0.29); this.sample('metalLatch', 0.22, 1, 0.16); }
   playReloadComplete(): void { this.sample('rack', 0.32); }
