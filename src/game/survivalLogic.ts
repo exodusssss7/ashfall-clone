@@ -219,7 +219,22 @@ export function getWorldCell(store: WorldStore, gx: number, gy: number): TileCel
   const cy = Math.floor(gy / CHUNK_SIZE);
   let chunk = store.chunks.get(chunkKey(cx, cy));
   if (!chunk) {
-    chunk = generateChunk(store, cx, cy, { nextId: 10000 }).chunk;
+    const spawned = generateChunk(store, cx, cy, store.nextVehicleIdRef ?? { nextId: 10000 });
+    chunk = spawned.chunk;
+    if (
+      store.pendingSpawns &&
+      (spawned.containers.length ||
+        spawned.structures.length ||
+        spawned.vehicles.length ||
+        spawned.doors.length)
+    ) {
+      store.pendingSpawns.push({
+        containers: spawned.containers,
+        structures: spawned.structures,
+        vehicles: spawned.vehicles,
+        doors: spawned.doors,
+      });
+    }
   }
   const lx = ((gx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
   const ly = ((gy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
@@ -239,6 +254,7 @@ export function generateWorld(seed = 1994): GeneratedWorld {
     chunks: new Map(),
     populatedChunks: new Set(),
     landmarks: new Map(),
+    pendingSpawns: [],
   };
 
   // Pre-build 4x4 origin chunk grid (0..63, 0..63) so starter town + outer edge transition seamlessly
@@ -329,8 +345,9 @@ export function generateWorld(seed = 1994): GeneratedWorld {
         { gx: 39, gy: 22, orientation: 'ew', status: 'closed' },
         { gx: 49, gy: 20, orientation: 'ns', status: 'closed' },
         { gx: 46, gy: 18, orientation: 'ew', status: 'closed' },
+        { gx: 42, gy: 20, orientation: 'ns', status: 'closed' },
       ],
-      archways: [{ gx: 42, gy: 18 }],
+      archways: [{ gx: 42, gy: 16 }],
       partitions: [
         { x0: 42, y0: 14, x1: 42, y1: 22 },
         { x0: 42, y0: 18, x1: 49, y1: 18 },
@@ -372,6 +389,7 @@ export function generateWorld(seed = 1994): GeneratedWorld {
         { gx: 18, gy: 34, orientation: 'ew', status: 'closed' },
         { gx: 10, gy: 45, orientation: 'ew', status: 'closed' },
         { gx: 18, gy: 40, orientation: 'ew', status: 'closed' },
+        { gx: 12, gy: 40, orientation: 'ew', status: 'closed' },
         { gx: 15, gy: 42, orientation: 'ns', status: 'closed' },
       ],
       archways: [{ gx: 15, gy: 37 }],
@@ -579,7 +597,7 @@ export function generateWorld(seed = 1994): GeneratedWorld {
         if (dNorm <= 1.0) {
           cell.tile = 'water';
           cell.prop = 'none';
-          cell.solid = true;
+          cell.solid = false;
           cell.blocksSight = false;
         } else if (dNorm <= 1.38) {
           cell.tile = 'dirt';

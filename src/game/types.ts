@@ -142,6 +142,13 @@ export interface WorldStore {
   chunks: Map<string, WorldChunk>;
   populatedChunks: Set<string>;
   landmarks: Map<string, WorldLandmark>;
+  pendingSpawns?: Array<{
+    containers: LootContainer[];
+    structures: WorldStructure[];
+    vehicles: Vehicle[];
+    doors: DoorEntity[];
+  }>;
+  nextVehicleIdRef?: { nextId: number };
 }
 
 export type DoorStatus = 'closed' | 'open' | 'locked' | 'barricaded';

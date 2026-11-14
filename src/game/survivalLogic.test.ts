@@ -412,3 +412,71 @@ test('checkpoint entrance has a clear vestibule into both preserved rooms', () =
   assert.ok(seen.has('43,48'),'bed room reachable through interior door');
   assert.ok(seen.has('36,48'),'ammo crate approachable');
 });
+
+test('all 8 town buildings have reachable interior rooms with matching door entities and Crescent Lake water is walkable', () => {
+  const world = generateWorld(1994);
+  const doorCoords = new Set(world.doors.map((d) => `${d.gx}_${d.gy}`));
+
+  for (let y = 0; y < world.grid.length; y++) {
+    for (let x = 0; x < world.grid[y].length; x++) {
+      const cell = world.grid[y][x];
+      if (cell.prop === 'door') {
+        assert.ok(doorCoords.has(`${x}_${y}`), `Orphan town door cell at (${x},${y})`);
+      }
+      if (cell.tile === 'water') {
+        assert.equal(cell.solid, false, `Water tile at (${x},${y}) must be walkable`);
+      }
+    }
+  }
+
+  // Player circle can walk directly onto Crescent Lake water
+  assert.equal(isCircleBlocked(world.grid, 42.5, 8.5, 0.22), false);
+
+  const townBounds = [
+    { name: 'NW Clinic', x0: 14, y0: 7, w: 9, h: 16 },
+    { name: 'NE Diner', x0: 34, y0: 14, w: 16, h: 9 },
+    { name: 'SW Ranch', x0: 7, y0: 34, w: 16, h: 12 },
+    { name: 'SE Police Outpost', x0: 34, y0: 34, w: 16, h: 12 },
+    { name: 'West Ranger Cabin', x0: 2, y0: 13, w: 11, h: 10 },
+    { name: 'NW Farmhouse', x0: 2, y0: 2, w: 11, h: 10 },
+    { name: 'South Apothecary', x0: 12, y0: 47, w: 12, h: 8 },
+    { name: 'SE Checkpoint', x0: 34, y0: 47, w: 15, h: 8 },
+  ];
+
+  for (const b of townBounds) {
+    const queue: Array<[number, number]> = [];
+    const seen = new Set<string>();
+    for (let y = b.y0 - 1; y <= b.y0 + b.h; y++) {
+      for (let x = b.x0 - 1; x <= b.x0 + b.w; x++) {
+        if (x === b.x0 - 1 || x === b.x0 + b.w || y === b.y0 - 1 || y === b.y0 + b.h) {
+          if (!world.grid[y][x].solid) {
+            queue.push([x, y]);
+            seen.add(`${x},${y}`);
+          }
+        }
+      }
+    }
+    while (queue.length > 0) {
+      const [cx, cy] = queue.shift()!;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (nx < b.x0 - 1 || nx > b.x0 + b.w || ny < b.y0 - 1 || ny > b.y0 + b.h) continue;
+        const key = `${nx},${ny}`;
+        if (seen.has(key)) continue;
+        const cell = world.grid[ny][nx];
+        if (cell.solid && cell.prop !== 'door') continue;
+        seen.add(key);
+        queue.push([nx, ny]);
+      }
+    }
+    for (let y = b.y0 + 1; y < b.y0 + b.h - 1; y++) {
+      for (let x = b.x0 + 1; x < b.x0 + b.w - 1; x++) {
+        if (!world.grid[y][x].solid) {
+          assert.ok(seen.has(`${x},${y}`), `Unreachable floor (${x},${y}) in ${b.name}`);
+        }
+      }
+    }
+  }
+});
+

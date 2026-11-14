@@ -159,3 +159,98 @@ test('new biome tiles and exploration props map cleanly to footstep surfaces, co
 
   assert.equal(getBiomeDisplayName('pine_forest'), 'WHISPERING PINES');
 });
+
+test('outer buildings have matching door entities, unobstructed entrances, and reachable interior rooms', () => {
+  const world = generateWorld(1994);
+  // Trigger lazy generation via getWorldCell as minimap/renderer does
+  for (let cy = -5; cy <= 8; cy++) {
+    for (let cx = -5; cx <= 8; cx++) {
+      if (cx >= 0 && cx <= 3 && cy >= 0 && cy <= 3) continue;
+      getWorldCell(world.worldStore, cx * CHUNK_SIZE + 4, cy * CHUNK_SIZE + 4);
+    }
+  }
+
+  const allDoors = [...world.doors];
+  for (const ps of world.worldStore.pendingSpawns ?? []) {
+    allDoors.push(...ps.doors);
+  }
+  const doorCoords = new Set(allDoors.map((d) => `${d.gx}_${d.gy}`));
+
+  // Zero orphan door cells without a DoorEntity
+  for (const chunk of world.worldStore.chunks.values()) {
+    for (const row of chunk.cells) {
+      for (const cell of row) {
+        if (cell.prop === 'door') {
+          assert.ok(doorCoords.has(`${cell.gx}_${cell.gy}`), `Orphan door cell at (${cell.gx}, ${cell.gy})`);
+        }
+      }
+    }
+  }
+
+  // Every outer clinic, diner, outpost, cabin, and checkpoint guardhouse has reachable rooms
+  for (const lm of world.worldStore.landmarks.values()) {
+    let bounds: { x0: number; y0: number; w: number; h: number } | null = null;
+    const bx = lm.gx - 5;
+    const by = lm.gy - 4;
+    if (lm.kind === 'clinic') bounds = { x0: bx, y0: by, w: 11, h: 9 };
+    else if (lm.kind === 'diner') bounds = { x0: bx, y0: by, w: 12, h: 9 };
+    else if (lm.kind === 'outpost') bounds = { x0: bx, y0: by, w: 11, h: 9 };
+    else if (lm.kind === 'cabin') bounds = { x0: bx, y0: by, w: 11, h: 8 };
+    else if (lm.kind === 'checkpoint') bounds = { x0: lm.gx + 3, y0: lm.gy - 6, w: 5, h: 5 };
+    if (!bounds) continue;
+
+    const { x0, y0, w, h } = bounds;
+    const queue: Array<[number, number]> = [];
+    const seen = new Set<string>();
+    for (let y = y0 - 1; y <= y0 + h; y++) {
+      for (let x = x0 - 1; x <= x0 + w; x++) {
+        if (x === x0 - 1 || x === x0 + w || y === y0 - 1 || y === y0 + h) {
+          const c = getWorldCell(world.worldStore, x, y);
+          if (!c.solid) {
+            queue.push([x, y]);
+            seen.add(`${x},${y}`);
+          }
+        }
+      }
+    }
+    while (queue.length > 0) {
+      const [cx, cy] = queue.shift()!;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (nx < x0 - 1 || nx > x0 + w || ny < y0 - 1 || ny > y0 + h) continue;
+        const key = `${nx},${ny}`;
+        if (seen.has(key)) continue;
+        const cell = getWorldCell(world.worldStore, nx, ny);
+        if (cell.solid && cell.prop !== 'door') continue;
+        seen.add(key);
+        queue.push([nx, ny]);
+      }
+    }
+
+    for (let y = y0 + 1; y < y0 + h - 1; y++) {
+      for (let x = x0 + 1; x < x0 + w - 1; x++) {
+        const cell = getWorldCell(world.worldStore, x, y);
+        if (!cell.solid) {
+          assert.ok(seen.has(`${x},${y}`), `Unreachable floor (${x},${y}) in ${lm.kind} ${lm.id}`);
+        }
+      }
+    }
+  }
+});
+
+test('river and lake water tiles are walkable', () => {
+  const world = generateWorld(1994);
+  let checkedWater = 0;
+  for (let gy = -80; gy <= 80; gy += 3) {
+    for (let gx = -80; gx <= 80; gx += 3) {
+      const cell = getWorldCell(world.worldStore, gx, gy);
+      if (cell.tile === 'water') {
+        assert.equal(cell.solid, false, `Water tile at (${gx},${gy}) should be walkable`);
+        checkedWater++;
+      }
+    }
+  }
+  assert.ok(checkedWater >= 10, `Expected water tiles to verify walkability, found ${checkedWater}`);
+});
+

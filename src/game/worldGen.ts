@@ -546,10 +546,10 @@ export function createOuterBaseCell(seed: number, gx: number, gy: number): TileC
   let solid = false;
   let variant = h % 4;
 
-  // Carve winding river & banks first
+  // Carve winding river & banks first (water is wadeable)
   if (river.inWater) {
     tile = 'water';
-    solid = true;
+    solid = false;
   } else if (river.inBankSand) {
     tile = patch < 0.65 ? 'sand' : 'mud';
   } else if (river.inFloodMud) {
@@ -796,26 +796,40 @@ function createBuildingSpecForLandmark(poi: RegionPOIPlan, seed: number): Buildi
       porch: { x0: bx + 4, y0: by + 9, w: 3, h: 1 },
       doors: [
         { gx: bx + 5, gy: by + 8, orientation: 'ew', status: h % 2 === 0 ? 'locked' : 'closed' },
-        { gx: bx + 5, gy: by + 4, orientation: 'ew', status: 'closed' },
+        { gx: bx + 4, gy: by + 4, orientation: 'ew', status: 'closed' },
+        { gx: bx + 6, gy: by + 2, orientation: 'ns', status: 'closed' },
       ],
-      partitions: [{ x0: bx + 1, y0: by + 4, x1: bx + 9, y1: by + 4 }],
+      partitions: [
+        { x0: bx + 1, y0: by + 4, x1: bx + 9, y1: by + 4 },
+        { x0: bx + 6, y0: by + 1, x1: bx + 6, y1: by + 3 },
+      ],
       rooms: [
         { x0: bx + 1, y0: by + 5, w: 9, h: 3, floorType: 'tile_clinic' },
-        { x0: bx + 1, y0: by + 1, w: 9, h: 3, floorType: 'floor_bath' },
+        { x0: bx + 1, y0: by + 1, w: 5, h: 3, floorType: 'tile_clinic', rug: { x0: bx + 2, y0: by + 2, w: 2, h: 1 } },
+        { x0: bx + 7, y0: by + 1, w: 3, h: 3, floorType: 'floor_bath' },
       ],
       props: [
         { gx: bx + 1, gy: by + 5, prop: 'counter' },
+        { gx: bx + 2, gy: by + 5, prop: 'desk' },
         { gx: bx + 9, gy: by + 5, prop: 'bench' },
         {
           gx: bx + 9,
+          gy: by + 7,
+          prop: 'crate_wood',
+          lootKind: 'crate_wood',
+          lootItems: { cloth: 2, scrap: 1, water: 1 },
+        },
+        { gx: bx + 1, gy: by + 1, prop: 'bed' },
+        { gx: bx + 3, gy: by + 1, prop: 'desk' },
+        {
+          gx: bx + 5,
           gy: by + 1,
           prop: 'med_cabinet',
           lootKind: 'med_cabinet',
           lootItems: { bandage: 2 + (h % 2), cloth: 2, water: 2 },
         },
-        { gx: bx + 1, gy: by + 1, prop: 'sink_toilet' },
-        { gx: bx + 4, gy: by + 1, prop: 'bed' },
-        { gx: bx + 7, gy: by + 1, prop: 'desk' },
+        { gx: bx + 9, gy: by + 1, prop: 'sink_toilet' },
+        { gx: bx + 7, gy: by + 1, prop: 'bench' },
       ],
     };
   }
@@ -831,30 +845,41 @@ function createBuildingSpecForLandmark(poi: RegionPOIPlan, seed: number): Buildi
       porch: { x0: bx + 4, y0: by + 9, w: 3, h: 1 },
       doors: [
         { gx: bx + 5, gy: by + 8, orientation: 'ew', status: 'closed' },
-        { gx: bx + 7, gy: by + 4, orientation: 'ew', status: 'open' },
+        { gx: bx + 6, gy: by + 2, orientation: 'ns', status: 'open' },
+        { gx: bx + 8, gy: by + 4, orientation: 'ew', status: 'closed' },
+        { gx: bx + 11, gy: by + 6, orientation: 'ns', status: 'closed' },
       ],
-      partitions: [{ x0: bx + 6, y0: by + 1, x1: bx + 6, y1: by + 7 }],
+      partitions: [
+        { x0: bx + 6, y0: by + 1, x1: bx + 6, y1: by + 7 },
+        { x0: bx + 6, y0: by + 4, x1: bx + 10, y1: by + 4 },
+      ],
       rooms: [
         { x0: bx + 1, y0: by + 1, w: 5, h: 7, floorType: 'tile_diner' },
-        { x0: bx + 7, y0: by + 1, w: 4, h: 7, floorType: 'floor', rug: { x0: bx + 8, y0: by + 5, w: 2, h: 2 } },
+        { x0: bx + 7, y0: by + 1, w: 4, h: 3, floorType: 'tile_diner' },
+        { x0: bx + 7, y0: by + 5, w: 4, h: 3, floorType: 'floor', rug: { x0: bx + 8, y0: by + 6, w: 2, h: 1 } },
       ],
       props: [
-        { gx: bx + 1, gy: by + 1, prop: 'stove' },
+        { gx: bx + 1, gy: by + 1, prop: 'tv_stand' },
+        { gx: bx + 3, gy: by + 1, prop: 'counter' },
+        { gx: bx + 4, gy: by + 1, prop: 'counter' },
+        { gx: bx + 2, gy: by + 4, prop: 'table' },
+        { gx: bx + 1, gy: by + 4, prop: 'bench' },
+        { gx: bx + 2, gy: by + 6, prop: 'table' },
+        { gx: bx + 1, gy: by + 6, prop: 'bench' },
+        { gx: bx + 8, gy: by + 1, prop: 'stove' },
         {
-          gx: bx + 3,
+          gx: bx + 10,
           gy: by + 1,
           prop: 'fridge',
           lootKind: 'fridge',
           lootItems: { food: 2 + (h % 2), water: 2, raw_fish: h % 2 },
         },
-        { gx: bx + 5, gy: by + 1, prop: 'counter' },
-        { gx: bx + 2, gy: by + 5, prop: 'table' },
-        { gx: bx + 1, gy: by + 5, prop: 'bench' },
-        { gx: bx + 10, gy: by + 1, prop: 'tv_stand' },
-        { gx: bx + 10, gy: by + 6, prop: 'bed' },
+        { gx: bx + 7, gy: by + 1, prop: 'counter' },
+        { gx: bx + 7, gy: by + 6, prop: 'bed' },
+        { gx: bx + 10, gy: by + 5, prop: 'desk' },
         {
-          gx: bx + 7,
-          gy: by + 1,
+          gx: bx + 10,
+          gy: by + 7,
           prop: 'crate_wood',
           lootKind: 'crate_wood',
           lootItems: { wood: 3, scrap: 2, food: 1 },
@@ -883,7 +908,8 @@ function createBuildingSpecForLandmark(poi: RegionPOIPlan, seed: number): Buildi
       ],
       props: [
         { gx: bx + 1, gy: by + 1, prop: 'desk' },
-        { gx: bx + 3, gy: by + 7, prop: 'counter' },
+        { gx: bx + 3, gy: by + 1, prop: 'counter' },
+        { gx: bx + 1, gy: by + 7, prop: 'bench' },
         {
           gx: bx + 9,
           gy: by + 1,
@@ -891,7 +917,8 @@ function createBuildingSpecForLandmark(poi: RegionPOIPlan, seed: number): Buildi
           lootKind: 'crate_military',
           lootItems: { ammo_9mm: 8 + (h % 6), ammo_shell: 3 + (h % 3), scrap: 3, molotov: h % 3 === 0 ? 1 : 0 },
         },
-        { gx: bx + 6, gy: by + 7, prop: 'bed' },
+        { gx: bx + 6, gy: by + 1, prop: 'bed' },
+        { gx: bx + 6, gy: by + 7, prop: 'desk' },
         {
           gx: bx + 9,
           gy: by + 7,
@@ -903,32 +930,34 @@ function createBuildingSpecForLandmark(poi: RegionPOIPlan, seed: number): Buildi
     };
   }
 
-  // Timber Cabin
+  // Timber Cabin (2-room homestead with clear front vestibule into living/kitchen & door to bedroom)
   return {
-    x0: bx + 1,
+    x0: bx,
     y0: by,
-    w: 9,
+    w: 11,
     h: 8,
     wallType: 'wall_wood',
     floorType: 'floor',
-    porch: { x0: bx + 4, y0: by + 8, w: 3, h: 1 },
+    porch: { x0: bx + 6, y0: by + 8, w: 3, h: 1 },
     doors: [
-      { gx: bx + 5, gy: by + 7, orientation: 'ew', status: 'closed' },
-      { gx: bx + 5, gy: by + 3, orientation: 'ns', status: 'open' },
+      { gx: bx + 7, gy: by + 7, orientation: 'ew', status: 'closed' },
+      { gx: bx + 5, gy: by + 4, orientation: 'ns', status: 'closed' },
     ],
     partitions: [{ x0: bx + 5, y0: by + 1, x1: bx + 5, y1: by + 6 }],
     rooms: [
-      { x0: bx + 2, y0: by + 1, w: 3, h: 6, floorType: 'floor', rug: { x0: bx + 2, y0: by + 3, w: 2, h: 2 } },
-      { x0: bx + 6, y0: by + 1, w: 3, h: 6, floorType: 'floor' },
+      { x0: bx + 1, y0: by + 1, w: 4, h: 6, floorType: 'floor', rug: { x0: bx + 2, y0: by + 3, w: 2, h: 2 } },
+      { x0: bx + 6, y0: by + 1, w: 4, h: 6, floorType: 'floor' },
     ],
     props: [
-      { gx: bx + 2, gy: by + 1, prop: 'bed' },
-      { gx: bx + 2, gy: by + 6, prop: 'bookshelf' },
-      { gx: bx + 8, gy: by + 1, prop: 'stove' },
-      { gx: bx + 6, gy: by + 1, prop: 'table' },
+      { gx: bx + 1, gy: by + 1, prop: 'bed' },
+      { gx: bx + 1, gy: by + 6, prop: 'bookshelf' },
+      { gx: bx + 4, gy: by + 1, prop: 'desk' },
+      { gx: bx + 9, gy: by + 1, prop: 'stove' },
+      { gx: bx + 7, gy: by + 1, prop: 'table' },
+      { gx: bx + 6, gy: by + 6, prop: 'couch' },
       {
-        gx: bx + 8,
-        gy: by + 6,
+        gx: bx + 9,
+        gy: by + 5,
         prop: 'crate_wood',
         lootKind: 'crate_wood',
         lootItems: { wood: 4, scrap: 2, fuel: 1, food: 1 },
@@ -1004,6 +1033,7 @@ export function generateOuterChunk(
   }
 
   // Stamp Landmark POI inside this chunk
+  let protectedBounds: { x0: number; y0: number; x1: number; y1: number } | null = null;
   if (poi) {
     const h = hashCoords(store.seed + 2029, poi.gx, poi.gy);
     if (poi.kind === 'pileup') {
@@ -1125,7 +1155,7 @@ export function generateOuterChunk(
         });
       }
 
-      // Compact brick guardhouse tucked beside checkpoint shoulder (gx + 4..8, gy - 6..-2)
+      // Compact brick guardhouse tucked beside checkpoint shoulder (gx + 3..7, gy - 6..-2)
       const guardhouse: BuildingSpec = {
         x0: poi.gx + 3,
         y0: poi.gy - 6,
@@ -1133,6 +1163,7 @@ export function generateOuterChunk(
         h: 5,
         wallType: 'wall_brick',
         floorType: 'tile_clinic',
+        porch: { x0: poi.gx + 4, y0: poi.gy - 1, w: 3, h: 1 },
         doors: [{ gx: poi.gx + 5, gy: poi.gy - 2, orientation: 'ew', status: 'locked' }],
         props: [
           {
@@ -1150,6 +1181,22 @@ export function generateOuterChunk(
             lootItems: { ammo_9mm: 8, ammo_shell: 4, fuel: 1 },
           },
         ],
+      };
+      for (let y = guardhouse.y0 - 1; y <= guardhouse.y0 + guardhouse.h + 1; y++) {
+        for (let x = guardhouse.x0 - 1; x <= guardhouse.x0 + guardhouse.w; x++) {
+          setLocal(x, y, (cell) => {
+            if (cell.tile === 'water') cell.tile = 'dirt';
+            cell.prop = 'none';
+            cell.solid = false;
+            cell.blocksSight = false;
+          });
+        }
+      }
+      protectedBounds = {
+        x0: guardhouse.x0 - 1,
+        y0: guardhouse.y0 - 1,
+        x1: guardhouse.x0 + guardhouse.w,
+        y1: guardhouse.y0 + guardhouse.h + 1,
       };
       applyBuildingToSetter(setLocal, guardhouse, doors, containers);
 
@@ -1268,7 +1315,7 @@ export function generateOuterChunk(
               if (dNorm <= 1.0) {
                 cell.tile = 'water';
                 cell.prop = 'none';
-                cell.solid = true;
+                cell.solid = false;
                 cell.blocksSight = false;
               } else if (dNorm <= 1.35) {
                 cell.tile = 'sand';
@@ -1292,9 +1339,14 @@ export function generateOuterChunk(
     } else {
       // Varied Multi-Room Building (clinic, diner, outpost, cabin)
       const spec = createBuildingSpecForLandmark(poi, store.seed);
-      // Clear 1-tile exterior apron so porch & doors are always unobstructed
-      for (let y = spec.y0 - 1; y <= spec.y0 + spec.h + 1; y++) {
-        for (let x = spec.x0 - 1; x <= spec.x0 + spec.w + 1; x++) {
+      const apronMinX = Math.min(spec.x0, spec.porch ? spec.porch.x0 : spec.x0) - 1;
+      const apronMinY = Math.min(spec.y0, spec.porch ? spec.porch.y0 : spec.y0) - 1;
+      const apronMaxX = Math.max(spec.x0 + spec.w - 1, spec.porch ? spec.porch.x0 + spec.porch.w - 1 : spec.x0) + 1;
+      const apronMaxY = Math.max(spec.y0 + spec.h - 1, spec.porch ? spec.porch.y0 + spec.porch.h - 1 : spec.y0) + 1;
+      protectedBounds = { x0: apronMinX, y0: apronMinY, x1: apronMaxX, y1: apronMaxY };
+      // Clear exterior apron so porch & doors are always unobstructed
+      for (let y = apronMinY; y <= apronMaxY; y++) {
+        for (let x = apronMinX; x <= apronMaxX; x++) {
           setLocal(x, y, (cell) => {
             if (cell.tile === 'water') cell.tile = 'dirt';
             cell.prop = 'none';
@@ -1323,7 +1375,7 @@ export function generateOuterChunk(
           const dNorm = ((gx - lakeCX) / rxLake) ** 2 + ((gy - lakeCY) / ryLake) ** 2;
           if (dNorm <= 1.0) {
             cells[ly][lx].tile = 'water';
-            cells[ly][lx].solid = true;
+            cells[ly][lx].solid = false;
             cells[ly][lx].blocksSight = false;
           } else if (dNorm <= 1.35) {
             cells[ly][lx].tile = 'sand';
@@ -1371,6 +1423,15 @@ export function generateOuterChunk(
       }
 
       if (poi && Math.hypot(cell.gx - poi.gx, cell.gy - poi.gy) <= 6.2) {
+        continue;
+      }
+      if (
+        protectedBounds &&
+        cell.gx >= protectedBounds.x0 &&
+        cell.gx <= protectedBounds.x1 &&
+        cell.gy >= protectedBounds.y0 &&
+        cell.gy <= protectedBounds.y1
+      ) {
         continue;
       }
 

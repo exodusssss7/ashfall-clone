@@ -329,7 +329,47 @@ export class SurvivalEngine {
     return getWorldCell(this.worldStore, gx, gy);
   }
 
-  private streamChunksAround(wx: number, wy: number, radiusChunks = 2): void {
+  private registerChunkSpawns(spawned: {
+    containers: LootContainer[];
+    structures: WorldStructure[];
+    vehicles: Vehicle[];
+    doors: DoorEntity[];
+  }): void {
+    for (const c of spawned.containers) {
+      if (!this.containers.some((existing) => existing.id === c.id)) {
+        this.containers.push(c);
+      }
+    }
+    for (const s of spawned.structures) {
+      if (!this.structures.some((existing) => existing.id === s.id)) {
+        this.structures.push(s);
+      }
+    }
+    for (const v of spawned.vehicles) {
+      if (!this.vehicles.some((existing) => existing.id === v.id)) {
+        this.vehicles.push(v);
+      }
+    }
+    for (const d of spawned.doors) {
+      const dKey = `${d.gx}_${d.gy}`;
+      if (!this.doorByTile.has(dKey)) {
+        this.doors.push(d);
+        this.doorByTile.set(dKey, d);
+      }
+    }
+  }
+
+  private flushPendingChunkSpawns(): void {
+    const queue = this.worldStore?.pendingSpawns;
+    if (!queue || queue.length === 0) return;
+    while (queue.length > 0) {
+      const next = queue.shift()!;
+      this.registerChunkSpawns(next);
+    }
+  }
+
+  private streamChunksAround(wx: number, wy: number, radiusChunks = 3): void {
+    this.flushPendingChunkSpawns();
     const pcx = Math.floor(wx / CHUNK_SIZE);
     const pcy = Math.floor(wy / CHUNK_SIZE);
     for (let cy = pcy - radiusChunks; cy <= pcy + radiusChunks; cy++) {
@@ -337,15 +377,10 @@ export class SurvivalEngine {
         const key = `${cx},${cy}`;
         if (this.worldStore.populatedChunks.has(key)) continue;
         const spawned = generateChunk(this.worldStore, cx, cy, this.nextVehicleIdRef);
-        if (spawned.containers.length) this.containers.push(...spawned.containers);
-        if (spawned.structures.length) this.structures.push(...spawned.structures);
-        if (spawned.vehicles.length) this.vehicles.push(...spawned.vehicles);
-        for (const d of spawned.doors) {
-          this.doors.push(d);
-          this.doorByTile.set(`${d.gx}_${d.gy}`, d);
-        }
+        this.registerChunkSpawns(spawned);
       }
     }
+    this.flushPendingChunkSpawns();
   }
 
   private initWorld(titleMode: boolean, spawnOverride?: { x: number; y: number }): void {
@@ -354,7 +389,10 @@ export class SurvivalEngine {
     const world = generateWorld(1994);
     const effectiveSpawnX = spawnOverride ? spawnOverride.x : world.spawnX;
     const effectiveSpawnY = spawnOverride ? spawnOverride.y : world.spawnY;
+    this.nextVehicleIdRef = { nextId: 100 };
     this.worldStore = world.worldStore;
+    this.worldStore.pendingSpawns = [];
+    this.worldStore.nextVehicleIdRef = this.nextVehicleIdRef;
     this.containers = world.containers;
     this.structures = world.structures;
     this.vehicles = world.vehicles;
@@ -365,7 +403,6 @@ export class SurvivalEngine {
     }
     this.fishing = createIdleFishingState();
     this.actionVisual = null;
-    this.nextVehicleIdRef = { nextId: 100 };
     this.activeVehicleId = null;
     this.prevBoostActive = false;
     this.lastFogGX = -999999;
@@ -404,7 +441,7 @@ export class SurvivalEngine {
     this.statusBanner = titleMode ? null : 'DAY 1 · EXPLORE LAKE PIER, COOK AT STOVES & OUTLAST NIGHT';
     this.statusBannerTimer = titleMode ? 0 : 4.5;
 
-    this.streamChunksAround(effectiveSpawnX, effectiveSpawnY, 2);
+    this.streamChunksAround(effectiveSpawnX, effectiveSpawnY, 3);
 
     // Seed initial neighborhood zombies at safe distance (>= 13 tiles away from spawn)
     const initialSpots: Array<[number, number, ZombieArchetype]> = [
@@ -429,6 +466,7 @@ export class SurvivalEngine {
     this.camX = iso.sx;
     this.camY = iso.sy;
     this.revealFogAround(this.player.x, this.player.y, 9);
+    this.flushPendingChunkSpawns();
   }
 
   start(): void {
@@ -1425,6 +1463,7 @@ export class SurvivalEngine {
     }
 
     // Decay vehicle hit flashes
+    this.flushPendingChunkSpawns();
     for (const v of this.vehicles) {
       v.hitFlash = Math.max(0, v.hitFlash - dt);
     }
@@ -1658,7 +1697,7 @@ export class SurvivalEngine {
     if (fgx !== this.lastFogGX || fgy !== this.lastFogGY) {
       this.lastFogGX = fgx;
       this.lastFogGY = fgy;
-      this.streamChunksAround(next.x, next.y, 2);
+      this.streamChunksAround(next.x, next.y, 3);
       this.revealFogAround(next.x, next.y, next.headlightsOn ? 11 : 7);
     }
   }
@@ -1859,7 +1898,7 @@ export class SurvivalEngine {
     if (fgx !== this.lastFogGX || fgy !== this.lastFogGY) {
       this.lastFogGX = fgx;
       this.lastFogGY = fgy;
-      this.streamChunksAround(this.player.x, this.player.y, 2);
+      this.streamChunksAround(this.player.x, this.player.y, 3);
       this.revealFogAround(this.player.x, this.player.y, this.player.flashlightOn ? 10 : 6);
     }
 
@@ -3730,6 +3769,7 @@ export class SurvivalEngine {
       this.minimapTimer = 0;
       this.renderMinimap();
     }
+    this.flushPendingChunkSpawns();
   }
 
   private renderMinimap(): void {
