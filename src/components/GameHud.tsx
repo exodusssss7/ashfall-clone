@@ -50,6 +50,7 @@ interface GameHudProps {
   onRepairVehicle: () => void;
   onPrimaryInteract: () => void;
   onBarricadeDoor: () => void;
+  onOpenNavigation: () => void;
 }
 
 export const GameHud: React.FC<GameHudProps> = ({
@@ -76,6 +77,7 @@ export const GameHud: React.FC<GameHudProps> = ({
   onRepairVehicle,
   onPrimaryInteract,
   onBarricadeDoor,
+  onOpenNavigation,
 }) => {
   const cues = getActionCues(hud);
   const hpPct = Math.max(0, Math.min(100, (hud.hp / hud.maxHp) * 100));
@@ -341,14 +343,27 @@ export const GameHud: React.FC<GameHudProps> = ({
       <div className="flex items-end justify-between gap-2 md:gap-4">
         {/* Tactical Radar Minimap (hidden when touch controls occupy bottom-left thumb zone) */}
         {!touchEnabled && (
-          <div className="hidden sm:block hud-panel p-1.5">
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label="Open world navigation map"
+            onClick={(e) => {
+              e.currentTarget.blur();
+              onOpenNavigation();
+            }}
+            title="World Map & Landmarks [N]"
+            className="hidden sm:flex flex-col gap-1 hud-panel p-1.5 pointer-events-auto cursor-pointer text-left hover:border-[#70d9ff] transition-colors"
+          >
             <canvas
               ref={minimapRef}
               width={112}
               height={112}
               className="block pixelated w-[112px] h-[112px]"
             />
-          </div>
+            <span className="text-[9px] font-telemetry tracking-wider text-[#c7c2b6] truncate max-w-[112px]">
+              {hud.currentBiomeLabel}
+            </span>
+          </button>
         )}
 
         {/* Center Contextual Prompt + Build Bar + Hotbar or Vehicle Cockpit */}

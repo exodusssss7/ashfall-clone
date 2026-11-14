@@ -94,9 +94,17 @@ export function classifySurfaceMaterial(
     case 'desk':
     case 'fishing_post':
     case 'tv_stand':
+    case 'tent':
+    case 'fallen_log':
       return 'wood';
+    case 'rock_boulder':
+      return 'stone';
+    case 'sandbag_wall':
+      return 'dirt';
     case 'car_sedan':
     case 'car_police':
+    case 'wrecked_car':
+    case 'road_sign':
     case 'crate_military':
     case 'fridge':
     case 'med_cabinet':
@@ -120,9 +128,14 @@ export function classifySurfaceMaterial(
     case 'floor_porch':
       return 'wood';
     case 'grass':
+    case 'forest_floor':
     case 'dirt':
+    case 'gravel':
+    case 'mud':
+    case 'sand':
       return 'dirt';
     case 'road':
+    case 'asphalt_cracked':
     case 'sidewalk':
     case 'crosswalk':
     case 'floor_bath':
@@ -255,6 +268,18 @@ function getPropBounds(
       return { minX: gx + 0.14, maxX: gx + 0.86, minY: gy + 0.24, maxY: gy + 0.76, minZ: 0, maxZ: 0.78 };
     case 'fishing_post':
       return { minX: gx + 0.39, maxX: gx + 0.61, minY: gy + 0.39, maxY: gy + 0.61, minZ: 0, maxZ: 0.90 };
+    case 'tent':
+      return { minX: gx + 0.08, maxX: gx + 0.92, minY: gy + 0.08, maxY: gy + 0.92, minZ: 0, maxZ: 0.88 };
+    case 'rock_boulder':
+      return { minX: gx + 0.12, maxX: gx + 0.88, minY: gy + 0.14, maxY: gy + 0.86, minZ: 0, maxZ: 0.72 };
+    case 'fallen_log':
+      return { minX: gx + 0.06, maxX: gx + 0.94, minY: gy + 0.24, maxY: gy + 0.76, minZ: 0, maxZ: 0.42 };
+    case 'road_sign':
+      return { minX: gx + 0.43, maxX: gx + 0.57, minY: gy + 0.43, maxY: gy + 0.57, minZ: 0, maxZ: 1.48 };
+    case 'wrecked_car':
+      return { minX: gx + 0.04, maxX: gx + 0.96, minY: gy + 0.10, maxY: gy + 0.90, minZ: 0, maxZ: 0.82 };
+    case 'sandbag_wall':
+      return { minX: gx + 0.04, maxX: gx + 0.96, minY: gy + 0.22, maxY: gy + 0.78, minZ: 0, maxZ: 0.56 };
     default:
       return null;
   }

@@ -724,6 +724,116 @@ export class ThreeModelFactory {
       return g;
     }
 
+    if (kind === 'tent') {
+      this.addContactShadow(g, 1.08, 1.08);
+      const canvasMat = this.getMat(0xffffff, { map: this.atlas.tentTex, roughness: 0.92 });
+      const darkCanvas = this.getMat('#36402a', { roughness: 0.94 });
+      const doorVoid = this.getMat('#151714', { roughness: 0.96 });
+      const stake = this.getMat(0xffffff, { map: this.atlas.woodDarkTex, roughness: 0.9 });
+      // Stepped A-frame pixel-art tent silhouette + dark entrance flap + ridge pole
+      g.add(this.box(0.88, 0.24, 0.88, canvasMat, 0, 0.12, 0));
+      g.add(this.box(0.68, 0.24, 0.86, canvasMat, 0, 0.36, 0));
+      g.add(this.box(0.46, 0.22, 0.84, canvasMat, 0, 0.59, 0));
+      g.add(this.box(0.24, 0.16, 0.82, darkCanvas, 0, 0.78, 0));
+      g.add(this.box(0.08, 0.08, 0.94, stake, 0, 0.87, 0));
+      g.add(this.box(0.32, 0.44, 0.05, doorVoid, 0, 0.22, 0.43, false, false));
+      return g;
+    }
+
+    if (kind === 'rock_boulder') {
+      this.addContactShadow(g, 0.94, 0.94);
+      const rockMat = this.getMat(0xffffff, { map: this.atlas.rockTex, roughness: 0.94 });
+      const darkRock = this.getMat('#44494d', { roughness: 0.96 });
+      g.add(this.box(0.76, 0.32, 0.68, darkRock, 0, 0.16, 0));
+      g.add(this.box(0.58, 0.26, 0.54, rockMat, -0.05, 0.42, 0.04));
+      g.add(this.box(0.36, 0.18, 0.34, rockMat, -0.08, 0.60, 0.02));
+      g.add(this.box(0.28, 0.22, 0.26, darkRock, 0.22, 0.22, -0.18));
+      return g;
+    }
+
+    if (kind === 'fallen_log') {
+      this.addContactShadow(g, 1.04, 0.62);
+      const barkMat = this.getMat(0xffffff, { map: this.atlas.barkTex, roughness: 0.94 });
+      const endMat = this.getMat(0xffffff, { map: this.atlas.woodOakTex, roughness: 0.88 });
+      const mossMat = this.getMat('#3f5932', { roughness: 0.94 });
+      g.add(this.box(0.88, 0.30, 0.32, [endMat, endMat, barkMat, barkMat, barkMat, barkMat], 0, 0.15, 0));
+      g.add(this.box(0.52, 0.06, 0.22, mossMat, -0.10, 0.31, 0.02));
+      const stub = this.box(0.18, 0.12, 0.12, barkMat, 0.24, 0.30, 0.14);
+      stub.rotation.z = -0.45;
+      g.add(stub);
+      return g;
+    }
+
+    if (kind === 'road_sign') {
+      this.addContactShadow(g, 0.42, 0.42);
+      const poleMat = this.getMat('#545c63', { roughness: 0.45, metalness: 0.72 });
+      const signMat = this.getMat(0xffffff, { map: this.atlas.roadSignTex, roughness: 0.52, metalness: 0.3 });
+      g.add(this.box(0.24, 0.08, 0.24, poleMat, 0, 0.04, 0));
+      g.add(this.box(0.08, 1.18, 0.08, poleMat, 0, 0.63, 0));
+      const board = this.box(0.38, 0.38, 0.06, signMat, 0, 1.24, 0.04);
+      board.rotation.z = Math.PI * 0.25;
+      g.add(board);
+      return g;
+    }
+
+    if (kind === 'wrecked_car') {
+      this.addContactShadow(g, 1.56, 1.04);
+      const hullMat = this.getMat(0xffffff, { map: this.atlas.wreckedCarTex, roughness: 0.78, metalness: 0.42 });
+      const charMat = this.getMat('#211f1e', { roughness: 0.94, metalness: 0.22 });
+      const rustMat = this.getMat('#6b3922', { roughness: 0.86, metalness: 0.35 });
+      const tireMat = this.getMat('#111315', { roughness: 0.92 });
+      const rimMat = this.getMat('#544842', { roughness: 0.68, metalness: 0.55 });
+      const glassMat = this.getMat('#222a30', { roughness: 0.32, metalness: 0.25 });
+
+      g.rotation.y = 0.24;
+      // Main lower body shell + charred front/rear bumpers
+      g.add(this.box(1.26, 0.28, 0.72, hullMat, 0, 0.21, 0));
+      g.add(this.box(0.08, 0.11, 0.76, charMat, 0.64, 0.14, 0));
+      g.add(this.box(0.08, 0.11, 0.76, charMat, -0.64, 0.14, 0));
+
+      // Four distinct burned-out wheels & rusted rims
+      for (const wx of [-0.38, 0.38]) {
+        for (const wz of [-0.34, 0.34]) {
+          g.add(this.box(0.28, 0.28, 0.12, tireMat, wx, 0.14, wz));
+          g.add(this.box(0.14, 0.14, 0.13, rimMat, wx, 0.14, wz, false, false));
+        }
+      }
+
+      // Exposed engine bay & popped hood
+      g.add(this.box(0.24, 0.14, 0.38, charMat, 0.40, 0.33, 0));
+      const hood = this.box(0.38, 0.05, 0.64, rustMat, 0.42, 0.39, 0);
+      hood.rotation.z = 0.22;
+      g.add(hood);
+
+      // Crushed cabin pillars, shattered dark interior & dented roof panel
+      g.add(this.box(0.48, 0.22, 0.56, glassMat, -0.06, 0.46, 0));
+      for (const px of [-0.28, 0.16]) {
+        for (const pz of [-0.28, 0.28]) {
+          g.add(this.box(0.07, 0.28, 0.07, rustMat, px, 0.49, pz));
+        }
+      }
+      const roof = this.box(0.50, 0.06, 0.64, hullMat, -0.06, 0.63, 0);
+      roof.rotation.z = -0.05;
+      g.add(roof);
+
+      // Slightly ajar rear trunk deck
+      const trunk = this.box(0.26, 0.05, 0.64, rustMat, -0.49, 0.37, 0);
+      trunk.rotation.z = -0.14;
+      g.add(trunk);
+      return g;
+    }
+
+    if (kind === 'sandbag_wall') {
+      this.addContactShadow(g, 1.0, 0.56);
+      const bagMat = this.getMat(0xffffff, { map: this.atlas.sandbagTex, roughness: 0.94 });
+      const stake = this.getMat(0xffffff, { map: this.atlas.woodDarkTex, roughness: 0.9 });
+      g.add(this.box(0.92, 0.26, 0.46, bagMat, 0, 0.13, 0));
+      g.add(this.box(0.84, 0.24, 0.36, bagMat, 0, 0.38, 0));
+      g.add(this.box(0.08, 0.58, 0.08, stake, -0.38, 0.29, 0.14));
+      g.add(this.box(0.08, 0.58, 0.08, stake, 0.38, 0.29, 0.14));
+      return g;
+    }
+
     return g;
   }
 

@@ -13,7 +13,12 @@ export type TileKind =
   | 'pier'
   | 'crosswalk'
   | 'tile_clinic'
-  | 'tile_diner';
+  | 'tile_diner'
+  | 'forest_floor'
+  | 'gravel'
+  | 'mud'
+  | 'sand'
+  | 'asphalt_cracked';
 
 export type PropKind =
   | 'none'
@@ -44,7 +49,29 @@ export type PropKind =
   | 'bookshelf'
   | 'desk'
   | 'sink_toilet'
-  | 'tv_stand';
+  | 'tv_stand'
+  | 'tent'
+  | 'rock_boulder'
+  | 'fallen_log'
+  | 'road_sign'
+  | 'wrecked_car'
+  | 'sandbag_wall';
+
+export type BiomeKind =
+  | 'town_edge'
+  | 'pine_forest'
+  | 'river_valley'
+  | 'scorched_barrens'
+  | 'rural_meadow';
+
+export type LandmarkKind =
+  | 'pileup'
+  | 'checkpoint'
+  | 'campground'
+  | 'clinic'
+  | 'diner'
+  | 'outpost'
+  | 'cabin';
 
 export type StructureKind = 'barricade' | 'spike_trap' | 'campfire';
 
@@ -95,10 +122,26 @@ export interface WorldChunk {
   cells: TileCell[][];
 }
 
+export interface WorldLandmark {
+  id: string;
+  kind: LandmarkKind;
+  name: string;
+  biome: BiomeKind;
+  gx: number;
+  gy: number;
+  radius: number;
+  threatLevel: 'low' | 'medium' | 'high';
+  discovered: boolean;
+  hotspotSpawned: boolean;
+  hotspotCleared: boolean;
+  hotspotPacks: ZombieArchetype[];
+}
+
 export interface WorldStore {
   seed: number;
   chunks: Map<string, WorldChunk>;
   populatedChunks: Set<string>;
+  landmarks: Map<string, WorldLandmark>;
 }
 
 export type DoorStatus = 'closed' | 'open' | 'locked' | 'barricaded';
@@ -419,4 +462,15 @@ export interface HudSnapshot {
     repairCost: number;
   } | null;
   statusBanner: string | null;
+  currentBiomeLabel: string;
+  discoveredLandmarks: Array<{
+    id: string;
+    name: string;
+    kind: LandmarkKind;
+    x: number;
+    y: number;
+    threatLevel: 'low' | 'medium' | 'high';
+    hotspotActive: boolean;
+    hotspotCleared: boolean;
+  }>;
 }

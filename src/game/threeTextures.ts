@@ -129,6 +129,40 @@ export function buildSquareTileCanvas(kind: TileKind, variant: number): HTMLCanv
         if (rail) col = '#3d2a1b';
         else if (plankSeam) col = '#2a1d13';
         else col = r < 0.28 ? '#875f3d' : r < 0.76 ? '#704d30' : '#593b24';
+      } else if (kind === 'forest_floor') {
+        if (r < 0.14) col = '#2d3b22';
+        else if (r < 0.36) col = '#3b2e21';
+        else if (r < 0.74) col = '#2d241a';
+        else col = '#211c14';
+        if (r > 0.91 && (x + y) % 2 === 0) col = '#57452f'; // pine needles
+        if (variant === 2 && r < 0.06) col = '#405731'; // moss fleck
+      } else if (kind === 'gravel') {
+        if (r < 0.16) col = '#717578';
+        else if (r < 0.48) col = '#5a5e61';
+        else if (r < 0.80) col = '#484b4e';
+        else col = '#36393b';
+        if ((x * 3 + y * 5 + variant) % 11 === 0 && r > 0.6) col = '#83878a';
+      } else if (kind === 'mud') {
+        if (r < 0.18) col = '#3a2b20';
+        else if (r < 0.56) col = '#2e2118';
+        else if (r < 0.88) col = '#241a12';
+        else col = '#1b140f';
+        if (variant === 1 && x >= 4 && x <= 10 && y >= 5 && y <= 9 && r < 0.42) col = '#2b3b42'; // shallow puddle glint
+      } else if (kind === 'sand') {
+        if (r < 0.16) col = '#ab956b';
+        else if (r < 0.52) col = '#968059';
+        else if (r < 0.86) col = '#806c49';
+        else col = '#69583c';
+        if (r > 0.94) col = '#baa57a';
+      } else if (kind === 'asphalt_cracked') {
+        const crack =
+          Math.abs(x - y - (variant - 1) * 3) <= 0.6 ||
+          (x >= 5 && x <= 12 && Math.abs(y - 9 + (x % 3)) <= 0.5);
+        if (crack) col = '#101214';
+        else if (r < 0.14) col = '#32363b';
+        else if (r < 0.58) col = '#25292e';
+        else col = '#1d2024';
+        if (crack && r > 0.72) col = '#3d472e'; // weed sprout in crack
       }
 
       ctx.fillStyle = col;
@@ -1063,6 +1097,75 @@ function buildWeaponTextures() {
   };
 }
 
+function buildTentCanvasTexture(): THREE.CanvasTexture {
+  const [c, ctx] = makePixelCanvas(16, 16);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const edge = x === 0 || x === 15 || y === 0 || y === 15;
+      const seam = x === 8 || y === 5 || y === 11;
+      const stripe = y === 13 || y === 14;
+      let col = (x + y) % 3 === 0 ? '#5c6b47' : '#4d5c3b';
+      if (edge) col = '#262e1e';
+      else if (seam) col = '#354028';
+      else if (stripe) col = '#8c693a';
+      ctx.fillStyle = col;
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+  return toNearestTexture(c);
+}
+
+function buildRockGraniteTexture(): THREE.CanvasTexture {
+  const [c, ctx] = makePixelCanvas(16, 16);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const n = (x * 13 + y * 23) % 7;
+      const crack = (x === 5 && y >= 3 && y <= 11) || (y === 9 && x >= 5 && x <= 12);
+      let col = n < 2 ? '#787e82' : n < 5 ? '#5c6266' : '#454a4e';
+      if (crack) col = '#282c2e';
+      else if (y <= 3 && n === 0) col = '#4f6642'; // top moss
+      ctx.fillStyle = col;
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+  return toNearestTexture(c);
+}
+
+function buildRoadSignTexture(): THREE.CanvasTexture {
+  const [c, ctx] = makePixelCanvas(16, 16);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const border = x === 0 || y === 0 || x === 15 || y === 15;
+      const innerBorder = x === 1 || y === 1 || x === 14 || y === 14;
+      const rust = (x * 7 + y * 13) % 11 === 0;
+      const exclaim = (x >= 7 && x <= 8 && y >= 4 && y <= 9) || (x >= 7 && x <= 8 && y >= 11 && y <= 12);
+      let col = '#d9a434';
+      if (border) col = '#26221a';
+      else if (innerBorder || exclaim) col = '#1b1d1f';
+      else if (rust) col = '#7a4a24';
+      ctx.fillStyle = col;
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+  return toNearestTexture(c);
+}
+
+function buildWreckedCarTexture(): THREE.CanvasTexture {
+  const [c, ctx] = makePixelCanvas(24, 10);
+  drawPixelRect(ctx, 0, 0, 24, 10, '#181615');
+  drawPixelRect(ctx, 1, 1, 22, 7, '#5c5957');
+  drawPixelRect(ctx, 1, 1, 22, 1, '#736c67');
+  // Rust & scorch streaks across doors and fenders
+  drawPixelRect(ctx, 2, 3, 5, 3, '#6e3b24');
+  drawPixelRect(ctx, 14, 2, 6, 4, '#292524');
+  drawPixelRect(ctx, 16, 4, 5, 3, '#733e26');
+  // Door seam & charred rocker panel
+  drawPixelRect(ctx, 8, 1, 1, 7, '#1b1817');
+  drawPixelRect(ctx, 15, 1, 1, 7, '#1b1817');
+  drawPixelRect(ctx, 0, 8, 24, 2, '#1f1c1b');
+  return toNearestTexture(c);
+}
+
 export class ThreePixelAtlas {
   public readonly tileCanvases = new Map<string, HTMLCanvasElement>();
   public readonly wallSideTextures = new Map<string, THREE.CanvasTexture>();
@@ -1098,6 +1201,10 @@ export class ThreePixelAtlas {
   public readonly ceilingTex: THREE.CanvasTexture;
   public readonly weaponTex: ReturnType<typeof buildWeaponTextures>;
   public readonly contactShadowTex: THREE.CanvasTexture;
+  public readonly tentTex: THREE.CanvasTexture;
+  public readonly rockTex: THREE.CanvasTexture;
+  public readonly roadSignTex: THREE.CanvasTexture;
+  public readonly wreckedCarTex: THREE.CanvasTexture;
 
   private allTextures: THREE.Texture[] = [];
 
@@ -1116,6 +1223,11 @@ export class ThreePixelAtlas {
       'crosswalk',
       'tile_clinic',
       'tile_diner',
+      'forest_floor',
+      'gravel',
+      'mud',
+      'sand',
+      'asphalt_cracked',
     ];
     for (const kind of tileKinds) {
       for (let v = 0; v < 4; v++) {
@@ -1216,6 +1328,10 @@ export class ThreePixelAtlas {
     this.track(this.weaponTex.molotovGlass);
     this.track(this.weaponTex.glove);
     this.contactShadowTex = this.track(buildSoftContactShadowTexture());
+    this.tentTex = this.track(buildTentCanvasTexture());
+    this.rockTex = this.track(buildRockGraniteTexture());
+    this.roadSignTex = this.track(buildRoadSignTexture());
+    this.wreckedCarTex = this.track(buildWreckedCarTexture());
   }
 
   private track<T extends THREE.Texture>(tex: T): T {

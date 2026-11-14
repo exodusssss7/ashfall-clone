@@ -1,10 +1,20 @@
 import { CHUNK_SIZE, MAP_SIZE, angleDiff, clamp, dist, readCellFromSource } from './isometric';
 import type { CellSource } from './isometric';
 import { STRUCTURES } from './recipes';
+import {
+  applyBuildingToSetter,
+  applyDoorCellState,
+  chunkKey,
+  createDoorEntity,
+  createRng,
+  generateOuterChunk,
+  hashCoords,
+  isOriginSectorChunk,
+} from './worldGen';
+import type { BuildingSpec } from './worldGen';
 import type {
   ConsumableItemId,
   DoorEntity,
-  DoorStatus,
   FishingState,
   Inventory,
   ItemId,
@@ -13,12 +23,13 @@ import type {
   PropKind,
   StructureKind,
   TileCell,
-  TileKind,
   Vehicle,
   WorldChunk,
   WorldStore,
   WorldStructure,
 } from './types';
+
+export { chunkKey, createDoorEntity, createRng };
 
 export const VEHICLE_REPAIR_SCRAP_COST = 2;
 
@@ -93,68 +104,12 @@ export function createIdleFishingState(): FishingState {
   };
 }
 
-/**
- * Deterministic PRNG (Mulberry32) so chunks and unit tests are reproducible.
- */
-export function createRng(seed: number): () => number {
-  let t = seed >>> 0;
-  return () => {
-    t += 0x6d2b79f5;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function hashCoords(seed: number, x: number, y: number): number {
-  let h = (seed ^ Math.imul(x, 374761393) ^ Math.imul(y, 668265263)) >>> 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
-  return (h ^ (h >>> 16)) >>> 0;
-}
-
-export function chunkKey(cx: number, cy: number): string {
-  return `${cx},${cy}`;
-}
-
 export interface ChunkSpawnResult {
   chunk: WorldChunk;
   containers: LootContainer[];
   structures: WorldStructure[];
   vehicles: Vehicle[];
   doors: DoorEntity[];
-}
-
-function applyDoorCellState(cell: TileCell, status: DoorStatus): void {
-  cell.prop = 'door';
-  if (status === 'open') {
-    cell.solid = false;
-    cell.blocksSight = false;
-  } else {
-    cell.solid = true;
-    cell.blocksSight = true;
-  }
-}
-
-export function createDoorEntity(
-  gx: number,
-  gy: number,
-  orientation: 'ns' | 'ew',
-  status: DoorStatus = 'closed'
-): DoorEntity {
-  return {
-    id: `door_${gx}_${gy}`,
-    gx,
-    gy,
-    orientation,
-    status,
-    openProgress: status === 'open' ? 1 : 0,
-    hp: 85,
-    maxHp: 85,
-    barricadeHp: status === 'barricaded' ? 180 : 0,
-    maxBarricadeHp: 180,
-    lockpickProgress: 0,
-    hitFlash: 0,
-  };
 }
 
 function isOriginTownCoord(gx: number, gy: number): boolean {
@@ -211,208 +166,6 @@ function createBaseCell(seed: number, gx: number, gy: number): TileCell {
   return cell;
 }
 
-interface RoomZoneSpec {
-  x0: number;
-  y0: number;
-  w: number;
-  h: number;
-  floorType: TileKind;
-  rug?: { x0: number; y0: number; w: number; h: number };
-}
-
-interface PartitionSpec {
-  x0: number;
-  y0: number;
-  x1: number;
-  y1: number;
-}
-
-interface BuildingDoorSpec {
-  gx: number;
-  gy: number;
-  orientation: 'ns' | 'ew';
-  status: DoorStatus;
-}
-
-interface BuildingPropSpec {
-  gx: number;
-  gy: number;
-  prop: PropKind;
-  lootKind?: LootContainer['kind'];
-  lootItems?: Partial<Inventory>;
-}
-
-interface BuildingSpec {
-  x0: number;
-  y0: number;
-  w: number;
-  h: number;
-  wallType: 'wall_brick' | 'wall_wood';
-  floorType: TileKind;
-  doors: BuildingDoorSpec[];
-  archways?: Array<{ gx: number; gy: number }>;
-  partitions?: PartitionSpec[];
-  rooms?: RoomZoneSpec[];
-  porch?: { x0: number; y0: number; w: number; h: number };
-  props: BuildingPropSpec[];
-}
-
-function applyBuildingToSetter(
-  setCellProp: (
-    gx: number,
-    gy: number,
-    fn: (cell: TileCell) => void
-  ) => void,
-  b: BuildingSpec,
-  doors: DoorEntity[],
-  containers: LootContainer[],
-  doorRegistry?: Set<string>
-): void {
-  const midX = b.x0 + Math.floor(b.w / 2);
-  const midY = b.y0 + Math.floor(b.h / 2);
-
-  // Optional exterior wooden porch outside entrance
-  if (b.porch) {
-    for (let y = b.porch.y0; y < b.porch.y0 + b.porch.h; y++) {
-      for (let x = b.porch.x0; x < b.porch.x0 + b.porch.w; x++) {
-        setCellProp(x, y, (cell) => {
-          cell.tile = 'floor_porch';
-          cell.prop = 'none';
-          cell.solid = false;
-          cell.blocksSight = false;
-        });
-      }
-    }
-  }
-
-  // Base footprint & exterior perimeter walls
-  const doorCoordSet = new Set(b.doors.map((d) => `${d.gx}_${d.gy}`));
-  for (let y = b.y0; y < b.y0 + b.h; y++) {
-    for (let x = b.x0; x < b.x0 + b.w; x++) {
-      const isEdge = x === b.x0 || x === b.x0 + b.w - 1 || y === b.y0 || y === b.y0 + b.h - 1;
-      setCellProp(x, y, (cell) => {
-        cell.tile = b.floorType;
-        cell.prop = 'none';
-        cell.solid = false;
-        cell.blocksSight = false;
-
-        if (isEdge && !doorCoordSet.has(`${x}_${y}`)) {
-          cell.prop = b.wallType;
-          cell.solid = true;
-          cell.blocksSight = true;
-          const isCorner = (x === b.x0 || x === b.x0 + b.w - 1) && (y === b.y0 || y === b.y0 + b.h - 1);
-          const nearDoor = b.doors.some((d) => Math.abs(d.gx - x) <= 1 && Math.abs(d.gy - y) <= 1);
-          if (
-            !isCorner &&
-            !nearDoor &&
-            ((Math.abs(x - midX) === 2 && (y === b.y0 || y === b.y0 + b.h - 1)) ||
-              (Math.abs(y - midY) === 2 && (x === b.x0 || x === b.x0 + b.w - 1)) ||
-              (x === midX && (y === b.y0 || y === b.y0 + b.h - 1)) ||
-              (y === midY && (x === b.x0 || x === b.x0 + b.w - 1)))
-          ) {
-            cell.variant = 2; // boarded window
-          }
-        }
-      });
-    }
-  }
-
-  // Paint room-specific floor tiles & woven rugs inside interior bounds
-  if (b.rooms) {
-    for (const room of b.rooms) {
-      for (let y = room.y0; y < room.y0 + room.h; y++) {
-        for (let x = room.x0; x < room.x0 + room.w; x++) {
-          if (x <= b.x0 || x >= b.x0 + b.w - 1 || y <= b.y0 || y >= b.y0 + b.h - 1) continue;
-          setCellProp(x, y, (cell) => {
-            if (cell.prop === 'none') {
-              cell.tile = room.floorType;
-            }
-          });
-        }
-      }
-      if (room.rug) {
-        for (let y = room.rug.y0; y < room.rug.y0 + room.rug.h; y++) {
-          for (let x = room.rug.x0; x < room.rug.x0 + room.rug.w; x++) {
-            if (x <= b.x0 || x >= b.x0 + b.w - 1 || y <= b.y0 || y >= b.y0 + b.h - 1) continue;
-            setCellProp(x, y, (cell) => {
-              if (cell.prop === 'none') {
-                cell.tile = 'floor_rug';
-              }
-            });
-          }
-        }
-      }
-    }
-  }
-
-  // Interior partition walls separating rooms
-  if (b.partitions) {
-    for (const part of b.partitions) {
-      const minX = Math.min(part.x0, part.x1);
-      const maxX = Math.max(part.x0, part.x1);
-      const minY = Math.min(part.y0, part.y1);
-      const maxY = Math.max(part.y0, part.y1);
-      for (let y = minY; y <= maxY; y++) {
-        for (let x = minX; x <= maxX; x++) {
-          const isOuterEdge = x === b.x0 || x === b.x0 + b.w - 1 || y === b.y0 || y === b.y0 + b.h - 1;
-          if (isOuterEdge || doorCoordSet.has(`${x}_${y}`)) continue;
-          setCellProp(x, y, (cell) => {
-            cell.prop = 'wall_interior';
-            cell.solid = true;
-            cell.blocksSight = true;
-          });
-        }
-      }
-    }
-  }
-
-  // Open interior archways connecting adjoining rooms
-  if (b.archways) {
-    for (const arch of b.archways) {
-      setCellProp(arch.gx, arch.gy, (cell) => {
-        cell.prop = 'none';
-        cell.solid = false;
-        cell.blocksSight = false;
-      });
-    }
-  }
-
-  // Exterior & interior swingable doors
-  for (const d of b.doors) {
-    setCellProp(d.gx, d.gy, (cell) => {
-      applyDoorCellState(cell, d.status);
-      const dKey = `${d.gx}_${d.gy}`;
-      if (!doorRegistry || !doorRegistry.has(dKey)) {
-        doorRegistry?.add(dKey);
-        doors.push(createDoorEntity(d.gx, d.gy, d.orientation, d.status));
-      }
-    });
-  }
-
-  // Interior furniture & loot containers
-  for (const item of b.props) {
-    setCellProp(item.gx, item.gy, (cell) => {
-      if (!cell.solid && cell.prop === 'none') {
-        cell.prop = item.prop;
-        cell.solid = true;
-        cell.blocksSight = false;
-        if (item.lootKind && item.lootItems) {
-          containers.push({
-            id: `c_${item.gx}_${item.gy}`,
-            gx: item.gx,
-            gy: item.gy,
-            kind: item.lootKind,
-            items: { ...item.lootItems },
-            searched: false,
-            searchProgress: 0,
-            openAnim: 0,
-          });
-        }
-      }
-    });
-  }
-}
-
 export interface GeneratedWorld {
   grid: TileCell[][];
   worldStore: WorldStore;
@@ -439,10 +192,13 @@ export function generateChunk(
     return { chunk: existing, containers: [], structures: [], vehicles: [], doors: [] };
   }
 
+  if (!isOriginSectorChunk(cx, cy)) {
+    return generateOuterChunk(store, cx, cy, nextVehicleIdRef);
+  }
+
   const cells: TileCell[][] = [];
   const startGX = cx * CHUNK_SIZE;
   const startGY = cy * CHUNK_SIZE;
-
   for (let ly = 0; ly < CHUNK_SIZE; ly++) {
     const row: TileCell[] = [];
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -455,312 +211,7 @@ export function generateChunk(
   store.chunks.set(key, chunk);
   store.populatedChunks.add(key);
 
-  const containers: LootContainer[] = [];
-  const structures: WorldStructure[] = [];
-  const vehicles: Vehicle[] = [];
-  const doors: DoorEntity[] = [];
-
-  // Origin chunks (0..3, 0..3) are populated cleanly by seedOriginTown() on world creation.
-  if (cx >= 0 && cx <= 3 && cy >= 0 && cy <= 3) {
-    return { chunk, containers, structures, vehicles, doors };
-  }
-
-  const rng = createRng(hashCoords(store.seed + 719, cx, cy));
-  const setLocal = (gx: number, gy: number, fn: (c: TileCell) => void) => {
-    const lx = gx - startGX;
-    const ly = gy - startGY;
-    if (lx >= 0 && lx < CHUNK_SIZE && ly >= 0 && ly < CHUNK_SIZE) {
-      fn(cells[ly][lx]);
-    }
-  };
-
-  // Detect if chunk contains a major highway corridor (mod56 in 24..32)
-  let hasRoadInside = false;
-  for (let ly = 2; ly < CHUNK_SIZE - 2; ly++) {
-    for (let lx = 2; lx < CHUNK_SIZE - 2; lx++) {
-      const mx = mod56(startGX + lx);
-      const my = mod56(startGY + ly);
-      if ((mx >= 24 && mx <= 32) || (my >= 24 && my <= 32)) {
-        hasRoadInside = true;
-      }
-    }
-  }
-
-  const biomeRoll = rng();
-
-  if (!hasRoadInside && biomeRoll < 0.30) {
-    // Lakeside Chunk with Wooden Fishing Pier!
-    const lakeCX = startGX + 8 + Math.floor((rng() - 0.5) * 2);
-    const lakeCY = startGY + 7 + Math.floor((rng() - 0.5) * 2);
-    const rx = 4.6 + rng() * 1.4;
-    const ry = 4.2 + rng() * 1.4;
-
-    for (let ly = 1; ly < CHUNK_SIZE - 1; ly++) {
-      for (let lx = 1; lx < CHUNK_SIZE - 1; lx++) {
-        const gx = startGX + lx;
-        const gy = startGY + ly;
-        const dNorm = ((gx - lakeCX) / rx) ** 2 + ((gy - lakeCY) / ry) ** 2;
-        if (dNorm <= 1.0) {
-          cells[ly][lx].tile = 'water';
-          cells[ly][lx].solid = true;
-          cells[ly][lx].blocksSight = false;
-        } else if (dNorm <= 1.38) {
-          cells[ly][lx].tile = 'dirt';
-        }
-      }
-    }
-
-    // Wooden Pier stretching from southern bank into lake
-    const pierX = Math.round(lakeCX);
-    const shoreY = Math.min(startGY + CHUNK_SIZE - 2, Math.round(lakeCY + ry) + 1);
-    for (let py = Math.round(lakeCY + 1); py <= shoreY; py++) {
-      setLocal(pierX, py, (cell) => {
-        cell.tile = 'pier';
-        cell.prop = 'none';
-        cell.solid = false;
-        cell.blocksSight = false;
-      });
-    }
-    setLocal(pierX, shoreY, (cell) => {
-      if (cell.tile === 'pier') {
-        cell.prop = 'fishing_post';
-        cell.solid = true;
-        cell.blocksSight = false;
-      }
-    });
-    // Small tackle box on shore beside pier
-    setLocal(pierX + 1, shoreY, (cell) => {
-      if (!cell.solid && cell.tile !== 'water') {
-        cell.prop = 'crate_wood';
-        cell.solid = true;
-        containers.push({
-          id: `c_${pierX + 1}_${shoreY}`,
-          gx: pierX + 1,
-          gy: shoreY,
-          kind: 'crate_wood',
-          items: { wood: 2, water: 1, food: 1, raw_fish: 1 },
-          searched: false,
-          searchProgress: 0,
-          openAnim: 0,
-        });
-      }
-    });
-  } else if (!hasRoadInside && biomeRoll < 0.68) {
-    // Procedural Multi-Room Houses, Diners, Clinics & Ranger Cabins
-    const bx = startGX + 2;
-    const by = startGY + 3;
-    const variant = Math.floor(rng() * 4);
-    const spec: BuildingSpec =
-      variant === 0
-        ? {
-            // 3-Room Suburban House (Living Room, Kitchen, Bedroom)
-            x0: bx,
-            y0: by,
-            w: 12,
-            h: 10,
-            wallType: 'wall_wood',
-            floorType: 'floor',
-            porch: { x0: bx + 2, y0: by + 10, w: 3, h: 1 },
-            doors: [
-              { gx: bx + 3, gy: by + 9, orientation: 'ew', status: 'closed' },
-              { gx: bx + 6, gy: by + 3, orientation: 'ns', status: 'open' },
-              { gx: bx + 8, gy: by + 5, orientation: 'ew', status: 'closed' },
-            ],
-            partitions: [
-              { x0: bx + 6, y0: by + 1, x1: bx + 6, y1: by + 8 },
-              { x0: bx + 6, y0: by + 5, x1: bx + 10, y1: by + 5 },
-            ],
-            rooms: [
-              { x0: bx + 1, y0: by + 1, w: 5, h: 8, floorType: 'floor', rug: { x0: bx + 2, y0: by + 3, w: 3, h: 3 } },
-              { x0: bx + 7, y0: by + 1, w: 4, h: 4, floorType: 'tile_diner' },
-              { x0: bx + 7, y0: by + 6, w: 4, h: 3, floorType: 'floor', rug: { x0: bx + 8, y0: by + 7, w: 2, h: 1 } },
-            ],
-            props: [
-              { gx: bx + 1, gy: by + 2, prop: 'couch' },
-              { gx: bx + 5, gy: by + 2, prop: 'tv_stand' },
-              { gx: bx + 1, gy: by + 1, prop: 'bookshelf' },
-              { gx: bx + 1, gy: by + 8, prop: 'crate_wood', lootKind: 'crate_wood', lootItems: { wood: 3, scrap: 2, cloth: 1 } },
-              { gx: bx + 10, gy: by + 1, prop: 'stove' },
-              { gx: bx + 7, gy: by + 1, prop: 'fridge', lootKind: 'fridge', lootItems: { food: 2, water: 2, raw_fish: 1 } },
-              { gx: bx + 7, gy: by + 8, prop: 'bed' },
-              { gx: bx + 10, gy: by + 8, prop: 'desk' },
-            ],
-          }
-        : variant === 1
-          ? {
-              // 3-Room Rural Clinic & Pharmacy
-              x0: bx,
-              y0: by,
-              w: 12,
-              h: 10,
-              wallType: 'wall_brick',
-              floorType: 'tile_clinic',
-              porch: { x0: bx + 4, y0: by - 1, w: 3, h: 1 },
-              doors: [
-                { gx: bx + 5, gy: by, orientation: 'ew', status: 'locked' },
-                { gx: bx + 6, gy: by + 4, orientation: 'ew', status: 'closed' },
-                { gx: bx + 6, gy: by + 6, orientation: 'ns', status: 'closed' },
-              ],
-              partitions: [
-                { x0: bx + 1, y0: by + 4, x1: bx + 10, y1: by + 4 },
-                { x0: bx + 6, y0: by + 4, x1: bx + 6, y1: by + 8 },
-              ],
-              rooms: [
-                { x0: bx + 1, y0: by + 1, w: 10, h: 3, floorType: 'tile_clinic' },
-                { x0: bx + 1, y0: by + 5, w: 5, h: 4, floorType: 'floor_bath' },
-                { x0: bx + 7, y0: by + 5, w: 4, h: 4, floorType: 'floor', rug: { x0: bx + 8, y0: by + 6, w: 2, h: 2 } },
-              ],
-              props: [
-                { gx: bx + 1, gy: by + 2, prop: 'counter' },
-                { gx: bx + 9, gy: by + 2, prop: 'bench' },
-                { gx: bx + 10, gy: by + 1, prop: 'med_cabinet', lootKind: 'med_cabinet', lootItems: { bandage: 2, cloth: 3, water: 1 } },
-                { gx: bx + 1, gy: by + 8, prop: 'sink_toilet' },
-                { gx: bx + 2, gy: by + 5, prop: 'med_cabinet', lootKind: 'med_cabinet', lootItems: { bandage: 1, water: 2 } },
-                { gx: bx + 7, gy: by + 8, prop: 'bed' },
-                { gx: bx + 10, gy: by + 5, prop: 'desk' },
-              ],
-            }
-          : variant === 2
-            ? {
-                // 2-Room Timber Cabin & Workshop
-                x0: bx + 1,
-                y0: by,
-                w: 10,
-                h: 9,
-                wallType: 'wall_wood',
-                floorType: 'floor',
-                porch: { x0: bx + 11, y0: by + 3, w: 1, h: 3 },
-                doors: [
-                  { gx: bx + 10, gy: by + 4, orientation: 'ns', status: 'closed' },
-                  { gx: bx + 5, gy: by + 4, orientation: 'ns', status: 'open' },
-                ],
-                partitions: [{ x0: bx + 5, y0: by + 1, x1: bx + 5, y1: by + 7 }],
-                rooms: [
-                  { x0: bx + 2, y0: by + 1, w: 3, h: 7, floorType: 'floor', rug: { x0: bx + 2, y0: by + 3, w: 2, h: 3 } },
-                  { x0: bx + 6, y0: by + 1, w: 4, h: 7, floorType: 'floor' },
-                ],
-                props: [
-                  { gx: bx + 2, gy: by + 1, prop: 'bed' },
-                  { gx: bx + 2, gy: by + 7, prop: 'bookshelf' },
-                  { gx: bx + 4, gy: by + 1, prop: 'crate_wood', lootKind: 'crate_wood', lootItems: { wood: 4, scrap: 3, fuel: 1 } },
-                  { gx: bx + 9, gy: by + 1, prop: 'stove' },
-                  { gx: bx + 7, gy: by + 1, prop: 'table' },
-                  { gx: bx + 6, gy: by + 7, prop: 'couch' },
-                ],
-              }
-            : {
-                // 3-Room Roadside Outpost & Armory
-                x0: bx,
-                y0: by,
-                w: 11,
-                h: 9,
-                wallType: 'wall_brick',
-                floorType: 'tile_clinic',
-                porch: { x0: bx - 1, y0: by + 3, w: 1, h: 3 },
-                doors: [
-                  { gx: bx, gy: by + 4, orientation: 'ns', status: 'locked' },
-                  { gx: bx + 5, gy: by + 3, orientation: 'ns', status: 'locked' },
-                  { gx: bx + 7, gy: by + 5, orientation: 'ew', status: 'closed' },
-                ],
-                partitions: [
-                  { x0: bx + 5, y0: by + 1, x1: bx + 5, y1: by + 7 },
-                  { x0: bx + 5, y0: by + 5, x1: bx + 9, y1: by + 5 },
-                ],
-                rooms: [
-                  { x0: bx + 1, y0: by + 1, w: 4, h: 7, floorType: 'tile_clinic' },
-                  { x0: bx + 6, y0: by + 1, w: 4, h: 4, floorType: 'tile_diner' },
-                  { x0: bx + 6, y0: by + 6, w: 4, h: 2, floorType: 'floor' },
-                ],
-                props: [
-                  { gx: bx + 1, gy: by + 1, prop: 'desk' },
-                  { gx: bx + 3, gy: by + 7, prop: 'counter' },
-                  { gx: bx + 9, gy: by + 1, prop: 'crate_military', lootKind: 'crate_military', lootItems: { ammo_9mm: 8, ammo_shell: 3, scrap: 3 } },
-                  { gx: bx + 6, gy: by + 7, prop: 'bed' },
-                  { gx: bx + 9, gy: by + 7, prop: 'crate_wood', lootKind: 'crate_wood', lootItems: { food: 1, water: 1, cloth: 2 } },
-                ],
-              };
-
-    applyBuildingToSetter(setLocal, spec, doors, containers);
-  }
-
-  // Spawn highway vehicles or roadblock props on highway chunks
-  if (hasRoadInside) {
-    for (let ly = 2; ly < CHUNK_SIZE - 2; ly++) {
-      for (let lx = 2; lx < CHUNK_SIZE - 2; lx++) {
-        const cell = cells[ly][lx];
-        const gx = startGX + lx;
-        const gy = startGY + ly;
-        const mx = mod56(gx);
-        const my = mod56(gy);
-        if (cell.tile === 'sidewalk' && (mx === 25 || mx === 31) && Math.abs(gy) % 14 === 0 && cell.prop === 'none') {
-          cell.prop = 'streetlamp';
-          cell.solid = true;
-        }
-        if (cell.tile === 'road' && (mx === 27 || mx === 29) && (my === 10 || my === 44) && Math.abs(gx) % 16 === 6) {
-          if (rng() < 0.45) {
-            const isPolice = rng() < 0.35;
-            vehicles.push({
-              id: nextVehicleIdRef.nextId++,
-              kind: isPolice ? 'police' : 'sedan',
-              x: gx + 0.5,
-              y: gy + 0.5,
-              angle: mx === 27 ? Math.PI * 0.5 : -Math.PI * 0.5,
-              speed: 0,
-              vx: 0,
-              vy: 0,
-              hp: isPolice ? 280 : 220,
-              maxHp: isPolice ? 280 : 220,
-              fuel: 45 + Math.floor(rng() * 45),
-              headlightsOn: false,
-              sirenOn: false,
-              hitFlash: 0,
-              drifting: false,
-              boosting: false,
-              trunkItems: isPolice ? { ammo_9mm: 6, scrap: 2 } : { fuel: 1, scrap: 3, food: 1 },
-              trunkSearched: false,
-            });
-          }
-        }
-      }
-    }
-  }
-
-  // Wilderness trees, burn barrel camps, & wild salvage crates
-  for (let ly = 0; ly < CHUNK_SIZE; ly++) {
-    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-      const cell = cells[ly][lx];
-      if ((cell.tile === 'grass' || cell.tile === 'dirt') && cell.prop === 'none') {
-        const r = rng();
-        if (r < 0.085) {
-          cell.prop = rng() < 0.72 ? 'tree_pine' : 'tree_dead';
-          cell.solid = true;
-          cell.blocksSight = true;
-        } else if (r < 0.092) {
-          cell.prop = 'crate_wood';
-          cell.solid = true;
-          containers.push({
-            id: `wild_crate_${cell.gx}_${cell.gy}`,
-            gx: cell.gx,
-            gy: cell.gy,
-            kind: 'crate_wood',
-            items: {
-              wood: 2 + Math.floor(rng() * 3),
-              scrap: 1 + Math.floor(rng() * 2),
-              water: rng() < 0.45 ? 1 : 0,
-            },
-            searched: false,
-            searchProgress: 0,
-            openAnim: 0,
-          });
-        } else if (r < 0.095) {
-          cell.prop = 'barrel_burn';
-          cell.solid = true;
-        }
-      }
-    }
-  }
-
-  return { chunk, containers, structures, vehicles, doors };
+  return { chunk, containers: [], structures: [], vehicles: [], doors: [] };
 }
 
 export function getWorldCell(store: WorldStore, gx: number, gy: number): TileCell {
@@ -787,6 +238,7 @@ export function generateWorld(seed = 1994): GeneratedWorld {
     seed,
     chunks: new Map(),
     populatedChunks: new Set(),
+    landmarks: new Map(),
   };
 
   // Pre-build 4x4 origin chunk grid (0..63, 0..63) so starter town + outer edge transition seamlessly
@@ -1568,6 +1020,12 @@ const PROP_HALF_EXTENTS: Record<PropKind, { hx: number; hy: number }> = {
   streetlamp: { hx: 0.13, hy: 0.13 },
   car_police: { hx: 0.45, hy: 0.34 },
   car_sedan: { hx: 0.45, hy: 0.34 },
+  tent: { hx: 0.42, hy: 0.42 },
+  rock_boulder: { hx: 0.38, hy: 0.36 },
+  fallen_log: { hx: 0.44, hy: 0.24 },
+  road_sign: { hx: 0.14, hy: 0.14 },
+  wrecked_car: { hx: 0.46, hy: 0.38 },
+  sandbag_wall: { hx: 0.46, hy: 0.26 },
 };
 
 export function getTileColliderHalfExtents(cell: TileCell): { hx: number; hy: number } {

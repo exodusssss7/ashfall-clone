@@ -11,6 +11,7 @@ import {
 } from './cookingQte';
 import { AIM_DIRECTION_DEADZONE, touchAimAttack } from './touchAim';
 import { findZombieRoute, type RoutePoint } from './navigation';
+import { getBiomeDisplayName, sampleBiomeAt } from './worldGen';
 import {
   CHUNK_SIZE,
   clamp,
@@ -249,6 +250,8 @@ export class SurvivalEngine {
   private mouseWorldY = 28.5;
   private mouseDown = false;
   private mouseJustClicked = false;
+  private lastBiomeLabel = '';
+  private hotspotCheckTimer = 0;
 
   // Mobile touch virtual stick & fire state
   private virtualMoveX = 0; // normalized screen space -1..1
@@ -317,6 +320,9 @@ export class SurvivalEngine {
 
   attachMinimapCanvas(canvas: HTMLCanvasElement | null): void {
     this.minimapCanvas = canvas;
+    if (canvas && this.phase === 'playing' && this.worldStore) {
+      this.renderMinimap();
+    }
   }
 
   private getCell(gx: number, gy: number): TileCell {
@@ -342,10 +348,12 @@ export class SurvivalEngine {
     }
   }
 
-  private initWorld(titleMode: boolean): void {
+  private initWorld(titleMode: boolean, spawnOverride?: { x: number; y: number }): void {
     this.threeRenderer?.clearSceneCaches();
     this.zombieRoutes.clear();
     const world = generateWorld(1994);
+    const effectiveSpawnX = spawnOverride ? spawnOverride.x : world.spawnX;
+    const effectiveSpawnY = spawnOverride ? spawnOverride.y : world.spawnY;
     this.worldStore = world.worldStore;
     this.containers = world.containers;
     this.structures = world.structures;
@@ -362,8 +370,10 @@ export class SurvivalEngine {
     this.prevBoostActive = false;
     this.lastFogGX = -999999;
     this.lastFogGY = -999999;
+    this.lastBiomeLabel = 'ASHFALL CROSSROADS';
+    this.hotspotCheckTimer = 0.35;
     soundEngine.updateEngineSound(false, 0, false);
-    this.player = createInitialPlayer(world.spawnX, world.spawnY);
+    this.player = createInitialPlayer(effectiveSpawnX, effectiveSpawnY);
     this.inventory = createInitialInventory();
     this.decals = [];
     this.impactDecals = [];
@@ -394,7 +404,7 @@ export class SurvivalEngine {
     this.statusBanner = titleMode ? null : 'DAY 1 · EXPLORE LAKE PIER, COOK AT STOVES & OUTLAST NIGHT';
     this.statusBannerTimer = titleMode ? 0 : 4.5;
 
-    this.streamChunksAround(world.spawnX, world.spawnY, 2);
+    this.streamChunksAround(effectiveSpawnX, effectiveSpawnY, 2);
 
     // Seed initial neighborhood zombies at safe distance (>= 13 tiles away from spawn)
     const initialSpots: Array<[number, number, ZombieArchetype]> = [
@@ -456,12 +466,12 @@ export class SurvivalEngine {
     this.threeRenderer.dispose();
   }
 
-  startGame(fromGesture = true): void {
+  startGame(fromGesture = true, spawnOverride?: { x: number; y: number }): void {
     if (fromGesture) {
       soundEngine.unlock();
       soundEngine.playUiClick();
     }
-    this.initWorld(false);
+    this.initWorld(false, spawnOverride);
     this.fpsPitch = -0.05;
     this.fpsCarLookOffset = 0;
     this.setPhase('playing');
@@ -1433,6 +1443,7 @@ export class SurvivalEngine {
     this.updateFirePatches(dt);
     this.updateZombies(dt);
     this.updateSpawning(dt);
+    this.updateLandmarksAndHotspots(dt);
     this.emitCampfireEmbers(dt);
 
     // Smooth camera tracking with speed look-ahead when driving or cursor look-ahead on foot
@@ -3428,6 +3439,76 @@ export class SurvivalEngine {
         }
       }
     }
+
+    let newlyDiscovered = false;
+    for (const lm of this.worldStore.landmarks.values()) {
+      if (lm.discovered) continue;
+      if (dist(wx, wy, lm.gx + 0.5, lm.gy + 0.5) <= radius + 5.5) {
+        lm.discovered = true;
+        newlyDiscovered = true;
+        const tag = lm.threatLevel === 'high' ? 'HORDE HOTSPOT' : 'LANDMARK';
+        this.showBanner(`DISCOVERED: ${lm.name.toUpperCase()} · ${tag}`, 3.0);
+      }
+    }
+    if (newlyDiscovered) {
+      this.emitHud();
+    }
+  }
+
+  private updateLandmarksAndHotspots(dt: number): void {
+    this.hotspotCheckTimer += dt;
+    if (this.hotspotCheckTimer < 0.35) return;
+    this.hotspotCheckTimer = 0;
+
+    const biomeNow = getBiomeDisplayName(
+      sampleBiomeAt(this.worldStore.seed, Math.floor(this.player.x), Math.floor(this.player.y))
+    );
+    if (biomeNow !== this.lastBiomeLabel) {
+      const prev = this.lastBiomeLabel;
+      this.lastBiomeLabel = biomeNow;
+      if (prev && biomeNow !== 'ASHFALL CROSSROADS') {
+        this.showBanner(`REGION: ${biomeNow}`, 2.6);
+      }
+      this.emitHud();
+    }
+
+    for (const lm of this.worldStore.landmarks.values()) {
+      const d = dist(this.player.x, this.player.y, lm.gx + 0.5, lm.gy + 0.5);
+      if (!lm.hotspotSpawned && d <= 23) {
+        lm.hotspotSpawned = true;
+        const count = lm.hotspotPacks.length;
+        for (let i = 0; i < count; i++) {
+          const arch = lm.hotspotPacks[i];
+          const baseAng = (i / Math.max(1, count)) * Math.PI * 2;
+          for (let attempt = 0; attempt < 12; attempt++) {
+            const ang = baseAng + attempt * 0.56;
+            const rad = 2.6 + (attempt % 5) * 1.95;
+            const zx = lm.gx + 0.5 + Math.cos(ang) * rad;
+            const zy = lm.gy + 0.5 + Math.sin(ang) * rad;
+            const minPlayerDist = attempt >= 6 ? 4.5 : 7.0;
+            if (dist(zx, zy, this.player.x, this.player.y) < minPlayerDist) continue;
+            if (!this.isPointSolid(zx, zy, 0.25)) {
+              this.spawnZombieAt(zx, zy, arch);
+              break;
+            }
+          }
+        }
+      } else if (lm.hotspotSpawned && !lm.hotspotCleared && d <= lm.radius + 7) {
+        let aliveNear = 0;
+        for (const z of this.zombies) {
+          if (z.state === 'dying') continue;
+          if (dist(z.x, z.y, lm.gx + 0.5, lm.gy + 0.5) <= lm.radius + 7) {
+            aliveNear++;
+          }
+        }
+        if (aliveNear === 0) {
+          lm.hotspotCleared = true;
+          this.score += 75;
+          this.showBanner(`HOTSPOT CLEARED: ${lm.name.toUpperCase()} (+75)`, 2.8);
+          this.emitHud();
+        }
+      }
+    }
   }
 
   private spawnParticles(
@@ -3684,9 +3765,23 @@ export class SurvivalEngine {
           if (cell.prop === 'wall_interior') mctx.fillStyle = '#a69e8e';
           else if (cell.prop.startsWith('wall')) mctx.fillStyle = '#875548';
           else if (cell.prop === 'tree_pine' || cell.prop === 'tree_dead') mctx.fillStyle = '#2c3d29';
+          else if (cell.prop === 'wrecked_car') mctx.fillStyle = '#8c563a';
+          else if (cell.prop === 'rock_boulder') mctx.fillStyle = '#666b6e';
+          else if (cell.prop === 'sandbag_wall') mctx.fillStyle = '#7a6e54';
+          else if (cell.prop === 'tent') mctx.fillStyle = '#697d4d';
           else mctx.fillStyle = '#755b42';
         } else if (cell.tile === 'road' || cell.tile === 'crosswalk') {
           mctx.fillStyle = '#383d42';
+        } else if (cell.tile === 'asphalt_cracked') {
+          mctx.fillStyle = '#2d3136';
+        } else if (cell.tile === 'gravel') {
+          mctx.fillStyle = '#55595c';
+        } else if (cell.tile === 'sand') {
+          mctx.fillStyle = '#9c875e';
+        } else if (cell.tile === 'mud') {
+          mctx.fillStyle = '#33261b';
+        } else if (cell.tile === 'forest_floor') {
+          mctx.fillStyle = '#1d2b19';
         } else if (cell.tile === 'floor_rug') {
           mctx.fillStyle = '#75382e';
         } else if (cell.tile === 'floor_bath') {
@@ -3749,6 +3844,28 @@ export class SurvivalEngine {
         const pos = toRadar(z.x, z.y);
         mctx.fillRect(pos.px - 1, pos.py - 1, 2, 2);
       }
+    }
+
+    // Landmark & Horde Hotspot cues (on-radar diamond or edge directional pip for nearby/discovered landmarks)
+    for (const lm of this.worldStore.landmarks.values()) {
+      const d = dist(lm.gx + 0.5, lm.gy + 0.5, this.player.x, this.player.y);
+      if (!lm.discovered && (lm.threatLevel !== 'high' || lm.hotspotCleared || d > 58)) continue;
+      const pos = toRadar(lm.gx + 0.5, lm.gy + 0.5);
+      const clampedX = clamp(pos.px, 4, size - 5);
+      const clampedY = clamp(pos.py, 4, size - 5);
+      const col = lm.hotspotCleared
+        ? '#78c796'
+        : lm.threatLevel === 'high'
+          ? '#ff5a52'
+          : '#f0d078';
+      mctx.fillStyle = col;
+      mctx.beginPath();
+      mctx.moveTo(clampedX, clampedY - 3);
+      mctx.lineTo(clampedX + 3, clampedY);
+      mctx.lineTo(clampedX, clampedY + 3);
+      mctx.lineTo(clampedX - 3, clampedY);
+      mctx.closePath();
+      mctx.fill();
     }
 
     // Selected navigation destination, clamped to radar edge when off-screen.
@@ -3955,6 +4072,27 @@ export class SurvivalEngine {
           }
         : null,
       statusBanner: this.statusBanner,
+      currentBiomeLabel: getBiomeDisplayName(
+        sampleBiomeAt(this.worldStore.seed, Math.floor(this.player.x), Math.floor(this.player.y))
+      ),
+      discoveredLandmarks: Array.from(this.worldStore.landmarks.values())
+        .filter((lm) => lm.discovered)
+        .sort(
+          (a, b) =>
+            dist(a.gx + 0.5, a.gy + 0.5, this.player.x, this.player.y) -
+            dist(b.gx + 0.5, b.gy + 0.5, this.player.x, this.player.y)
+        )
+        .slice(0, 10)
+        .map((lm) => ({
+          id: lm.id,
+          name: lm.name,
+          kind: lm.kind,
+          x: lm.gx + 0.5,
+          y: lm.gy + 0.5,
+          threatLevel: lm.threatLevel,
+          hotspotActive: !lm.hotspotCleared,
+          hotspotCleared: lm.hotspotCleared,
+        })),
     });
   }
 }

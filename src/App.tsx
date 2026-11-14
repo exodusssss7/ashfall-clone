@@ -51,6 +51,8 @@ const INITIAL_HUD: HudSnapshot = {
   drivingVehicle: null,
   statusBanner: null,
   cameraMode: 'iso',
+  currentBiomeLabel: 'ASHFALL CROSSROADS',
+  discoveredLandmarks: [],
 };
 
 function detectTouchCapability(): boolean {
@@ -75,6 +77,7 @@ export default function App() {
   const [muted, setMuted] = useState<boolean>(false);
   const [craftOpen, setCraftOpen] = useState<boolean>(false);
   const [cookOpen, setCookOpen] = useState<boolean>(false);
+  const [navOpen, setNavOpen] = useState<boolean>(false);
   const [touchEnabled, setTouchEnabled] = useState<boolean>(() => detectTouchCapability());
 
   useEffect(() => {
@@ -89,23 +92,33 @@ export default function App() {
         if (nextPhase !== 'playing') {
           setCraftOpen(false);
           setCookOpen(false);
+          setNavOpen(false);
         }
       },
       () => {
         setCraftOpen(false);
+        setNavOpen(false);
         setCookOpen(true);
       }
     );
     engineRef.current = engine;
     engine.start();
 
-    // Support ?autostart=1 and ?fps=1 for direct verification
+    // Support ?autostart=1, ?fps=1, and ?spawn=x,y for direct verification
     const params = new URLSearchParams(window.location.search);
     if (params.get('fps') === '1') {
       engine.setCameraMode('fps', true);
     }
     if (params.get('autostart') === '1') {
-      engine.startGame(false);
+      const spawnParam = params.get('spawn');
+      let spawnOverride: { x: number; y: number } | undefined;
+      if (spawnParam) {
+        const [sx, sy] = spawnParam.split(',').map(Number);
+        if (Number.isFinite(sx) && Number.isFinite(sy)) {
+          spawnOverride = { x: sx, y: sy };
+        }
+      }
+      engine.startGame(false, spawnOverride);
     } else {
       document.body.dataset.state = 'title';
     }
@@ -126,8 +139,8 @@ export default function App() {
   }, [phase, touchEnabled]);
 
   useEffect(() => {
-    engineRef.current?.setModalOpen(craftOpen || cookOpen);
-  }, [craftOpen, cookOpen]);
+    engineRef.current?.setModalOpen(craftOpen || cookOpen || navOpen);
+  }, [craftOpen, cookOpen, navOpen]);
 
   useEffect(() => {
     const onGlobalKey = (e: KeyboardEvent) => {
@@ -136,16 +149,25 @@ export default function App() {
         setMuted(nextMuted);
         return;
       }
-      if (e.code === 'Escape' && (craftOpen || cookOpen)) {
+      if (e.code === 'Escape' && (craftOpen || cookOpen || navOpen)) {
         e.stopImmediatePropagation();
         soundEngine.playUiClick();
         setCraftOpen(false);
         setCookOpen(false);
+        setNavOpen(false);
+        return;
+      }
+      if (e.code === 'KeyN' && phase === 'playing') {
+        soundEngine.playUiClick();
+        setCraftOpen(false);
+        setCookOpen(false);
+        setNavOpen((prev) => !prev);
         return;
       }
       if ((e.code === 'KeyI' || e.code === 'KeyC') && phase === 'playing') {
         soundEngine.playUiClick();
         setCookOpen(false);
+        setNavOpen(false);
         setCraftOpen((prev) => !prev);
         return;
       }
@@ -156,6 +178,7 @@ export default function App() {
         } else if (engineRef.current?.isNearCookingHeat()) {
           soundEngine.playUiClick();
           setCraftOpen(false);
+          setNavOpen(false);
           setCookOpen(true);
         } else {
           engineRef.current?.triggerQuickCook();
@@ -164,7 +187,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onGlobalKey, true);
     return () => window.removeEventListener('keydown', onGlobalKey, true);
-  }, [phase, craftOpen, cookOpen]);
+  }, [phase, craftOpen, cookOpen, navOpen]);
 
   const handleToggleMute = () => {
     const nextMuted = soundEngine.toggleMute();
@@ -245,10 +268,25 @@ export default function App() {
           onRepairVehicle={() => engineRef.current?.triggerRepairVehicle()}
           onPrimaryInteract={() => engineRef.current?.triggerLoot()}
           onBarricadeDoor={() => engineRef.current?.triggerBarricadeDoor()}
+          onOpenNavigation={() => {
+            soundEngine.playUiClick();
+            setCraftOpen(false);
+            setCookOpen(false);
+            setNavOpen((prev) => !prev);
+          }}
         />
       )}
 
-      {phase === 'playing' && touchEnabled && <NavigationRadar hud={hud} canvasRef={minimapRef} onWaypoint={(x,y)=>engineRef.current?.setWaypoint(x,y)} />}
+      {phase === 'playing' && (
+        <NavigationRadar
+          hud={hud}
+          canvasRef={minimapRef}
+          showTrigger={touchEnabled}
+          open={navOpen}
+          onOpenChange={setNavOpen}
+          onWaypoint={(x, y) => engineRef.current?.setWaypoint(x, y)}
+        />
+      )}
 
       {/* First-Person Right-Side Touch Camera Look Surface (behind HUD & combat buttons) */}
       {phase === 'playing' && touchEnabled && hud.cameraMode === 'fps' && !craftOpen && !cookOpen && (
