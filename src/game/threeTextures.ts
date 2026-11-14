@@ -851,13 +851,26 @@ function buildVehicleTextures(police: boolean): {
   drawPixelRect(gctx, 2, 1, 5, 4, '#537b91');
   drawPixelRect(gctx, 3, 1, 3, 2, '#7cb0cc');
 
-  // Wheel tire + 5-pixel silver hubcap (12x12)
-  const [cw, wctx] = makePixelCanvas(12, 12);
-  drawPixelRect(wctx, 0, 0, 12, 12, '#0b0c0e');
-  drawPixelRect(wctx, 1, 1, 10, 10, '#191c20');
-  drawPixelRect(wctx, 3, 3, 6, 6, '#8d969e');
-  drawPixelRect(wctx, 4, 4, 4, 4, '#5e666e');
-  drawPixelRect(wctx, 5, 5, 2, 2, '#c8d1d9');
+  // Circular wheel tire + alloy hubcap (24x24)
+  const [cw, wctx] = makePixelCanvas(24, 24);
+  drawPixelRect(wctx, 0, 0, 24, 24, '#0e1013');
+  const drawDisc = (r: number, color: string) => {
+    wctx.fillStyle = color;
+    wctx.beginPath();
+    wctx.arc(12, 12, r, 0, Math.PI * 2);
+    wctx.fill();
+  };
+  drawDisc(11.5, '#191c20');
+  drawDisc(7.0, '#8d969e');
+  drawDisc(5.2, '#5e666e');
+  wctx.fillStyle = '#2d3338';
+  for (let i = 0; i < 4; i++) {
+    const a = (i * Math.PI) / 2;
+    wctx.beginPath();
+    wctx.arc(12 + Math.cos(a) * 3.4, 12 + Math.sin(a) * 3.4, 1.0, 0, Math.PI * 2);
+    wctx.fill();
+  }
+  drawDisc(2.2, '#c8d1d9');
 
   return {
     side: toNearestTexture(cs),

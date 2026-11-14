@@ -65,10 +65,14 @@ export class ThreeModelFactory {
   private materials: THREE.Material[] = [];
   private matCache = new Map<string, THREE.MeshStandardMaterial>();
   private unitBox: THREE.BoxGeometry;
+  private unitWheelGeo: THREE.CylinderGeometry;
 
   constructor(atlas: ThreePixelAtlas) {
     this.atlas = atlas;
     this.unitBox = this.trackGeo(new THREE.BoxGeometry(1, 1, 1));
+    const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 24);
+    wheelGeo.rotateX(Math.PI * 0.5);
+    this.unitWheelGeo = this.trackGeo(wheelGeo);
   }
 
   private trackGeo<T extends THREE.BufferGeometry>(g: T): T {
@@ -135,6 +139,24 @@ export class ThreeModelFactory {
   ): THREE.Mesh {
     const m = new THREE.Mesh(this.unitBox, mat);
     m.scale.set(w, h, d);
+    m.position.set(x, y, z);
+    m.castShadow = castShadow;
+    m.receiveShadow = receiveShadow;
+    return m;
+  }
+
+  private cylinderWheel(
+    diameter: number,
+    width: number,
+    mat: THREE.Material | THREE.Material[],
+    x = 0,
+    y = 0,
+    z = 0,
+    castShadow = true,
+    receiveShadow = true
+  ): THREE.Mesh {
+    const m = new THREE.Mesh(this.unitWheelGeo, mat);
+    m.scale.set(diameter, diameter, width);
     m.position.set(x, y, z);
     m.castShadow = castShadow;
     m.receiveShadow = receiveShadow;
@@ -791,11 +813,11 @@ export class ThreeModelFactory {
       g.add(this.box(0.08, 0.11, 0.76, charMat, 0.64, 0.14, 0));
       g.add(this.box(0.08, 0.11, 0.76, charMat, -0.64, 0.14, 0));
 
-      // Four distinct burned-out wheels & rusted rims
+      // Four distinct burned-out circular wheels & rusted rims
       for (const wx of [-0.38, 0.38]) {
         for (const wz of [-0.34, 0.34]) {
-          g.add(this.box(0.28, 0.28, 0.12, tireMat, wx, 0.14, wz));
-          g.add(this.box(0.14, 0.14, 0.13, rimMat, wx, 0.14, wz, false, false));
+          g.add(this.cylinderWheel(0.28, 0.12, tireMat, wx, 0.14, wz));
+          g.add(this.cylinderWheel(0.15, 0.13, rimMat, wx, 0.14, wz, false, false));
         }
       }
 
@@ -965,9 +987,9 @@ export class ThreeModelFactory {
     const tr = this.box(0.06, 0.1, 0.16, tailMatR, -0.84, 0.36, 0.28, false, false);
     bodyGroup.add(tl, tr);
 
-    // Pixel-art wheels (hubcap faces on +Z / -Z)
-    const wheelMats = [tireMat, tireMat, tireMat, tireMat, wheelFaceMat, wheelFaceMat];
-    const makeWheel = () => this.box(0.36, 0.36, 0.14, wheelMats, 0, 0, 0);
+    // Circular tires (tread on cylinder side, hubcap faces on +Z / -Z)
+    const wheelMats = [tireMat, wheelFaceMat, wheelFaceMat];
+    const makeWheel = () => this.cylinderWheel(0.36, 0.14, wheelMats, 0, 0, 0);
 
     const wheelFL = new THREE.Group();
     wheelFL.position.set(0.52, 0.18, -0.44);
