@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { getLootPopTransform, resolvePlayerAnimState, resolveZombieAnimState, type ActionVisual } from './actionAnimation';
 import { CHUNK_SIZE, PIXEL_SCALE, TILE_W, clamp, dist, isoToWorld } from './isometric';
+import { getPrimaryLootItem } from './lootUi';
 import { WEAPONS } from './recipes';
 import {
   FPS_BASE_FOV,
@@ -11,6 +12,8 @@ import {
   computeFirstPersonStrafeRoll,
   computeFirstPersonWeaponRaiseOffset,
 } from './firstPerson';
+import { batchStaticObjectGroups } from './threeBatching';
+import { ThreeGrassSystem } from './threeGrass';
 import {
   ThreeModelFactory,
   type ActorRig3D,
@@ -19,7 +22,9 @@ import {
   type LootContainerRig3D,
   type VehicleRig3D,
 } from './threeModels';
+import { SkyCloudDome } from './threeSky';
 import { ThreePixelAtlas } from './threeTextures';
+import { computeAtmosphereLighting, createAtmosphereLightingState } from './lighting';
 import { getBuildTargetTile, getDaylightInfo } from './survivalLogic';
 import { getSettings } from './settings';
 import { STRUCTURES } from './recipes';
@@ -43,6 +48,7 @@ import type {
   WorldStore,
   WorldStructure,
   Zombie,
+  ZombieArchetype,
 } from './types';
 
 export interface RenderParticle {
@@ -124,15 +130,21 @@ interface ChunkVisual {
   group: THREE.Group;
   terrainTex: THREE.CanvasTexture;
   terrainMat: THREE.MeshStandardMaterial;
+  mergedGeos: THREE.BufferGeometry[];
   wallEntries: Array<{
     gx: number;
     gy: number;
     solidGroup: THREE.Group;
     fadedGroup: THREE.Group;
   }>;
-  burnBarrels: THREE.Group[];
+  mergedWallsGroup?: THREE.Group;
+  dynamicWallsGroup?: THREE.Group;
+  fpsUpperGroup?: THREE.Group;
+  burnBarrelFlames: THREE.Group[];
+  burnBarrelCoords: Array<{ x: number; z: number }>;
   lightAnchors: Array<{ x: number; z: number; color: number; intensity: number; distance: number; flicker: boolean }>;
   fpsRoofMesh?: THREE.InstancedMesh;
+  grassMesh?: THREE.InstancedMesh | null;
 }
 
 // Reusable scratch math objects for zero-GC per-frame updates
@@ -156,6 +168,7 @@ const MAX_DECAL_INSTANCES = 140;
 const MAX_IMPACT_DECALS = 96;
 const MAX_IMPACT_EFFECTS = 24;
 const MAX_DYNAMIC_POINT_LIGHTS = 6;
+const MAX_POOLED_ZOMBIES = 48;
 
 export class ThreeIsometricRenderer {
   public readonly isSoftwareGl: boolean;
@@ -175,8 +188,11 @@ export class ThreeIsometricRenderer {
 
   private atlas: ThreePixelAtlas;
   private factory: ThreeModelFactory;
+  private skyDome: SkyCloudDome;
+  private grassSystem: ThreeGrassSystem;
 
   private sunLight: THREE.DirectionalLight;
+  private rimLight: THREE.DirectionalLight;
   private hemiLight: THREE.HemisphereLight;
   private flashlight: THREE.SpotLight;
   private headlightLights: THREE.SpotLight[] = [];
@@ -187,17 +203,33 @@ export class ThreeIsometricRenderer {
   private chunkPlaneGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
   private ceilingBoxGeo = new THREE.BoxGeometry(1, 0.08, 1);
   private ceilingMat: THREE.MeshStandardMaterial;
+  private lastIsFps: boolean | null = null;
+  private lastOccludedWalls: Array<{ solidGroup: THREE.Group; fadedGroup: THREE.Group }> = [];
+  private lastFallbackWallChunks: ChunkVisual[] = [];
+  private burnBarrelCoordsCache: Array<{ x: number; z: number }> = [];
+  private burnBarrelsDirty = true;
 
   private doorRigs = new Map<string, DoorRig3D>();
   private containerRigs = new Map<string, LootContainerRig3D>();
   private lootDropRigs = new Map<string, THREE.Group>();
   private structureRigs = new Map<string, THREE.Group>();
   private vehicleRigs = new Map<number, VehicleRig3D>();
-  private zombieRigs = new Map<number, { rig: ActorRig3D; archetype: string; ring: THREE.Mesh }>();
+  private zombieRigs = new Map<
+    number,
+    { rig: ActorRig3D; archetype: ZombieArchetype; ring: THREE.Mesh; wasFading: boolean; wasFlashing: boolean }
+  >();
+  private zombieRigPool = new Map<ZombieArchetype, Array<{ rig: ActorRig3D; ring: THREE.Mesh }>>();
+  private pooledZombieCount = 0;
+  private zombieRingGeo: THREE.RingGeometry;
+  private zombieRingMatRed: THREE.MeshBasicMaterial;
+  private zombieRingMatMint: THREE.MeshBasicMaterial;
+
   private playerRig: ActorRig3D;
+  private playerWasFlashing = false;
   private playerWadeDepth = 0;
   private playerRigHeight = 1.8;
   private playerWadePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  private playerWadeClipActive = false;
   private fpsViewmodelRig: FirstPersonViewmodelRig;
 
   private projectileMeshes = new Map<number, THREE.Group>();
@@ -223,6 +255,23 @@ export class ThreeIsometricRenderer {
     sparks: THREE.Mesh[];
   }> = [];
 
+  // Reusable per-frame scratch collections (zero GC pressure)
+  private _scratchStrIds = new Set<string>();
+  private _scratchStrIds2 = new Set<string>();
+  private _scratchNumIds = new Set<number>();
+  private _lightCandidates: Array<{
+    x: number;
+    y: number;
+    z: number;
+    color: number;
+    intensity: number;
+    distance: number;
+    d2: number;
+  }> = [];
+
+  private fpsVignetteGrad: CanvasGradient | null = null;
+  private fpsVignetteSprintGrad: CanvasGradient | null = null;
+
   // Helpers: build highlight, molotov reticle, near-interact diamond, fishing line/bobber, melee arc
   private interactHighlight: THREE.LineLoop;
   private buildHighlight: THREE.Group;
@@ -236,19 +285,7 @@ export class ThreeIsometricRenderer {
 
   private viewW = 1280;
   private viewH = 720;
-  private dayColor = new THREE.Color('#1a2024');
-  private duskColor = new THREE.Color('#1d1924');
-  private nightColor = new THREE.Color('#090d16');
-  private fpsDayColor = new THREE.Color('#6f838b');
-  private fpsDuskColor = new THREE.Color('#915c49');
-  private fpsNightColor = new THREE.Color('#0c1321');
-  private sunDayColor = new THREE.Color('#fff2d9');
-  private sunDuskColor = new THREE.Color('#ff9d5c');
-  private sunNightColor = new THREE.Color('#6c8ec4');
-  private hemiSkyDay = new THREE.Color('#9ec0db');
-  private hemiSkyNight = new THREE.Color('#1c2a4a');
-  private hemiGndDay = new THREE.Color('#3b3328');
-  private hemiGndNight = new THREE.Color('#0c1018');
+  private atmoState = createAtmosphereLightingState();
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -280,8 +317,8 @@ export class ThreeIsometricRenderer {
     this.overlayCtx = this.overlayCanvas.getContext('2d')!;
 
     this.scene = new THREE.Scene();
-    this.scene.background = this.dayColor.clone();
-    this.fogExp = new THREE.FogExp2(this.dayColor.getHex(), 0.014);
+    this.scene.background = this.atmoState.isoFogColor.clone();
+    this.fogExp = new THREE.FogExp2(this.atmoState.isoFogColor.getHex(), 0.014);
     this.scene.fog = this.fogExp;
 
     // Mandatory Studio Environment Reflection for metals/glass
@@ -295,8 +332,8 @@ export class ThreeIsometricRenderer {
     this.camera.position.copy(_camOffsetDir).multiplyScalar(28);
     this.camera.lookAt(0, 0, 0);
 
-    // First-Person Perspective Camera (added to scene so attached 3D viewmodel renders)
-    this.fpsCamera = new THREE.PerspectiveCamera(FPS_BASE_FOV, 16 / 9, 0.08, 95);
+    // First-Person Perspective Camera (far=240 so SkyCloudDome + distant clouds never clip)
+    this.fpsCamera = new THREE.PerspectiveCamera(FPS_BASE_FOV, 16 / 9, 0.08, 240);
     this.scene.add(this.fpsCamera);
     this.activeCamera = this.camera;
 
@@ -318,6 +355,12 @@ export class ThreeIsometricRenderer {
     this.sunLight.shadow.normalBias = 0.025;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
+
+    // Cool opposite sky rim/bounce fill light (no shadows -> zero draw-call overhead)
+    this.rimLight = new THREE.DirectionalLight(0x80a4e8, 0.22);
+    this.rimLight.castShadow = false;
+    this.scene.add(this.rimLight);
+    this.scene.add(this.rimLight.target);
 
     // Player flashlight SpotLight
     this.flashlight = new THREE.SpotLight(0xfff1c9, 0, 12, Math.PI * 0.24, 0.55, 1.4);
@@ -344,6 +387,27 @@ export class ThreeIsometricRenderer {
 
     this.atlas = new ThreePixelAtlas();
     this.factory = new ThreeModelFactory(this.atlas);
+    this.skyDome = new SkyCloudDome();
+    this.scene.add(this.skyDome.group);
+    this.grassSystem = new ThreeGrassSystem();
+
+    this.zombieRingGeo = new THREE.RingGeometry(0.32, 0.42, 18);
+    this.zombieRingGeo.rotateX(-Math.PI * 0.5);
+    this.zombieRingMatRed = new THREE.MeshBasicMaterial({
+      color: 0xff4d42,
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    this.zombieRingMatMint = new THREE.MeshBasicMaterial({
+      color: 0x5ef2b5,
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+
     this.ceilingMat = new THREE.MeshStandardMaterial({
       map: this.atlas.ceilingTex,
       roughness: 0.92,
@@ -550,6 +614,53 @@ export class ThreeIsometricRenderer {
 
     this.fpsCamera.aspect = this.viewW / this.viewH;
     this.fpsCamera.updateProjectionMatrix();
+
+    // Cache radial vignette gradients so renderOverlay2D creates zero gradient allocations per frame
+    const rInner = Math.min(this.viewW, this.viewH) * 0.32;
+    const rOuter = Math.max(this.viewW, this.viewH) * 0.72;
+    const gBase = this.overlayCtx.createRadialGradient(
+      this.viewW * 0.5,
+      this.viewH * 0.5,
+      rInner,
+      this.viewW * 0.5,
+      this.viewH * 0.5,
+      rOuter
+    );
+    gBase.addColorStop(0, 'rgba(0,0,0,0)');
+    gBase.addColorStop(1, 'rgba(6,8,10,0.28)');
+    this.fpsVignetteGrad = gBase;
+
+    const gSprint = this.overlayCtx.createRadialGradient(
+      this.viewW * 0.5,
+      this.viewH * 0.5,
+      rInner,
+      this.viewW * 0.5,
+      this.viewH * 0.5,
+      rOuter
+    );
+    gSprint.addColorStop(0, 'rgba(0,0,0,0)');
+    gSprint.addColorStop(1, 'rgba(6,8,10,0.42)');
+    this.fpsVignetteSprintGrad = gSprint;
+  }
+
+  public getRenderInfo(): { drawCalls: number; triangles: number } {
+    return {
+      drawCalls: this.renderer.info.render.calls,
+      triangles: this.renderer.info.render.triangles,
+    };
+  }
+
+  public getBurnBarrelCoords(): ReadonlyArray<{ x: number; z: number }> {
+    if (this.burnBarrelsDirty) {
+      this.burnBarrelCoordsCache.length = 0;
+      for (const cv of this.chunkVisuals.values()) {
+        for (const coord of cv.burnBarrelCoords) {
+          this.burnBarrelCoordsCache.push(coord);
+        }
+      }
+      this.burnBarrelsDirty = false;
+    }
+    return this.burnBarrelCoordsCache;
   }
 
   public screenToWorld(screenX: number, screenY: number, camX?: number, camY?: number): { wx: number; wy: number } {
@@ -571,14 +682,34 @@ export class ThreeIsometricRenderer {
     return { wx: 28.5, wy: 28.5 };
   }
 
+  private disposeChunkVisual(chunk: ChunkVisual): void {
+    this.chunksGroup.remove(chunk.group);
+    chunk.terrainTex.dispose();
+    chunk.terrainMat.dispose();
+    chunk.fpsRoofMesh?.dispose();
+    chunk.grassMesh?.dispose();
+    for (const geo of chunk.mergedGeos) {
+      geo.dispose();
+    }
+  }
+
+  private disposeLootDropMaterials(drop: THREE.Group): void {
+    drop.traverse((o: THREE.Object3D) => {
+      if ((o as THREE.Sprite).isSprite) {
+        (o as THREE.Sprite).material.dispose();
+      }
+    });
+  }
+
   public clearSceneCaches(): void {
     for (const chunk of this.chunkVisuals.values()) {
-      this.chunksGroup.remove(chunk.group);
-      chunk.terrainTex.dispose();
-      chunk.terrainMat.dispose();
-      chunk.fpsRoofMesh?.dispose();
+      this.disposeChunkVisual(chunk);
     }
     this.chunkVisuals.clear();
+    this.lastOccludedWalls.length = 0;
+    this.lastFallbackWallChunks.length = 0;
+    this.lastIsFps = null;
+    this.burnBarrelsDirty = true;
 
     for (const r of this.doorRigs.values()) this.scene.remove(r.root);
     this.doorRigs.clear();
@@ -586,7 +717,10 @@ export class ThreeIsometricRenderer {
     for (const r of this.containerRigs.values()) this.scene.remove(r.root);
     this.containerRigs.clear();
 
-    for (const r of this.lootDropRigs.values()) this.scene.remove(r);
+    for (const r of this.lootDropRigs.values()) {
+      this.scene.remove(r);
+      this.disposeLootDropMaterials(r);
+    }
     this.lootDropRigs.clear();
 
     for (const r of this.structureRigs.values()) this.scene.remove(r);
@@ -596,11 +730,7 @@ export class ThreeIsometricRenderer {
     this.vehicleRigs.clear();
 
     for (const z of this.zombieRigs.values()) {
-      this.scene.remove(z.rig.root);
-      this.scene.remove(z.ring);
-      for (const m of z.rig.allMaterials) m.dispose();
-      z.ring.geometry.dispose();
-      (z.ring.material as THREE.Material).dispose();
+      this.recycleZombieEntry(z.archetype, z.rig, z.ring);
     }
     this.zombieRigs.clear();
 
@@ -636,11 +766,9 @@ export class ThreeIsometricRenderer {
     // Evict distant chunks
     for (const [key, cv] of this.chunkVisuals.entries()) {
       if (Math.abs(cv.cx - pcx) > keepRadius + 1 || Math.abs(cv.cy - pcy) > keepRadius + 1) {
-        this.chunksGroup.remove(cv.group);
-        cv.terrainTex.dispose();
-        cv.terrainMat.dispose();
-        cv.fpsRoofMesh?.dispose();
+        this.disposeChunkVisual(cv);
         this.chunkVisuals.delete(key);
+        this.burnBarrelsDirty = true;
       }
     }
 
@@ -649,6 +777,7 @@ export class ThreeIsometricRenderer {
         const key = `${cx},${cy}`;
         if (this.chunkVisuals.has(key)) continue;
         this.chunkVisuals.set(key, this.buildChunkVisual(cx, cy, key, getCell));
+        this.burnBarrelsDirty = true;
       }
     }
   }
@@ -677,9 +806,16 @@ export class ThreeIsometricRenderer {
     group.add(terrainPlane);
 
     const wallEntries: ChunkVisual['wallEntries'] = [];
-    const burnBarrels: THREE.Group[] = [];
+    const solidWallRoots: THREE.Object3D[] = [];
+    const fpsUpperRoots: THREE.Object3D[] = [];
+    const staticPropRoots: THREE.Object3D[] = [];
+    const burnBarrelFlames: THREE.Group[] = [];
+    const burnBarrelCoords: Array<{ x: number; z: number }> = [];
     const lightAnchors: ChunkVisual['lightAnchors'] = [];
     const indoorRoofCells: Array<{ gx: number; gy: number }> = [];
+    const mergedGeos: THREE.BufferGeometry[] = [];
+    const dynamicWallsGroup = new THREE.Group();
+    dynamicWallsGroup.visible = false;
 
     for (let ly = 0; ly < CHUNK_SIZE; ly++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -721,21 +857,36 @@ export class ThreeIsometricRenderer {
 
           const solidGroup = this.factory.createWallGroup(cell.prop, hasWindow, false);
           solidGroup.position.set(gx + 0.5, 0, gy + 0.5);
+          const fpsUpper = solidGroup.userData.fpsUpperGroup as THREE.Group | undefined;
+          if (fpsUpper) {
+            solidGroup.remove(fpsUpper);
+            fpsUpper.visible = true;
+            fpsUpper.position.set(gx + 0.5, 0, gy + 0.5);
+            fpsUpperRoots.push(fpsUpper);
+          }
+
           const fadedGroup = this.factory.createWallGroup(cell.prop, hasWindow, true);
           fadedGroup.position.set(gx + 0.5, 0, gy + 0.5);
           fadedGroup.visible = false;
 
-          group.add(solidGroup, fadedGroup);
+          solidWallRoots.push(solidGroup);
+          dynamicWallsGroup.add(solidGroup, fadedGroup);
           wallEntries.push({ gx, gy, solidGroup, fadedGroup });
           continue;
         }
 
         const propGroup = this.factory.createPropGroup(cell.prop);
         propGroup.position.set(gx + 0.5, 0, gy + 0.5);
-        group.add(propGroup);
 
         if (cell.prop === 'barrel_burn') {
-          burnBarrels.push(propGroup);
+          const fg = propGroup.userData.flameGroup as THREE.Group | undefined;
+          if (fg) {
+            propGroup.remove(fg);
+            fg.position.set(gx + 0.5, 0.74, gy + 0.5);
+            group.add(fg);
+            burnBarrelFlames.push(fg);
+          }
+          burnBarrelCoords.push({ x: gx + 0.5, z: gy + 0.5 });
           lightAnchors.push({ x: gx + 0.5, z: gy + 0.5, color: 0xff7b29, intensity: 3.4, distance: 7.5, flicker: true });
         } else if (cell.prop === 'streetlamp') {
           lightAnchors.push({ x: gx + 0.9, z: gy + 0.5, color: 0xffd27a, intensity: 3.2, distance: 8.0, flicker: false });
@@ -744,7 +895,47 @@ export class ThreeIsometricRenderer {
         } else if (cell.prop === 'stove') {
           lightAnchors.push({ x: gx + 0.5, z: gy + 0.5, color: 0xff6e24, intensity: 2.2, distance: 5.5, flicker: true });
         }
+
+        staticPropRoots.push(propGroup);
       }
+    }
+
+    // Batch all static chunk walls into minimal draw calls; keep dynamicWallsGroup hidden except on active occluding chunks
+    let mergedWallsGroup: THREE.Group | undefined;
+    if (solidWallRoots.length > 0) {
+      const wallBatch = batchStaticObjectGroups(solidWallRoots);
+      mergedWallsGroup = wallBatch.group;
+      group.add(mergedWallsGroup, dynamicWallsGroup);
+      for (const bg of wallBatch.geometries) mergedGeos.push(bg);
+    }
+
+    // Batch all static chunk props into minimal draw calls per material (lossless GPU optimization)
+    if (staticPropRoots.length > 0) {
+      const staticBatch = batchStaticObjectGroups(staticPropRoots);
+      group.add(staticBatch.group);
+      for (const bg of staticBatch.geometries) mergedGeos.push(bg);
+    }
+
+    // Batch all FPS upper wall extensions per chunk into a single toggleable group
+    let fpsUpperGroup: THREE.Group | undefined;
+    if (fpsUpperRoots.length > 0) {
+      const upperBatch = batchStaticObjectGroups(fpsUpperRoots);
+      fpsUpperGroup = upperBatch.group;
+      fpsUpperGroup.visible = this.lastIsFps === true;
+      group.add(fpsUpperGroup);
+      for (const bg of upperBatch.geometries) mergedGeos.push(bg);
+    }
+
+    // Instanced wind-animated 3D grass across open grass and forest_floor tiles
+    const grassMesh = this.grassSystem.createChunkGrassMesh(
+      getCell,
+      cx,
+      cy,
+      CHUNK_SIZE,
+      this.isSoftwareGl ? 0.55 : 1
+    );
+    if (grassMesh) {
+      group.add(grassMesh);
     }
 
     let fpsRoofMesh: THREE.InstancedMesh | undefined;
@@ -752,7 +943,7 @@ export class ThreeIsometricRenderer {
       fpsRoofMesh = new THREE.InstancedMesh(this.ceilingBoxGeo, this.ceilingMat, indoorRoofCells.length);
       fpsRoofMesh.castShadow = false;
       fpsRoofMesh.receiveShadow = true;
-      fpsRoofMesh.visible = false;
+      fpsRoofMesh.visible = this.lastIsFps === true;
       _quat.identity();
       _scale.set(1, 1, 1);
       for (let i = 0; i < indoorRoofCells.length; i++) {
@@ -761,11 +952,29 @@ export class ThreeIsometricRenderer {
         fpsRoofMesh.setMatrixAt(i, _mat4);
       }
       fpsRoofMesh.instanceMatrix.needsUpdate = true;
+      fpsRoofMesh.computeBoundingSphere();
       group.add(fpsRoofMesh);
     }
 
     this.chunksGroup.add(group);
-    return { key, cx, cy, group, terrainTex, terrainMat, wallEntries, burnBarrels, lightAnchors, fpsRoofMesh };
+    return {
+      key,
+      cx,
+      cy,
+      group,
+      terrainTex,
+      terrainMat,
+      mergedGeos,
+      wallEntries,
+      mergedWallsGroup,
+      dynamicWallsGroup: solidWallRoots.length > 0 ? dynamicWallsGroup : undefined,
+      fpsUpperGroup,
+      burnBarrelFlames,
+      burnBarrelCoords,
+      lightAnchors,
+      fpsRoofMesh,
+      grassMesh,
+    };
   }
 
   public render(state: RenderFrameState): void {
@@ -834,7 +1043,7 @@ export class ThreeIsometricRenderer {
       }
       this.fpsCamera.updateMatrixWorld();
       this.activeCamera = this.fpsCamera;
-      this.fogExp.density = 0.0155;
+      this.fogExp.density = 0.0115;
     } else {
       const centerWorld = isoToWorld(state.camX, state.camY);
       targetX = centerWorld.wx + shakeX;
@@ -854,31 +1063,80 @@ export class ThreeIsometricRenderer {
     // Stream 3D chunks around camera
     this.ensureChunksAround(targetX, targetZ, state.getCell);
 
-    // Update dynamic Day/Night lighting, fog & sun shadows
+    // Update dynamic sky dome, clouds, wind grass, Day/Night lighting, fog & sun shadows
+    this.grassSystem.updateWind(state.elapsedClock);
     this.updateAtmosphereAndLights(state, targetX, targetZ, isFps);
 
-    // Wall foreground occlusion fading (disabled in FPS) + FPS upper walls, interior ceilings & barrel flames
-    for (const cv of this.chunkVisuals.values()) {
-      if (cv.fpsRoofMesh) cv.fpsRoofMesh.visible = isFps;
-      for (const w of cv.wallEntries) {
-        const fpsUpper = w.solidGroup.userData.fpsUpperGroup as THREE.Group | undefined;
-        if (fpsUpper) fpsUpper.visible = isFps;
-
-        const occludes =
-          !isFps &&
-          state.phase !== 'title' &&
-          w.gx + w.gy > state.player.x + state.player.y + 0.15 &&
-          Math.abs(w.gx + 0.5 - state.player.x) < 2.2 &&
-          Math.abs(w.gy + 0.5 - state.player.y) < 2.2;
-        w.solidGroup.visible = !occludes;
-        w.fadedGroup.visible = occludes;
+    // Toggle FPS ceiling roofs & upper walls only when camera mode flips (zero per-frame scan)
+    if (this.lastIsFps !== isFps) {
+      this.lastIsFps = isFps;
+      for (const cv of this.chunkVisuals.values()) {
+        if (cv.fpsRoofMesh) cv.fpsRoofMesh.visible = isFps;
+        if (cv.fpsUpperGroup) cv.fpsUpperGroup.visible = isFps;
       }
-      for (const barrel of cv.burnBarrels) {
-        const fg = barrel.userData.flameGroup as THREE.Group | undefined;
-        if (fg) {
-          const pulse = 0.88 + Math.sin(state.elapsedClock * 16 + barrel.position.x * 3.1) * 0.22;
+    }
+
+    // Restore previously occluded walls and swap fallback chunks back to batched mergedWallsGroup
+    for (let i = 0; i < this.lastOccludedWalls.length; i++) {
+      const w = this.lastOccludedWalls[i];
+      w.solidGroup.visible = true;
+      w.fadedGroup.visible = false;
+    }
+    this.lastOccludedWalls.length = 0;
+    for (let i = 0; i < this.lastFallbackWallChunks.length; i++) {
+      const cv = this.lastFallbackWallChunks[i];
+      if (cv.mergedWallsGroup) cv.mergedWallsGroup.visible = true;
+      if (cv.dynamicWallsGroup) cv.dynamicWallsGroup.visible = false;
+    }
+    this.lastFallbackWallChunks.length = 0;
+
+    if (!isFps && state.phase !== 'title') {
+      const px = state.player.x;
+      const py = state.player.y;
+      const minCX = Math.floor((px - 2.3) / CHUNK_SIZE);
+      const maxCX = Math.floor((px + 2.3) / CHUNK_SIZE);
+      const minCY = Math.floor((py - 2.3) / CHUNK_SIZE);
+      const maxCY = Math.floor((py + 2.3) / CHUNK_SIZE);
+      const pSum = px + py + 0.15;
+      for (let cy = minCY; cy <= maxCY; cy++) {
+        for (let cx = minCX; cx <= maxCX; cx++) {
+          const cv = this.chunkVisuals.get(`${cx},${cy}`);
+          if (!cv || cv.wallEntries.length === 0) continue;
+          let chunkHasOccluded = false;
+          for (let i = 0; i < cv.wallEntries.length; i++) {
+            const w = cv.wallEntries[i];
+            if (
+              w.gx + w.gy > pSum &&
+              Math.abs(w.gx + 0.5 - px) < 2.2 &&
+              Math.abs(w.gy + 0.5 - py) < 2.2
+            ) {
+              w.solidGroup.visible = false;
+              w.fadedGroup.visible = true;
+              this.lastOccludedWalls.push(w);
+              chunkHasOccluded = true;
+            }
+          }
+          if (chunkHasOccluded) {
+            if (cv.mergedWallsGroup) cv.mergedWallsGroup.visible = false;
+            if (cv.dynamicWallsGroup) cv.dynamicWallsGroup.visible = true;
+            this.lastFallbackWallChunks.push(cv);
+          }
+        }
+      }
+    }
+
+    // Animate burn barrel flames only in nearby chunks
+    const camCX = Math.floor(targetX / CHUNK_SIZE);
+    const camCY = Math.floor(targetZ / CHUNK_SIZE);
+    for (let cy = camCY - 1; cy <= camCY + 1; cy++) {
+      for (let cx = camCX - 1; cx <= camCX + 1; cx++) {
+        const cv = this.chunkVisuals.get(`${cx},${cy}`);
+        if (!cv || cv.burnBarrelFlames.length === 0) continue;
+        for (let i = 0; i < cv.burnBarrelFlames.length; i++) {
+          const fg = cv.burnBarrelFlames[i];
+          const pulse = 0.88 + Math.sin(state.elapsedClock * 16 + fg.position.x * 3.1) * 0.22;
           fg.scale.set(1, pulse, 1);
-          fg.rotation.y = Math.sin(state.elapsedClock * 9 + barrel.position.z) * 0.2;
+          fg.rotation.y = Math.sin(state.elapsedClock * 9 + fg.position.z) * 0.2;
         }
       }
     }
@@ -886,9 +1144,9 @@ export class ThreeIsometricRenderer {
     // Sync doors, containers, loot drops, structures, vehicles, zombies, player, VFX
     this.syncDoors(state.doors, targetX, targetZ, isFps);
     this.syncContainers(state.containers, state.player, state.elapsedClock, targetX, targetZ);
-    this.syncStructures(state.structures, state.elapsedClock);
-    this.syncVehicles(state.vehicles, state.player, state.activeVehicleId, state.elapsedClock, isFps);
-    this.syncZombies(state.zombies, state.elapsedClock);
+    this.syncStructures(state.structures, state.elapsedClock, targetX, targetZ);
+    this.syncVehicles(state.vehicles, state.player, state.activeVehicleId, state.elapsedClock, isFps, targetX, targetZ);
+    this.syncZombies(state.zombies, state.elapsedClock, targetX, targetZ);
     this.syncPlayer(state, isFps);
     this.syncProjectiles(state.projectiles, state.elapsedClock);
     this.syncFirePatches(state.firePatches, state.elapsedClock);
@@ -911,37 +1169,45 @@ export class ThreeIsometricRenderer {
     targetZ: number,
     isFps: boolean
   ): void {
-    const { darkness, phaseLabel } = getDaylightInfo(state.timeMinutes);
-    const nightT = clamp((darkness - 0.08) / 0.7, 0, 1);
+    const atmo = computeAtmosphereLighting(state.timeMinutes, this.atmoState);
+    this.skyDome.update(targetX, targetZ, atmo, state.elapsedClock, isFps);
 
-    // Sky/fog blend (atmospheric overcast horizon in FPS, dark void edges in ISO)
-    const cDay = isFps ? this.fpsDayColor : this.dayColor;
-    const cDusk = isFps ? this.fpsDuskColor : this.duskColor;
-    const cNight = isFps ? this.fpsNightColor : this.nightColor;
-    if (phaseLabel === 'DAWN' || phaseLabel === 'DUSK') {
-      _color.copy(cDay).lerp(cDusk, Math.sin(nightT * Math.PI));
-      _color.lerp(cNight, nightT * 0.65);
-    } else {
-      _color.copy(cDay).lerp(cNight, nightT);
+    const nightT = atmo.nightT;
+
+    // Sky/fog blend (atmospheric dawn/day/dusk horizon in FPS, deep void vignette in ISO)
+    const fogCol = isFps ? atmo.fpsFogColor : atmo.isoFogColor;
+    (this.scene.background as THREE.Color).copy(fogCol);
+    if (this.scene.fog) {
+      this.scene.fog.color.copy(fogCol);
+      if (this.scene.fog instanceof THREE.FogExp2) {
+        this.scene.fog.density = (isFps ? 0.0115 : 0.014) * atmo.fogDensityScale;
+      }
     }
-    (this.scene.background as THREE.Color).copy(_color);
-    if (this.scene.fog) this.scene.fog.color.copy(_color);
 
-    // Sun DirectionalLight follows player shadow bounds
-    this.sunLight.position.set(targetX - 16, 26, targetZ - 12);
+    // Dynamic solar/lunar key light & opposite sky rim fill tracking player bounds
+    this.sunLight.position.set(
+      targetX + atmo.sunLightOffset.x,
+      atmo.sunLightOffset.y,
+      targetZ + atmo.sunLightOffset.z
+    );
     this.sunLight.target.position.set(targetX, 0, targetZ);
     this.sunLight.target.updateMatrixWorld();
+    this.sunLight.color.copy(atmo.sunColor);
+    this.sunLight.intensity = atmo.sunIntensity;
 
-    if (phaseLabel === 'DAWN' || phaseLabel === 'DUSK') {
-      this.sunLight.color.copy(this.sunDayColor).lerp(this.sunDuskColor, 0.75);
-    } else {
-      this.sunLight.color.copy(this.sunDayColor).lerp(this.sunNightColor, nightT);
-    }
-    this.sunLight.intensity = 1.65 * (1 - nightT * 0.78);
+    this.rimLight.position.set(
+      targetX + atmo.rimLightOffset.x,
+      atmo.rimLightOffset.y,
+      targetZ + atmo.rimLightOffset.z
+    );
+    this.rimLight.target.position.set(targetX, 0, targetZ);
+    this.rimLight.target.updateMatrixWorld();
+    this.rimLight.color.copy(atmo.rimColor);
+    this.rimLight.intensity = atmo.rimIntensity;
 
-    this.hemiLight.color.copy(this.hemiSkyDay).lerp(this.hemiSkyNight, nightT);
-    this.hemiLight.groundColor.copy(this.hemiGndDay).lerp(this.hemiGndNight, nightT);
-    this.hemiLight.intensity = isFps ? Math.max(0.32, 0.88 - nightT * 0.56) : 0.8 - nightT * 0.56;
+    this.hemiLight.color.copy(atmo.hemiSkyColor);
+    this.hemiLight.groundColor.copy(atmo.hemiGroundColor);
+    this.hemiLight.intensity = isFps ? Math.max(0.32, atmo.hemiIntensity + 0.05) : atmo.hemiIntensity;
 
     // Player flashlight SpotLight (tracks vertical pitch in FPS mode!)
     if (state.phase !== 'title' && state.activeVehicleId === null && state.player.flashlightOn && state.player.battery > 0) {
@@ -990,7 +1256,8 @@ export class ThreeIsometricRenderer {
     }
 
     // Dynamic PointLight allocation for nearest campfires, burn barrels, streetlamps, fires & sirens
-    const candidates: Array<{ x: number; y: number; z: number; color: number; intensity: number; distance: number; d2: number }> = [];
+    const candidates = this._lightCandidates;
+    candidates.length = 0;
     const flicker = Math.sin(state.elapsedClock * 13) * 0.45 + Math.cos(state.elapsedClock * 23) * 0.25;
 
     for (const s of state.structures) {
@@ -1085,7 +1352,8 @@ export class ThreeIsometricRenderer {
   }
 
   private syncDoors(doors: DoorEntity[], targetX: number, targetZ: number, isFps: boolean): void {
-    const activeIds = new Set<string>();
+    const activeIds = this._scratchStrIds;
+    activeIds.clear();
     for (const d of doors) {
       if (Math.abs(d.gx - targetX) > 26 || Math.abs(d.gy - targetZ) > 26) continue;
       activeIds.add(d.id);
@@ -1125,8 +1393,10 @@ export class ThreeIsometricRenderer {
     targetX: number,
     targetZ: number
   ): void {
-    const activeContainers = new Set<string>();
-    const activeDrops = new Set<string>();
+    const activeContainers = this._scratchStrIds;
+    activeContainers.clear();
+    const activeDrops = this._scratchStrIds2;
+    activeDrops.clear();
 
     for (const c of containers) {
       if (Math.abs(c.gx - targetX) > 26 || Math.abs(c.gy - targetZ) > 26) continue;
@@ -1135,13 +1405,17 @@ export class ThreeIsometricRenderer {
         activeDrops.add(c.id);
         let drop = this.lootDropRigs.get(c.id);
         if (!drop) {
-          drop = this.factory.createLootDropGroup();
+          drop = this.factory.createLootDropGroup(getPrimaryLootItem(c.items));
           this.scene.add(drop);
           this.lootDropRigs.set(c.id, drop);
         }
         const bob = Math.sin(elapsedClock * 4 + c.gx * 1.7 + c.gy) * 0.05;
         drop.position.set(c.gx + 0.5, 0.04 + bob, c.gy + 0.5);
         drop.rotation.y = Math.sin(elapsedClock * 1.8 + c.gx) * 0.25;
+        const itemSprite = drop.userData.itemSprite as THREE.Sprite | undefined;
+        if (itemSprite) {
+          itemSprite.position.y = 0.54 + Math.sin(elapsedClock * 3.8 + c.gx) * 0.05;
+        }
         continue;
       }
 
@@ -1186,14 +1460,17 @@ export class ThreeIsometricRenderer {
     for (const [id, drop] of this.lootDropRigs.entries()) {
       if (!activeDrops.has(id)) {
         this.scene.remove(drop);
+        this.disposeLootDropMaterials(drop);
         this.lootDropRigs.delete(id);
       }
     }
   }
 
-  private syncStructures(structures: WorldStructure[], elapsedClock: number): void {
-    const activeIds = new Set<string>();
+  private syncStructures(structures: WorldStructure[], elapsedClock: number, targetX: number, targetZ: number): void {
+    const activeIds = this._scratchStrIds;
+    activeIds.clear();
     for (const s of structures) {
+      if (Math.abs(s.gx + 0.5 - targetX) > 32 || Math.abs(s.gy + 0.5 - targetZ) > 32) continue;
       activeIds.add(s.id);
       let g = this.structureRigs.get(s.id);
       if (!g) {
@@ -1226,12 +1503,16 @@ export class ThreeIsometricRenderer {
     player: PlayerState,
     activeVehicleId: number | null,
     elapsedClock: number,
-    isFps: boolean
+    isFps: boolean,
+    targetX: number,
+    targetZ: number
   ): void {
-    const activeIds = new Set<number>();
+    const activeIds = this._scratchNumIds;
+    activeIds.clear();
     const sirenPhase = Math.floor(elapsedClock * 7) % 2;
 
     for (const v of vehicles) {
+      if (v.id !== activeVehicleId && (Math.abs(v.x - targetX) > 34 || Math.abs(v.y - targetZ) > 34)) continue;
       activeIds.add(v.id);
       let rig = this.vehicleRigs.get(v.id);
       if (!rig) {
@@ -1287,29 +1568,60 @@ export class ThreeIsometricRenderer {
     }
   }
 
-  private syncZombies(zombies: Zombie[], elapsedClock: number): void {
-    const activeIds = new Set<number>();
+  private acquireZombieEntry(archetype: ZombieArchetype): { rig: ActorRig3D; ring: THREE.Mesh } {
+    const bucket = this.zombieRigPool.get(archetype);
+    if (bucket && bucket.length > 0) {
+      const reused = bucket.pop()!;
+      this.pooledZombieCount--;
+      reused.rig.root.visible = true;
+      reused.ring.visible = false;
+      return reused;
+    }
+    const rig = this.factory.createActorRig(archetype);
+    const ring = new THREE.Mesh(
+      this.zombieRingGeo,
+      archetype === 'spitter' ? this.zombieRingMatMint : this.zombieRingMatRed
+    );
+    ring.visible = false;
+    this.scene.add(rig.root);
+    this.scene.add(ring);
+    return { rig, ring };
+  }
+
+  private recycleZombieEntry(archetype: ZombieArchetype, rig: ActorRig3D, ring: THREE.Mesh): void {
+    rig.root.visible = false;
+    ring.visible = false;
+    if (this.pooledZombieCount < MAX_POOLED_ZOMBIES) {
+      let bucket = this.zombieRigPool.get(archetype);
+      if (!bucket) {
+        bucket = [];
+        this.zombieRigPool.set(archetype, bucket);
+      }
+      bucket.push({ rig, ring });
+      this.pooledZombieCount++;
+      return;
+    }
+    this.scene.remove(rig.root);
+    this.scene.remove(ring);
+    for (const m of rig.allMaterials) m.dispose();
+  }
+
+  private syncZombies(zombies: Zombie[], elapsedClock: number, targetX: number, targetZ: number): void {
+    const activeIds = this._scratchNumIds;
+    activeIds.clear();
     for (const z of zombies) {
+      if (Math.abs(z.x - targetX) > 34 || Math.abs(z.y - targetZ) > 34) continue;
       activeIds.add(z.id);
       let entry = this.zombieRigs.get(z.id);
       if (!entry) {
-        const rig = this.factory.createActorRig(z.archetype);
-        const ringGeo = new THREE.RingGeometry(0.32, 0.42, 18);
-        ringGeo.rotateX(-Math.PI * 0.5);
-        const ring = new THREE.Mesh(
-          ringGeo,
-          new THREE.MeshBasicMaterial({
-            color: z.archetype === 'spitter' ? 0x5ef2b5 : 0xff4d42,
-            transparent: true,
-            opacity: 0.85,
-            side: THREE.DoubleSide,
-            depthWrite: false,
-          })
-        );
-        ring.visible = false;
-        this.scene.add(rig.root);
-        this.scene.add(ring);
-        entry = { rig, archetype: z.archetype, ring };
+        const acquired = this.acquireZombieEntry(z.archetype);
+        entry = {
+          rig: acquired.rig,
+          archetype: z.archetype,
+          ring: acquired.ring,
+          wasFading: false,
+          wasFlashing: false,
+        };
         this.zombieRigs.set(z.id, entry);
       }
 
@@ -1338,15 +1650,19 @@ export class ThreeIsometricRenderer {
         rig.bodyPivot.rotation.z = fallProg * 1.48;
         rig.bodyPivot.position.y = fallProg * 0.18;
         const fade = clamp(z.stateTimer / 0.22, 0, 1);
+        entry.wasFading = true;
         for (const m of rig.allMaterials) {
           m.transparent = fade < 0.99;
           m.opacity = fade;
         }
       } else {
         rig.bodyPivot.rotation.z = 0;
-        for (const m of rig.allMaterials) {
-          m.transparent = false;
-          m.opacity = 1;
+        if (entry.wasFading) {
+          entry.wasFading = false;
+          for (const m of rig.allMaterials) {
+            m.transparent = false;
+            m.opacity = 1;
+          }
         }
         if (animState === 'walk') {
           const phase = z.walkCycle * 1.1;
@@ -1379,26 +1695,37 @@ export class ThreeIsometricRenderer {
         }
       }
 
-      // Hit flash white emissive
+      // Hit flash white emissive (only mutate when active or resetting)
       const flash = z.hitFlash > 0;
-      for (const mat of rig.flashMaterials) {
-        if (flash) {
-          mat.emissive.setHex(0xffffff);
-          mat.emissiveIntensity = 0.85;
-        } else {
-          mat.emissive.setHex(0x000000);
-          mat.emissiveIntensity = 0;
+      if (flash || entry.wasFlashing) {
+        entry.wasFlashing = flash;
+        for (const mat of rig.flashMaterials) {
+          if (flash) {
+            mat.emissive.setHex(0xffffff);
+            mat.emissiveIntensity = 0.85;
+          } else {
+            mat.emissive.setHex(0x000000);
+            mat.emissiveIntensity = 0;
+          }
         }
       }
     }
 
     for (const [id, entry] of this.zombieRigs.entries()) {
       if (!activeIds.has(id)) {
-        this.scene.remove(entry.rig.root);
-        this.scene.remove(entry.ring);
-        for (const m of entry.rig.allMaterials) m.dispose();
-        entry.ring.geometry.dispose();
-        (entry.ring.material as THREE.Material).dispose();
+        if (entry.wasFading) {
+          for (const m of entry.rig.allMaterials) {
+            m.transparent = false;
+            m.opacity = 1;
+          }
+        }
+        if (entry.wasFlashing) {
+          for (const mat of entry.rig.flashMaterials) {
+            mat.emissive.setHex(0x000000);
+            mat.emissiveIntensity = 0;
+          }
+        }
+        this.recycleZombieEntry(entry.archetype, entry.rig, entry.ring);
         this.zombieRigs.delete(id);
       }
     }
@@ -1432,7 +1759,8 @@ export class ThreeIsometricRenderer {
         (p.equippedWeapon === 'pistol' || p.equippedWeapon === 'shotgun' || p.equippedWeapon === 'lmg');
       this.fpsViewmodelRig.muzzleFlash.visible = showMuzzle;
       if (showMuzzle) {
-        this.fpsViewmodelRig.muzzleFlash.position.x = p.equippedWeapon === 'pistol' ? 0.32 : 0.58;
+        this.fpsViewmodelRig.muzzleFlash.position.x =
+          p.equippedWeapon === 'pistol' ? 0.33 : p.equippedWeapon === 'shotgun' ? 0.65 : 0.72;
       }
 
       const speedNow = Math.hypot(state.playerVelX, state.playerVelY);
@@ -1495,16 +1823,23 @@ export class ThreeIsometricRenderer {
     const inWater = state.getCell(Math.floor(p.x), Math.floor(p.y)).tile === 'water';
     this.playerWadeDepth += ((inWater ? 0.55 : 0) - this.playerWadeDepth) * 0.25;
     if (Math.abs(this.playerWadeDepth - (inWater ? 0.55 : 0)) < 0.004) this.playerWadeDepth = inWater ? 0.55 : 0;
-    const wadePlanes = this.playerWadeDepth > 0 ? [this.playerWadePlane] : [];
-    if (wadePlanes.length) this.playerWadePlane.constant = -this.playerWadeDepth * this.playerRigHeight * p.scaleY;
-    this.playerRig.root.traverse((o: THREE.Object3D) => {
-      const m = o as THREE.Mesh;
-      if (!m.isMesh || !m.material) return;
-      const mats = Array.isArray(m.material) ? m.material : [m.material];
-      for (const mat of mats) {
-        if (mat.clippingPlanes?.length !== wadePlanes.length) { mat.clippingPlanes = wadePlanes; mat.needsUpdate = true; }
-      }
-    });
+    const hasWade = this.playerWadeDepth > 0;
+    if (hasWade) this.playerWadePlane.constant = -this.playerWadeDepth * this.playerRigHeight * p.scaleY;
+    if (hasWade !== this.playerWadeClipActive) {
+      this.playerWadeClipActive = hasWade;
+      const wadePlanes = hasWade ? [this.playerWadePlane] : [];
+      this.playerRig.root.traverse((o: THREE.Object3D) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh || !m.material) return;
+        const mats = Array.isArray(m.material) ? m.material : [m.material];
+        for (const mat of mats) {
+          if (mat.clippingPlanes?.length !== wadePlanes.length) {
+            mat.clippingPlanes = wadePlanes;
+            mat.needsUpdate = true;
+          }
+        }
+      });
+    }
 
     if (this.playerRig.weapons) {
       for (const wKey of Object.keys(this.playerRig.weapons) as Array<keyof typeof this.playerRig.weapons>) {
@@ -1516,9 +1851,14 @@ export class ThreeIsometricRenderer {
       this.playerRig.fishingRod.visible = state.fishing.phase !== 'idle';
     }
     if (this.playerRig.muzzleFlash) {
-      this.playerRig.muzzleFlash.visible =
+      const show3pMuzzle =
         state.muzzleFlashTimer > 0 &&
         (p.equippedWeapon === 'pistol' || p.equippedWeapon === 'shotgun' || p.equippedWeapon === 'lmg');
+      this.playerRig.muzzleFlash.visible = show3pMuzzle;
+      if (show3pMuzzle) {
+        this.playerRig.muzzleFlash.position.x =
+          p.equippedWeapon === 'pistol' ? 0.33 : p.equippedWeapon === 'shotgun' ? 0.65 : 0.72;
+      }
     }
 
     // Articulated pose
@@ -1568,19 +1908,23 @@ export class ThreeIsometricRenderer {
     }
 
     const flash = p.hitFlash > 0;
-    for (const mat of this.playerRig.flashMaterials) {
-      if (flash) {
-        mat.emissive.setHex(0xff564c);
-        mat.emissiveIntensity = 0.85;
-      } else {
-        mat.emissive.setHex(0x000000);
-        mat.emissiveIntensity = 0;
+    if (flash || this.playerWasFlashing) {
+      this.playerWasFlashing = flash;
+      for (const mat of this.playerRig.flashMaterials) {
+        if (flash) {
+          mat.emissive.setHex(0xff564c);
+          mat.emissiveIntensity = 0.85;
+        } else {
+          mat.emissive.setHex(0x000000);
+          mat.emissiveIntensity = 0;
+        }
       }
     }
   }
 
   private syncProjectiles(projectiles: Projectile[], elapsedClock: number): void {
-    const activeIds = new Set<number>();
+    const activeIds = this._scratchNumIds;
+    activeIds.clear();
     for (const pr of projectiles) {
       activeIds.add(pr.id);
       let g = this.projectileMeshes.get(pr.id);
@@ -1650,7 +1994,8 @@ export class ThreeIsometricRenderer {
   }
 
   private syncFirePatches(firePatches: FirePatch[], elapsedClock: number): void {
-    const activeIds = new Set<number>();
+    const activeIds = this._scratchNumIds;
+    activeIds.clear();
     for (const fp of firePatches) {
       activeIds.add(fp.id);
       let g = this.firePatchMeshes.get(fp.id);
@@ -2197,20 +2542,13 @@ export class ThreeIsometricRenderer {
       }
     }
 
-    // Subtle FPS peripheral vignette for grounded depth
+    // Subtle FPS peripheral vignette for grounded depth (uses cached CanvasGradient)
     if (isFps && state.phase === 'playing') {
-      const grad = ctx.createRadialGradient(
-        this.viewW * 0.5,
-        this.viewH * 0.5,
-        Math.min(this.viewW, this.viewH) * 0.32,
-        this.viewW * 0.5,
-        this.viewH * 0.5,
-        Math.max(this.viewW, this.viewH) * 0.72
-      );
-      grad.addColorStop(0, 'rgba(0,0,0,0)');
-      grad.addColorStop(1, state.isSprinting ? 'rgba(6,8,10,0.42)' : 'rgba(6,8,10,0.28)');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, this.viewW, this.viewH);
+      const grad = state.isSprinting ? this.fpsVignetteSprintGrad : this.fpsVignetteGrad;
+      if (grad) {
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, this.viewW, this.viewH);
+      }
     }
 
     // Tactical crosshair (centered reticle with dynamic bloom in FPS mode; cursor-tracked in ISO mode) & hit-marker X
@@ -2309,9 +2647,24 @@ export class ThreeIsometricRenderer {
 
   public dispose(): void {
     this.clearSceneCaches();
+    for (const bucket of this.zombieRigPool.values()) {
+      for (const entry of bucket) {
+        this.scene.remove(entry.rig.root);
+        this.scene.remove(entry.ring);
+        for (const m of entry.rig.allMaterials) m.dispose();
+      }
+    }
+    this.zombieRigPool.clear();
+    this.pooledZombieCount = 0;
+    this.zombieRingGeo.dispose();
+    this.zombieRingMatRed.dispose();
+    this.zombieRingMatMint.dispose();
+
     this.chunkPlaneGeo.dispose();
     this.ceilingBoxGeo.dispose();
     this.ceilingMat.dispose();
+    this.skyDome.dispose();
+    this.grassSystem.dispose();
     this.overlayCanvas.remove();
     this.factory.dispose();
     this.atlas.dispose();

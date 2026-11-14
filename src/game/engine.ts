@@ -80,7 +80,17 @@ import {
   toggleDoorState,
   useConsumableItem,
 } from './survivalLogic';
+import {
+  buildActiveLootContainer,
+  enqueuePickupNotifications,
+  extractLootEntries,
+  formatContainerMeta,
+  tickPickupNotifications,
+  transferAllLootItems,
+  transferSingleLootItem,
+} from './lootUi';
 import type {
+  ActiveLootContainer,
   BloodDecal,
   BulletImpactEffect,
   CameraMode,
@@ -95,6 +105,7 @@ import type {
   ItemId,
   LootContainer,
   NearbyActionPrompt,
+  PickupNotification,
   PlayerState,
   Projectile,
   SoundRipple,
@@ -196,6 +207,13 @@ export class SurvivalEngine {
 
   private player: PlayerState = createInitialPlayer();
   private inventory: Inventory = createInitialInventory();
+  private activeLootSource:
+    | { type: 'container'; container: LootContainer }
+    | { type: 'trunk'; vehicle: Vehicle }
+    | null = null;
+  private activeLootContainer: ActiveLootContainer | null = null;
+  private pickupNotifications: PickupNotification[] = [];
+  private nextPickupToastId = { nextId: 1 };
 
   private day = 1;
   private timeMinutes = 8 * 60 + 30; // Start at 08:30 AM Day 1
@@ -420,6 +438,9 @@ export class SurvivalEngine {
     soundEngine.updateEngineSound(false, 0, false);
     this.player = createInitialPlayer(effectiveSpawnX, effectiveSpawnY);
     this.inventory = createInitialInventory();
+    this.activeLootSource = null;
+    this.activeLootContainer = null;
+    this.pickupNotifications = [];
     this.decals = [];
     this.impactDecals = [];
     this.impactEffects = [];
@@ -537,6 +558,8 @@ export class SurvivalEngine {
 
   pauseGame(): void {
     if (this.phase !== 'playing') return;
+    this.activeLootSource = null;
+    this.activeLootContainer = null;
     this.releasePointerLock();
     soundEngine.playUiClick();
     soundEngine.updateEngineSound(false, 0, false);
@@ -546,6 +569,9 @@ export class SurvivalEngine {
   }
 
   returnToTitle(): void {
+    this.activeLootSource = null;
+    this.activeLootContainer = null;
+    this.pickupNotifications = [];
     this.releasePointerLock();
     soundEngine.playUiClick();
     soundEngine.updateEngineSound(false, 0, false);
@@ -759,6 +785,7 @@ export class SurvivalEngine {
           '#e09c84'
         );
       }
+      this.recordItemPickups({ [recipe.outputItem]: outcome.outputAmount }, 'Cooked');
       this.emitHud();
       return true;
     }
@@ -789,10 +816,141 @@ export class SurvivalEngine {
       soundEngine.playLootPickup();
       this.animateAction('craft','CRAFTING',1.5);
       this.showBanner(`Crafted ${recipe.name}`, 2.0);
+      this.recordItemPickups({ [recipe.outputItem]: recipe.outputAmount }, 'Workbench');
       this.emitHud();
       return true;
     }
     return false;
+  }
+
+  private recordItemPickups(items: Partial<Inventory>, source?: string): void {
+    this.pickupNotifications = enqueuePickupNotifications(
+      this.pickupNotifications,
+      items,
+      this.nextPickupToastId,
+      source
+    );
+  }
+
+  takeLootItem(item: ItemId): void {
+    if (this.phase !== 'playing' || !this.activeLootSource) return;
+    const src = this.activeLootSource;
+    const currentItems =
+      src.type === 'container' ? src.container.items : (src.vehicle.trunkItems ?? {});
+    const { takenQty, nextContainerItems, nextInventory, isEmpty } = transferSingleLootItem(
+      currentItems,
+      this.inventory,
+      item
+    );
+    if (takenQty <= 0) return;
+
+    this.inventory = nextInventory;
+    const kind =
+      src.type === 'container'
+        ? src.container.kind
+        : src.vehicle.kind === 'police'
+          ? 'car_police'
+          : 'car_sedan';
+    const meta = formatContainerMeta(kind);
+
+    if (src.type === 'container') {
+      src.container.items = nextContainerItems;
+      if (isEmpty) {
+        src.container.searched = true;
+        src.container.openAnim = Math.max(0.08, src.container.openAnim ?? 0);
+        src.container.popTimer = 0.45;
+      }
+    } else {
+      src.vehicle.trunkItems = nextContainerItems;
+      if (isEmpty) {
+        src.vehicle.trunkSearched = true;
+      }
+    }
+
+    this.score += 5;
+    soundEngine.playLootPickup();
+    this.recordItemPickups({ [item]: takenQty }, meta.title);
+
+    if (isEmpty) {
+      const fxX = src.type === 'container' ? src.container.gx + 0.5 : src.vehicle.x;
+      const fxY = src.type === 'container' ? src.container.gy + 0.5 : src.vehicle.y;
+      this.spawnParticles(fxX, fxY, 0.4, 6, '#d9b566', 2.0, 1.8);
+      this.activeLootSource = null;
+      this.activeLootContainer = null;
+      this.actionVisual = null;
+    } else {
+      const sourceId = src.type === 'container' ? src.container.id : `trunk_${src.vehicle.id}`;
+      this.activeLootContainer = buildActiveLootContainer(
+        src.type,
+        sourceId,
+        kind,
+        nextContainerItems
+      );
+    }
+    this.emitHud();
+  }
+
+  takeAllLoot(): void {
+    if (this.phase !== 'playing' || !this.activeLootSource) return;
+    const src = this.activeLootSource;
+    const currentItems =
+      src.type === 'container' ? src.container.items : (src.vehicle.trunkItems ?? {});
+    const { taken, nextContainerItems, nextInventory } = transferAllLootItems(
+      currentItems,
+      this.inventory
+    );
+    this.inventory = nextInventory;
+
+    const kind =
+      src.type === 'container'
+        ? src.container.kind
+        : src.vehicle.kind === 'police'
+          ? 'car_police'
+          : 'car_sedan';
+    const meta = formatContainerMeta(kind);
+
+    if (src.type === 'container') {
+      src.container.items = nextContainerItems;
+      src.container.searched = true;
+      src.container.openAnim = Math.max(0.08, src.container.openAnim ?? 0);
+      src.container.popTimer = 0.48;
+      this.score += 15;
+    } else {
+      src.vehicle.trunkItems = nextContainerItems;
+      src.vehicle.trunkSearched = true;
+      this.score += 20;
+    }
+
+    const entries = extractLootEntries(taken);
+    soundEngine.playLootPickup();
+    if (entries.length > 0) {
+      this.recordItemPickups(taken, meta.title);
+    }
+    const fxX = src.type === 'container' ? src.container.gx + 0.5 : src.vehicle.x;
+    const fxY = src.type === 'container' ? src.container.gy + 0.5 : src.vehicle.y;
+    const label =
+      entries.length > 0
+        ? entries
+            .slice(0, 3)
+            .map((e) => `+${e.qty} ${e.item.replace('ammo_', '')}`)
+            .join(' · ')
+        : 'Empty';
+    this.addFloatingText(fxX, fxY, 1.15, label, '#f0d078');
+    this.spawnParticles(fxX, fxY, 0.4, 6, '#d9b566', 2.0, 1.8);
+
+    this.activeLootSource = null;
+    this.activeLootContainer = null;
+    this.actionVisual = null;
+    this.emitHud();
+  }
+
+  closeLootContainer(): void {
+    if (!this.activeLootSource && !this.activeLootContainer) return;
+    soundEngine.playUiClick();
+    this.activeLootSource = null;
+    this.activeLootContainer = null;
+    this.actionVisual = null;
+    this.emitHud();
   }
 
   private showBanner(msg: string, duration = 2.5): void {
@@ -1427,6 +1585,14 @@ export class SurvivalEngine {
       this.statusBannerTimer -= dt;
       if (this.statusBannerTimer <= 0) {
         this.statusBanner = null;
+      }
+    }
+
+    if (this.pickupNotifications.length > 0) {
+      const prevLen = this.pickupNotifications.length;
+      this.pickupNotifications = tickPickupNotifications(this.pickupNotifications, dt);
+      if (this.pickupNotifications.length !== prevLen) {
+        this.emitHud();
       }
     }
 
@@ -2355,6 +2521,10 @@ export class SurvivalEngine {
         `+${caughtCount} RAW FISH${bonusText}`,
         '#7fe0ff'
       );
+      this.recordItemPickups(
+        { raw_fish: caughtCount, ...(roll >= 0.88 ? { scrap: 1 } : {}) },
+        'Fishing'
+      );
       this.fishing = createIdleFishingState();
       this.emitHud();
       return;
@@ -2408,12 +2578,14 @@ export class SurvivalEngine {
   }
 
   private updateContainers(dt: number): void {
+    const inspectedId =
+      this.activeLootSource?.type === 'container' ? this.activeLootSource.container.id : null;
     for (const c of this.containers) {
       if (c.kind === 'zombie_drop') continue;
-      if (c.searched) {
+      if (c.searched || c.id === inspectedId) {
         const cur = c.openAnim ?? 0;
         if (cur < 1) {
-          c.openAnim = Math.min(1, cur + dt * 2.6);
+          c.openAnim = Math.min(1, cur + dt * 2.8);
         }
       }
       if (c.popTimer && c.popTimer > 0) {
@@ -2422,43 +2594,76 @@ export class SurvivalEngine {
     }
   }
 
+  getRenderStats(): { drawCalls: number; triangles: number } {
+    return this.threeRenderer.getRenderInfo();
+  }
+
   private collectContainer(c: LootContainer): void {
     if (c.searched) return;
-    this.animateAction('search','SEARCHING',.9);
-    c.searched = true;
-    c.openAnim = 0.05;
-    c.popTimer = 0.48;
-    const gained: string[] = [];
-    for (const [key, qty] of Object.entries(c.items)) {
-      if (!qty) continue;
-      const item = key as ItemId;
-      this.inventory[item] += qty;
-      gained.push(`+${qty} ${item.replace('ammo_', '')}`);
+    if (c.kind === 'zombie_drop') {
+      this.animateAction('search', 'SCAVENGING', 0.6);
+      c.searched = true;
+      const gained: string[] = [];
+      for (const [key, qty] of Object.entries(c.items)) {
+        if (!qty) continue;
+        const item = key as ItemId;
+        this.inventory[item] += qty;
+        gained.push(`+${qty} ${item.replace('ammo_', '')}`);
+      }
+      soundEngine.playLootPickup();
+      this.score += 15;
+      this.recordItemPickups(c.items, 'Scavenge Pouch');
+      const label = gained.length > 0 ? gained.slice(0, 3).join(' · ') : 'Empty';
+      this.addFloatingText(c.gx + 0.5, c.gy + 0.5, 1.1, label, '#f0d078');
+      this.spawnParticles(c.gx + 0.5, c.gy + 0.5, 0.4, 6, '#d9b566', 2.0, 1.8);
+      this.emitHud();
+      return;
     }
-    soundEngine.playLootPickup();
-    this.score += 15;
-    const label = gained.length > 0 ? gained.slice(0, 3).join(' · ') : 'Empty';
-    this.addFloatingText(c.gx + 0.5, c.gy + 0.5, 1.1, label, '#f0d078');
-    this.spawnParticles(c.gx + 0.5, c.gy + 0.5, 0.4, 6, '#d9b566', 2.0, 1.8);
+
+    const entries = extractLootEntries(c.items);
+    c.openAnim = Math.max(0.08, c.openAnim ?? 0);
+    c.popTimer = 0.42;
+    if (entries.length === 0) {
+      c.searched = true;
+      soundEngine.playLootPickup();
+      this.addFloatingText(c.gx + 0.5, c.gy + 0.5, 1.1, 'Empty', '#9aa894');
+      this.emitHud();
+      return;
+    }
+
+    this.animateAction('search', 'INSPECTING', 0.75);
+    soundEngine.playUiClick();
+    this.activeLootSource = { type: 'container', container: c };
+    this.activeLootContainer = buildActiveLootContainer('container', c.id, c.kind, c.items);
+    this.releasePointerLock();
+    this.clearInputs();
     this.emitHud();
   }
 
   private collectVehicleTrunk(v: Vehicle): void {
     if (v.trunkSearched) return;
-    this.animateAction('search','SEARCHING TRUNK',1);
-    v.trunkSearched = true;
-    const gained: string[] = [];
-    for (const [key, qty] of Object.entries(v.trunkItems ?? {})) {
-      if (!qty) continue;
-      const item = key as ItemId;
-      this.inventory[item] += qty;
-      gained.push(`+${qty} ${item.replace('ammo_', '')}`);
+    const trunkItems = v.trunkItems ?? {};
+    const entries = extractLootEntries(trunkItems);
+    if (entries.length === 0) {
+      v.trunkSearched = true;
+      soundEngine.playLootPickup();
+      this.addFloatingText(v.x, v.y, 1.2, 'Empty Trunk', '#9aa894');
+      this.emitHud();
+      return;
     }
-    soundEngine.playLootPickup();
-    this.score += 20;
-    const label = gained.length > 0 ? gained.slice(0, 3).join(' · ') : 'Empty Trunk';
-    this.addFloatingText(v.x, v.y, 1.2, label, '#f0d078');
-    this.spawnParticles(v.x, v.y, 0.4, 6, '#d9b566', 2.0, 1.8);
+
+    this.animateAction('search', 'INSPECTING TRUNK', 0.75);
+    soundEngine.playUiClick();
+    const trunkKind = v.kind === 'police' ? 'car_police' : 'car_sedan';
+    this.activeLootSource = { type: 'trunk', vehicle: v };
+    this.activeLootContainer = buildActiveLootContainer(
+      'trunk',
+      `trunk_${v.id}`,
+      trunkKind,
+      trunkItems
+    );
+    this.releasePointerLock();
+    this.clearInputs();
     this.emitHud();
   }
 
@@ -3681,26 +3886,21 @@ export class SurvivalEngine {
         );
       }
     }
-    // Visible checkpoint burning barrels emit rising embers around camera
-    const centerWorld = isoToWorld(this.camX, this.camY);
-    const minGX = Math.floor(centerWorld.wx - 20);
-    const maxGX = Math.ceil(centerWorld.wx + 20);
-    const minGY = Math.floor(centerWorld.wy - 20);
-    const maxGY = Math.ceil(centerWorld.wy + 20);
-    for (let gy = minGY; gy <= maxGY; gy++) {
-      for (let gx = minGX; gx <= maxGX; gx++) {
-        if (this.getCell(gx, gy).prop === 'barrel_burn' && Math.random() < dt * 4.5) {
-          this.spawnParticles(
-            gx + 0.5 + (Math.random() - 0.5) * 0.18,
-            gy + 0.5 + (Math.random() - 0.5) * 0.18,
-            0.55,
-            1,
-            Math.random() < 0.5 ? '#ffe07d' : '#ff7b29',
-            0.35,
-            1.6,
-            -1.9
-          );
-        }
+    // Cached burn barrel coordinates from streamed chunks (avoids scanning 1681 grid cells/frame)
+    const barrels = this.threeRenderer.getBurnBarrelCoords();
+    for (let i = 0; i < barrels.length; i++) {
+      if (Math.random() < dt * 4.5) {
+        const b = barrels[i];
+        this.spawnParticles(
+          b.x + (Math.random() - 0.5) * 0.18,
+          b.z + (Math.random() - 0.5) * 0.18,
+          0.55,
+          1,
+          Math.random() < 0.5 ? '#ffe07d' : '#ff7b29',
+          0.35,
+          1.6,
+          -1.9
+        );
       }
     }
   }
@@ -4177,6 +4377,8 @@ export class SurvivalEngine {
           hotspotActive: !lm.hotspotCleared,
           hotspotCleared: lm.hotspotCleared,
         })),
+      activeLootContainer: this.activeLootContainer,
+      pickupNotifications: this.pickupNotifications,
     });
   }
 }

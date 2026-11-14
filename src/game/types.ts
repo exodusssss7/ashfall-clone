@@ -410,6 +410,31 @@ export interface NearbyActionPrompt {
 
 export type CameraMode = 'iso' | 'fps';
 
+export interface LootContainerEntry {
+  item: ItemId;
+  qty: number;
+}
+
+export interface ActiveLootContainer {
+  sourceType: 'container' | 'trunk';
+  sourceId: string;
+  kind: LootContainer['kind'];
+  title: string;
+  subtitle: string;
+  entries: LootContainerEntry[];
+}
+
+export interface PickupNotification {
+  id: number;
+  item: ItemId;
+  qty: number;
+  name: string;
+  color: string;
+  source?: string;
+  age: number;
+  duration: number;
+}
+
 export interface HudSnapshot {
   phase: GamePhase;
   cameraMode: CameraMode;
@@ -469,6 +494,8 @@ export interface HudSnapshot {
     repairCost: number;
   } | null;
   statusBanner: string | null;
+  activeLootContainer: ActiveLootContainer | null;
+  pickupNotifications: PickupNotification[];
   currentBiomeLabel: string;
   discoveredLandmarks: Array<{
     id: string;

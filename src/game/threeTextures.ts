@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { TileKind } from './types';
+import type { ItemId, TileKind } from './types';
 
 function makePixelCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
   const c = document.createElement('canvas');
@@ -1088,6 +1088,61 @@ function buildWeaponTextures() {
     }
   }
 
+  // Shotgun blued receiver with ejection port & shell lifter
+  const [sr, srCtx] = makePixelCanvas(16, 8);
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 16; x++) {
+      const hi = y === 0;
+      const port = x >= 6 && x <= 11 && y >= 1 && y <= 3;
+      const lifter = x >= 6 && x <= 10 && y >= 5 && y <= 6;
+      const pin = (x === 3 || x === 13) && (y === 2 || y === 5);
+      let col = '#2a3036';
+      if (port) col = '#c2ccd4';
+      else if (lifter) col = '#8c969e';
+      else if (pin) col = '#171a1d';
+      else if (hi) col = '#4a535c';
+      srCtx.fillStyle = col;
+      srCtx.fillRect(x, y, 1, 1);
+    }
+  }
+
+  // LMG perforated steel barrel shroud
+  const [ls, lsCtx] = makePixelCanvas(16, 8);
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 16; x++) {
+      const hole = (x % 3 === 1) && (y === 2 || y === 5);
+      const hi = y === 0;
+      let col = '#3c434a';
+      if (hole) col = '#131619';
+      else if (hi) col = '#68737d';
+      else if (y === 7) col = '#252a2f';
+      lsCtx.fillStyle = col;
+      lsCtx.fillRect(x, y, 1, 1);
+    }
+  }
+
+  // Linked brass 7.62mm ammo belt
+  const [ab, abCtx] = makePixelCanvas(12, 8);
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 12; x++) {
+      const link = y === 3 || y === 4;
+      const tip = y <= 1 && x % 2 === 0;
+      let col = x % 2 === 0 ? '#d4a644' : '#3a3428';
+      if (tip) col = '#b86c3a';
+      else if (link) col = '#24272b';
+      abCtx.fillStyle = col;
+      abCtx.fillRect(x, y, 1, 1);
+    }
+  }
+
+  // OD-green steel LMG ammo box with yellow stencil
+  const [lb, lbCtx] = makePixelCanvas(12, 10);
+  drawPixelRect(lbCtx, 0, 0, 12, 10, '#272e1e');
+  drawPixelRect(lbCtx, 1, 1, 10, 8, '#4a5836');
+  drawPixelRect(lbCtx, 1, 1, 10, 2, '#627348');
+  drawPixelRect(lbCtx, 3, 4, 6, 1, '#d9b54a');
+  drawPixelRect(lbCtx, 3, 6, 4, 1, '#d9b54a');
+
   // Tactical glove / wrapped palm
   const [gl, glCtx] = makePixelCanvas(8, 8);
   for (let y = 0; y < 8; y++) {
@@ -1105,8 +1160,109 @@ function buildWeaponTextures() {
     pistolSlide: toNearestTexture(ps),
     pistolGrip: toNearestTexture(pg),
     shotgunWood: toNearestTexture(sw),
+    shotgunReceiver: toNearestTexture(sr),
+    lmgShroud: toNearestTexture(ls),
+    ammoBelt: toNearestTexture(ab),
+    lmgAmmoBox: toNearestTexture(lb),
     molotovGlass: toNearestTexture(mg),
     glove: toNearestTexture(gl),
+  };
+}
+
+function buildItemDropTextures(): Record<ItemId, THREE.CanvasTexture> {
+  const mk = (draw: (ctx: CanvasRenderingContext2D) => void): THREE.CanvasTexture => {
+    const [c, ctx] = makePixelCanvas(16, 16);
+    draw(ctx);
+    return toNearestTexture(c);
+  };
+
+  return {
+    wood: mk((ctx) => {
+      drawPixelRect(ctx, 2, 5, 12, 6, '#3b2514');
+      drawPixelRect(ctx, 3, 6, 10, 4, '#a67449');
+      drawPixelRect(ctx, 3, 6, 10, 1, '#c48f5e');
+      drawPixelRect(ctx, 5, 8, 6, 1, '#754e2e');
+    }),
+    scrap: mk((ctx) => {
+      drawPixelRect(ctx, 3, 3, 10, 10, '#22282d');
+      drawPixelRect(ctx, 4, 4, 8, 8, '#7a8791');
+      drawPixelRect(ctx, 5, 5, 3, 3, '#b8c4cc');
+      drawPixelRect(ctx, 9, 8, 3, 3, '#4c565e');
+    }),
+    cloth: mk((ctx) => {
+      drawPixelRect(ctx, 3, 4, 10, 8, '#363b3e');
+      drawPixelRect(ctx, 4, 5, 8, 6, '#dcd7cb');
+      drawPixelRect(ctx, 5, 6, 6, 2, '#f0ece1');
+      drawPixelRect(ctx, 6, 9, 4, 1, '#b5afa2');
+    }),
+    fuel: mk((ctx) => {
+      drawPixelRect(ctx, 4, 2, 8, 12, '#291210');
+      drawPixelRect(ctx, 5, 4, 6, 9, '#cf4632');
+      drawPixelRect(ctx, 9, 2, 3, 2, '#e0bd5e');
+      drawPixelRect(ctx, 6, 6, 4, 5, '#992c1d');
+    }),
+    food: mk((ctx) => {
+      drawPixelRect(ctx, 4, 3, 8, 10, '#1e2420');
+      drawPixelRect(ctx, 5, 4, 6, 8, '#c28b46');
+      drawPixelRect(ctx, 4, 3, 8, 2, '#c8d1ca');
+      drawPixelRect(ctx, 6, 7, 4, 2, '#f0d078');
+    }),
+    water: mk((ctx) => {
+      drawPixelRect(ctx, 5, 2, 6, 12, '#1a2f3d');
+      drawPixelRect(ctx, 6, 4, 4, 9, '#4ea2d4');
+      drawPixelRect(ctx, 6, 2, 4, 2, '#dceef7');
+      drawPixelRect(ctx, 7, 6, 1, 5, '#8ad4eb');
+    }),
+    bandage: mk((ctx) => {
+      drawPixelRect(ctx, 3, 4, 10, 8, '#2b3233');
+      drawPixelRect(ctx, 4, 5, 8, 6, '#e8e4d8');
+      drawPixelRect(ctx, 7, 6, 2, 4, '#d13d34');
+      drawPixelRect(ctx, 6, 7, 4, 2, '#d13d34');
+    }),
+    ammo_9mm: mk((ctx) => {
+      drawPixelRect(ctx, 3, 4, 10, 9, '#211d12');
+      drawPixelRect(ctx, 4, 5, 8, 7, '#4f6142');
+      drawPixelRect(ctx, 5, 6, 2, 5, '#e0bd5e');
+      drawPixelRect(ctx, 8, 6, 2, 5, '#e0bd5e');
+      drawPixelRect(ctx, 10, 6, 1, 5, '#b88f37');
+    }),
+    ammo_shell: mk((ctx) => {
+      drawPixelRect(ctx, 3, 3, 10, 10, '#241414');
+      drawPixelRect(ctx, 4, 4, 3, 8, '#c44237');
+      drawPixelRect(ctx, 9, 4, 3, 8, '#c44237');
+      drawPixelRect(ctx, 4, 10, 3, 2, '#e0bd5e');
+      drawPixelRect(ctx, 9, 10, 3, 2, '#e0bd5e');
+    }),
+    molotov: mk((ctx) => {
+      drawPixelRect(ctx, 5, 4, 6, 10, '#21331a');
+      drawPixelRect(ctx, 6, 6, 4, 7, '#5f8a4b');
+      drawPixelRect(ctx, 6, 9, 4, 4, '#d98c2b');
+      drawPixelRect(ctx, 7, 1, 2, 3, '#ffae38');
+    }),
+    raw_fish: mk((ctx) => {
+      drawPixelRect(ctx, 2, 6, 10, 4, '#1b2b33');
+      drawPixelRect(ctx, 3, 6, 8, 4, '#7ea8b8');
+      drawPixelRect(ctx, 11, 5, 3, 6, '#5c8596');
+      drawPixelRect(ctx, 5, 7, 1, 1, '#f0f7fa');
+    }),
+    cooked_fish: mk((ctx) => {
+      drawPixelRect(ctx, 2, 6, 10, 4, '#2b180d');
+      drawPixelRect(ctx, 3, 6, 8, 4, '#d4843d');
+      drawPixelRect(ctx, 11, 5, 3, 6, '#a85b27');
+      drawPixelRect(ctx, 6, 6, 1, 4, '#783b18');
+    }),
+    fish_stew: mk((ctx) => {
+      drawPixelRect(ctx, 2, 7, 12, 6, '#1a2426');
+      drawPixelRect(ctx, 3, 8, 10, 4, '#475c61');
+      drawPixelRect(ctx, 3, 7, 10, 2, '#f0b659');
+      drawPixelRect(ctx, 6, 4, 1, 2, '#e6dfd1');
+    }),
+    hot_rations: mk((ctx) => {
+      drawPixelRect(ctx, 4, 5, 8, 9, '#1b1f1c');
+      drawPixelRect(ctx, 5, 6, 6, 7, '#9a935a');
+      drawPixelRect(ctx, 5, 8, 6, 3, '#c76432');
+      drawPixelRect(ctx, 9, 2, 2, 4, '#c7cfd1');
+    }),
   };
 }
 
@@ -1213,6 +1369,7 @@ export class ThreePixelAtlas {
   public readonly woodDarkTex: THREE.CanvasTexture;
   public readonly ceilingTex: THREE.CanvasTexture;
   public readonly weaponTex: ReturnType<typeof buildWeaponTextures>;
+  public readonly itemDropTex: Record<ItemId, THREE.CanvasTexture>;
   public readonly contactShadowTex: THREE.CanvasTexture;
   public readonly tentTex: THREE.CanvasTexture;
   public readonly rockTex: THREE.CanvasTexture;
@@ -1338,8 +1495,16 @@ export class ThreePixelAtlas {
     this.track(this.weaponTex.pistolSlide);
     this.track(this.weaponTex.pistolGrip);
     this.track(this.weaponTex.shotgunWood);
+    this.track(this.weaponTex.shotgunReceiver);
+    this.track(this.weaponTex.lmgShroud);
+    this.track(this.weaponTex.ammoBelt);
+    this.track(this.weaponTex.lmgAmmoBox);
     this.track(this.weaponTex.molotovGlass);
     this.track(this.weaponTex.glove);
+    this.itemDropTex = buildItemDropTextures();
+    for (const tex of Object.values(this.itemDropTex)) {
+      this.track(tex);
+    }
     this.contactShadowTex = this.track(buildSoftContactShadowTexture());
     this.tentTex = this.track(buildTentCanvasTexture());
     this.rockTex = this.track(buildRockGraniteTexture());

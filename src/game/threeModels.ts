@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { ThreePixelAtlas } from './threeTextures';
-import type { PropKind, StructureKind, WeaponId, ZombieArchetype } from './types';
+import type { ItemId, PropKind, StructureKind, WeaponId, ZombieArchetype } from './types';
 
 export interface DoorRig3D {
   root: THREE.Group;
@@ -65,11 +65,15 @@ export class ThreeModelFactory {
   private materials: THREE.Material[] = [];
   private matCache = new Map<string, THREE.MeshStandardMaterial>();
   private unitBox: THREE.BoxGeometry;
+  private unitCylX: THREE.CylinderGeometry;
   private unitWheelGeo: THREE.CylinderGeometry;
 
   constructor(atlas: ThreePixelAtlas) {
     this.atlas = atlas;
     this.unitBox = this.trackGeo(new THREE.BoxGeometry(1, 1, 1));
+    const cylX = new THREE.CylinderGeometry(1, 1, 1, 10);
+    cylX.rotateZ(Math.PI * 0.5);
+    this.unitCylX = this.trackGeo(cylX);
     const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 24);
     wheelGeo.rotateX(Math.PI * 0.5);
     this.unitWheelGeo = this.trackGeo(wheelGeo);
@@ -139,6 +143,24 @@ export class ThreeModelFactory {
   ): THREE.Mesh {
     const m = new THREE.Mesh(this.unitBox, mat);
     m.scale.set(w, h, d);
+    m.position.set(x, y, z);
+    m.castShadow = castShadow;
+    m.receiveShadow = receiveShadow;
+    return m;
+  }
+
+  private cylX(
+    radius: number,
+    length: number,
+    mat: THREE.Material | THREE.Material[],
+    x = 0,
+    y = 0,
+    z = 0,
+    castShadow = false,
+    receiveShadow = true
+  ): THREE.Mesh {
+    const m = new THREE.Mesh(this.unitCylX, mat);
+    m.scale.set(length, radius, radius);
     m.position.set(x, y, z);
     m.castShadow = castShadow;
     m.receiveShadow = receiveShadow;
@@ -466,17 +488,31 @@ export class ThreeModelFactory {
     return { root, lidPivot, bodyGroup, glintMesh };
   }
 
-  public createLootDropGroup(): THREE.Group {
+  public createLootDropGroup(primaryItem?: ItemId | null): THREE.Group {
     const g = new THREE.Group();
     this.addContactShadow(g, 0.62, 0.48);
     const packMat = this.getMat(0xffffff, { map: this.atlas.backpackTex, roughness: 0.88 });
     const tarpMat = this.getMat('#9e8a58', { roughness: 0.9 });
     const buckleMat = this.getMat('#f0c44d', { roughness: 0.25, metalness: 0.85, emissive: '#f0c44d', emissiveIntensity: 0.38 });
 
-    g.add(this.box(0.46, 0.28, 0.34, packMat, 0, 0.14, 0));
-    g.add(this.box(0.42, 0.11, 0.14, tarpMat, 0, 0.32, -0.08));
-    g.add(this.box(0.08, 0.07, 0.04, buckleMat, -0.11, 0.18, 0.18, false, false));
-    g.add(this.box(0.08, 0.07, 0.04, buckleMat, 0.11, 0.18, 0.18, false, false));
+    g.add(this.box(0.42, 0.22, 0.3, packMat, 0, 0.11, 0, false, true));
+    g.add(this.box(0.38, 0.09, 0.12, tarpMat, 0, 0.25, -0.06, false, true));
+    g.add(this.box(0.07, 0.06, 0.04, buckleMat, -0.1, 0.14, 0.15, false, false));
+    g.add(this.box(0.07, 0.06, 0.04, buckleMat, 0.1, 0.14, 0.15, false, false));
+
+    if (primaryItem && this.atlas.itemDropTex[primaryItem]) {
+      const spriteMat = new THREE.SpriteMaterial({
+        map: this.atlas.itemDropTex[primaryItem],
+        transparent: true,
+        alphaTest: 0.1,
+      });
+      this.materials.push(spriteMat);
+      const sprite = new THREE.Sprite(spriteMat);
+      sprite.position.set(0, 0.56, 0);
+      sprite.scale.set(0.46, 0.46, 1);
+      g.add(sprite);
+      g.userData.itemSprite = sprite;
+    }
     return g;
   }
 
@@ -1068,48 +1104,148 @@ export class ThreeModelFactory {
       claw.rotation.z = 0.35;
       g.add(claw);
     } else if (weapon === 'pistol') {
-      const slide = this.getMat(0xffffff, { map: wTex.pistolSlide, roughness: 0.32, metalness: 0.82 });
-      const frame = this.getMat('#363d44', { roughness: 0.48, metalness: 0.65 });
-      const grip = this.getMat(0xffffff, { map: wTex.pistolGrip, roughness: 0.8 });
-      const barrelTip = this.getMat('#1b1f24', { roughness: 0.35, metalness: 0.9 });
-      const sightDot = this.getMat('#b8f58e', { emissive: '#8de065', emissiveIntensity: 0.7, roughness: 0.2 });
-      g.add(this.box(0.28, 0.056, 0.066, slide, 0.14, 0.062, 0));
-      g.add(this.box(0.24, 0.036, 0.056, frame, 0.12, 0.022, 0));
-      g.add(this.box(0.08, 0.14, 0.056, grip, 0.04, -0.03, 0));
-      g.add(this.box(0.02, 0.024, 0.024, barrelTip, 0.285, 0.058, 0));
-      // Iron sights
-      g.add(this.box(0.016, 0.014, 0.034, sightDot, 0.02, 0.094, 0, false, false));
-      g.add(this.box(0.016, 0.016, 0.014, sightDot, 0.26, 0.095, 0, false, false));
+      const slide = this.getMat(0xffffff, { map: this.atlas.weaponTex.pistolSlide, roughness: 0.28, metalness: 0.86 });
+      const slideTop = this.getMat('#7f8a94', { roughness: 0.26, metalness: 0.88 });
+      const frame = this.getMat('#2a3036', { roughness: 0.68, metalness: 0.32 });
+      const grip = this.getMat(0xffffff, { map: wTex.pistolGrip, roughness: 0.88, metalness: 0.08 });
+      const steel = this.getMat('#aeb8c0', { roughness: 0.25, metalness: 0.92 });
+      const darkBore = this.getMat('#0d1012', { roughness: 0.9, metalness: 0.1 });
+      const brassHood = this.getMat('#d6b256', { roughness: 0.32, metalness: 0.85 });
+      const sightDot = this.getMat('#b8f58e', { emissive: '#8de065', emissiveIntensity: 0.85, roughness: 0.2 });
+
+      // Machined slide body + top bevel rib + recessed ejection port/brass chamber hood
+      g.add(this.box(0.28, 0.052, 0.064, slide, 0.14, 0.064, 0));
+      g.add(this.box(0.26, 0.012, 0.046, slideTop, 0.138, 0.094, 0, false, true));
+      g.add(this.box(0.065, 0.014, 0.036, brassHood, 0.155, 0.089, 0.008, false, false));
+      // Round protruding steel barrel + dark muzzle crown
+      g.add(this.cylX(0.017, 0.065, steel, 0.285, 0.063, 0, false, true));
+      g.add(this.cylX(0.011, 0.012, darkBore, 0.314, 0.063, 0, false, false));
+      // Dust-cover frame + underbarrel tactical rail & compact weapon light
+      g.add(this.box(0.25, 0.034, 0.054, frame, 0.13, 0.024, 0));
+      g.add(this.box(0.09, 0.026, 0.044, frame, 0.22, -0.003, 0, false, true));
+      g.add(this.cylX(0.012, 0.02, this.getMat('#ffe79c', { emissive: '#ffd266', emissiveIntensity: 0.45 }), 0.265, -0.003, 0, false, false));
+      // Beavertail & spurred hammer + slide-stop lever
+      g.add(this.box(0.04, 0.016, 0.044, frame, 0.005, 0.036, 0, false, false));
+      const hammer = this.box(0.028, 0.024, 0.016, steel, -0.004, 0.064, 0, false, false);
+      hammer.rotation.z = 0.45;
+      g.add(hammer);
+      g.add(this.box(0.055, 0.012, 0.008, steel, 0.09, 0.035, 0.03, false, false));
+      // Trigger guard & curved trigger
+      g.add(this.box(0.075, 0.012, 0.024, frame, 0.105, -0.028, 0, false, false));
+      g.add(this.box(0.014, 0.042, 0.024, frame, 0.14, -0.008, 0, false, false));
+      const trig = this.box(0.01, 0.028, 0.012, steel, 0.108, -0.004, 0, false, false);
+      trig.rotation.z = -0.3;
+      g.add(trig);
+      // Angled stippled ergonomic grip + flared baseplate magazine
+      const gripMesh = this.box(0.078, 0.145, 0.054, grip, 0.035, -0.038, 0);
+      gripMesh.rotation.z = -0.18;
+      g.add(gripMesh);
+      const magPad = this.box(0.082, 0.018, 0.056, frame, 0.022, -0.112, 0, false, true);
+      magPad.rotation.z = -0.18;
+      g.add(magPad);
+      // 3-dot tritium iron sights
+      g.add(this.box(0.018, 0.018, 0.042, frame, 0.018, 0.104, 0, false, false));
+      g.add(this.box(0.008, 0.01, 0.01, sightDot, 0.012, 0.108, -0.014, false, false));
+      g.add(this.box(0.008, 0.01, 0.01, sightDot, 0.012, 0.108, 0.014, false, false));
+      g.add(this.box(0.016, 0.018, 0.014, frame, 0.258, 0.104, 0, false, false));
+      g.add(this.box(0.008, 0.01, 0.01, sightDot, 0.258, 0.108, 0, false, false));
     } else if (weapon === 'shotgun') {
-      const barrel = this.getMat('#5a636b', { roughness: 0.32, metalness: 0.85 });
-      const receiver = this.getMat('#32383e', { roughness: 0.42, metalness: 0.78 });
-      const stock = this.getMat(0xffffff, { map: wTex.shotgunWood, roughness: 0.82 });
-      const bead = this.getMat('#ffd266', { emissive: '#e8aa35', emissiveIntensity: 0.6, metalness: 0.8 });
-      g.add(this.box(0.56, 0.044, 0.048, barrel, 0.3, 0.068, 0));
-      g.add(this.box(0.42, 0.036, 0.044, barrel, 0.24, 0.03, 0));
-      g.add(this.box(0.18, 0.072, 0.072, receiver, 0.12, 0.038, 0));
-      g.add(this.box(0.24, 0.086, 0.074, stock, -0.02, 0.006, 0));
-      g.add(this.box(0.19, 0.056, 0.076, stock, 0.3, 0.018, 0));
-      g.add(this.box(0.022, 0.022, 0.022, bead, 0.56, 0.096, 0, false, false));
+      const barrel = this.getMat('#555e66', { roughness: 0.28, metalness: 0.88 });
+      const darkSteel = this.getMat('#262b30', { roughness: 0.42, metalness: 0.82 });
+      const receiver = this.getMat(0xffffff, { map: wTex.shotgunReceiver, roughness: 0.35, metalness: 0.82 });
+      const stock = this.getMat(0xffffff, { map: wTex.shotgunWood, roughness: 0.78, metalness: 0.06 });
+      const rubberPad = this.getMat('#16181b', { roughness: 0.92, metalness: 0.05 });
+      const steel = this.getMat('#b8c2c9', { roughness: 0.24, metalness: 0.92 });
+      const shellRed = this.getMat('#c43d33', { roughness: 0.55, metalness: 0.15 });
+      const brass = this.getMat('#d4af4c', { roughness: 0.3, metalness: 0.88 });
+      const bead = this.getMat('#ffd266', { emissive: '#e8aa35', emissiveIntensity: 0.7, metalness: 0.85 });
+
+      // Heavy cylindrical 12G barrel + ventilated top rib + dark muzzle bore
+      g.add(this.cylX(0.024, 0.54, barrel, 0.37, 0.072, 0, true, true));
+      g.add(this.cylX(0.016, 0.014, rubberPad, 0.642, 0.072, 0, false, false));
+      g.add(this.box(0.50, 0.012, 0.018, darkSteel, 0.36, 0.098, 0, false, true));
+      // Full-length tubular magazine + barrel clamp ring
+      g.add(this.cylX(0.020, 0.46, darkSteel, 0.33, 0.032, 0, true, true));
+      g.add(this.box(0.028, 0.078, 0.052, darkSteel, 0.54, 0.052, 0, false, true));
+      // Sculpted blued steel receiver with ejection port & bolt
+      g.add(this.box(0.22, 0.078, 0.074, receiver, 0.12, 0.044, 0));
+      g.add(this.box(0.065, 0.026, 0.012, steel, 0.135, 0.062, 0.034, false, false));
+      // 4-shell side-saddle carrier mounted on left receiver
+      g.add(this.box(0.14, 0.042, 0.014, darkSteel, 0.11, 0.044, -0.042, false, false));
+      for (let s = 0; s < 4; s++) {
+        const sx = 0.062 + s * 0.032;
+        g.add(this.box(0.02, 0.046, 0.018, shellRed, sx, 0.046, -0.048, false, false));
+        g.add(this.box(0.02, 0.014, 0.019, brass, sx, 0.022, -0.048, false, false));
+      }
+      // Ribbed walnut pump forend + dual steel action bars
+      g.add(this.box(0.19, 0.058, 0.074, stock, 0.35, 0.026, 0));
+      g.add(this.box(0.18, 0.01, 0.01, steel, 0.25, 0.032, 0.034, false, false));
+      g.add(this.box(0.18, 0.01, 0.01, steel, 0.25, 0.032, -0.034, false, false));
+      // Trigger guard & trigger
+      g.add(this.box(0.065, 0.01, 0.022, darkSteel, 0.06, -0.012, 0, false, false));
+      g.add(this.box(0.012, 0.032, 0.022, darkSteel, 0.09, 0.002, 0, false, false));
+      g.add(this.box(0.01, 0.022, 0.01, steel, 0.064, 0.004, 0, false, false));
+      // Angled walnut grip & full buttstock with rubber recoil pad
+      const wrist = this.box(0.11, 0.068, 0.064, stock, -0.015, 0.018, 0);
+      wrist.rotation.z = 0.26;
+      g.add(wrist);
+      const butt = this.box(0.2, 0.098, 0.068, stock, -0.14, -0.008, 0);
+      butt.rotation.z = 0.08;
+      g.add(butt);
+      const pad = this.box(0.024, 0.102, 0.07, rubberPad, -0.244, -0.016, 0, false, true);
+      pad.rotation.z = 0.08;
+      g.add(pad);
+      // Brass front bead sight
+      g.add(this.box(0.018, 0.022, 0.018, bead, 0.61, 0.112, 0, false, false));
     } else if (weapon === 'lmg') {
-      const barrel = this.getMat('#4b545c', { roughness: 0.3, metalness: 0.88 });
-      const receiver = this.getMat('#2e343a', { roughness: 0.4, metalness: 0.8 });
-      const furniture = this.getMat('#3a4132', { roughness: 0.7, metalness: 0.2 });
-      const ammoBox = this.getMat('#55603c', { roughness: 0.62, metalness: 0.35 });
-      const sightDot = this.getMat('#f5d78e', { emissive: '#e8aa35', emissiveIntensity: 0.6, roughness: 0.3 });
-      // Long barrel with perforated shroud and muzzle brake
-      g.add(this.box(0.62, 0.046, 0.05, barrel, 0.34, 0.07, 0));
-      g.add(this.box(0.3, 0.056, 0.06, receiver, 0.22, 0.07, 0));
-      g.add(this.box(0.05, 0.05, 0.062, barrel, 0.66, 0.07, 0));
-      // Receiver, top cover and belt box slung underneath
-      g.add(this.box(0.3, 0.08, 0.08, receiver, 0.08, 0.045, 0));
-      g.add(this.box(0.16, 0.1, 0.07, ammoBox, 0.08, -0.03, 0));
-      // Buttstock, pistol grip and carry handle
-      g.add(this.box(0.2, 0.075, 0.07, furniture, -0.12, 0.03, 0));
-      g.add(this.box(0.05, 0.09, 0.05, furniture, 0.02, -0.045, 0));
-      g.add(this.box(0.14, 0.02, 0.03, barrel, 0.3, 0.115, 0));
-      // Front sight post
-      g.add(this.box(0.016, 0.03, 0.016, sightDot, 0.62, 0.1, 0, false, false));
+      const barrel = this.getMat('#454d54', { roughness: 0.28, metalness: 0.9 });
+      const shroud = this.getMat(0xffffff, { map: wTex.lmgShroud, roughness: 0.36, metalness: 0.82 });
+      const receiver = this.getMat('#2a3036', { roughness: 0.4, metalness: 0.82 });
+      const furniture = this.getMat('#3b4231', { roughness: 0.72, metalness: 0.18 });
+      const ammoBox = this.getMat(0xffffff, { map: wTex.lmgAmmoBox, roughness: 0.62, metalness: 0.35 });
+      const beltMat = this.getMat(0xffffff, { map: wTex.ammoBelt, roughness: 0.34, metalness: 0.85 });
+      const steel = this.getMat('#a6b0b8', { roughness: 0.26, metalness: 0.9 });
+      const darkBore = this.getMat('#0e1012', { roughness: 0.9 });
+      const sightDot = this.getMat('#f5d78e', { emissive: '#e8aa35', emissiveIntensity: 0.7, roughness: 0.3 });
+
+      // Heavy round barrel + birdcage muzzle flash suppressor + gas tube underneath
+      g.add(this.cylX(0.02, 0.44, barrel, 0.45, 0.074, 0, true, true));
+      g.add(this.cylX(0.026, 0.068, receiver, 0.68, 0.074, 0, false, true));
+      g.add(this.cylX(0.015, 0.014, darkBore, 0.715, 0.074, 0, false, false));
+      g.add(this.cylX(0.014, 0.34, barrel, 0.38, 0.036, 0, false, true));
+      // Gas block & tall protected front sight post
+      g.add(this.box(0.042, 0.068, 0.044, receiver, 0.56, 0.062, 0, false, true));
+      g.add(this.box(0.022, 0.045, 0.034, receiver, 0.56, 0.112, 0, false, false));
+      g.add(this.box(0.012, 0.028, 0.012, sightDot, 0.56, 0.118, 0, false, false));
+      // Perforated cooling barrel shroud / handguard
+      g.add(this.box(0.32, 0.068, 0.076, shroud, 0.34, 0.058, 0));
+      // Folded steel bipod legs along shroud sides
+      g.add(this.cylX(0.01, 0.24, steel, 0.39, 0.022, -0.044, false, false));
+      g.add(this.cylX(0.01, 0.24, steel, 0.39, 0.022, 0.044, false, false));
+      g.add(this.box(0.024, 0.024, 0.022, receiver, 0.27, 0.018, -0.044, false, false));
+      g.add(this.box(0.024, 0.024, 0.022, receiver, 0.27, 0.018, 0.044, false, false));
+      // Heavy stamped receiver + hinged top feed-tray cover + rear flip sight + charging handle
+      g.add(this.box(0.32, 0.088, 0.088, receiver, 0.09, 0.046, 0));
+      g.add(this.box(0.18, 0.024, 0.082, barrel, 0.09, 0.098, 0, false, true));
+      g.add(this.box(0.025, 0.032, 0.042, receiver, -0.02, 0.116, 0, false, false));
+      g.add(this.box(0.032, 0.016, 0.038, steel, 0.11, 0.068, 0.054, false, false));
+      // Top carry handle with ribbed grip
+      g.add(this.box(0.018, 0.044, 0.018, steel, 0.22, 0.116, 0, false, false));
+      g.add(this.box(0.018, 0.044, 0.018, steel, 0.36, 0.116, 0, false, false));
+      g.add(this.box(0.16, 0.026, 0.032, furniture, 0.29, 0.142, 0, false, false));
+      // Slung OD-green steel ammo box + linked brass 7.62mm belt feeding into receiver
+      g.add(this.box(0.16, 0.115, 0.088, ammoBox, 0.09, -0.048, -0.036));
+      const beltCurve = this.box(0.08, 0.078, 0.024, beltMat, 0.09, 0.032, -0.056, false, false);
+      beltCurve.rotation.x = 0.28;
+      g.add(beltCurve);
+      // Buttstock with shoulder rest, contoured pistol grip, trigger guard & trigger
+      g.add(this.box(0.22, 0.086, 0.074, furniture, -0.15, 0.032, 0));
+      g.add(this.box(0.025, 0.108, 0.078, receiver, -0.26, 0.022, 0, false, true));
+      const pGrip = this.box(0.054, 0.105, 0.048, furniture, 0.01, -0.05, 0);
+      pGrip.rotation.z = -0.2;
+      g.add(pGrip);
+      g.add(this.box(0.06, 0.01, 0.022, receiver, 0.055, -0.024, 0, false, false));
+      g.add(this.box(0.01, 0.026, 0.01, steel, 0.058, -0.005, 0, false, false));
     } else {
       const glass = this.getMat(0xffffff, { map: wTex.molotovGlass, roughness: 0.24, metalness: 0.12 });
       const cloth = this.getMat('#e6dcc8', { roughness: 0.9 });

@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from 'react';
 import { CraftModal } from './components/CraftModal';
 import { GameHud } from './components/GameHud';
 import { GameOverModal } from './components/GameOverModal';
+import { LootModal } from './components/LootModal';
 import { PauseModal } from './components/PauseModal';
+import { PickupFeed } from './components/PickupFeed';
 import { QuickCookModal } from './components/QuickCookModal';
 import { TitleOverlay } from './components/TitleOverlay';
 import { TouchControls } from './components/TouchControls';
@@ -55,6 +57,8 @@ const INITIAL_HUD: HudSnapshot = {
   cameraMode: 'iso',
   currentBiomeLabel: 'ASHFALL CROSSROADS',
   discoveredLandmarks: [],
+  activeLootContainer: null,
+  pickupNotifications: [],
 };
 
 function detectTouchCapability(): boolean {
@@ -150,15 +154,31 @@ export default function App() {
     }
   }, [phase, touchEnabled]);
 
+  const lootOpen = Boolean(hud.activeLootContainer);
+
   useEffect(() => {
-    engineRef.current?.setModalOpen(craftOpen || cookOpen || navOpen);
-  }, [craftOpen, cookOpen, navOpen]);
+    engineRef.current?.setModalOpen(craftOpen || cookOpen || navOpen || lootOpen);
+  }, [craftOpen, cookOpen, navOpen, lootOpen]);
 
   useEffect(() => {
     const onGlobalKey = (e: KeyboardEvent) => {
       if (e.code === 'KeyM') {
         updateSettings({ muted: !getSettings().muted });
         return;
+      }
+      if (lootOpen && phase === 'playing') {
+        if (e.code === 'Escape') {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          engineRef.current?.closeLootContainer();
+          return;
+        }
+        if (e.code === 'KeyE' || e.code === 'Space') {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          engineRef.current?.takeAllLoot();
+          return;
+        }
       }
       if (e.code === 'Escape' && (craftOpen || cookOpen || navOpen)) {
         e.stopImmediatePropagation();
@@ -198,7 +218,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onGlobalKey, true);
     return () => window.removeEventListener('keydown', onGlobalKey, true);
-  }, [phase, craftOpen, cookOpen, navOpen]);
+  }, [phase, craftOpen, cookOpen, navOpen, lootOpen]);
 
   const handleToggleMute = () => {
     updateSettings({ muted: !getSettings().muted });
@@ -302,13 +322,18 @@ export default function App() {
         />
       )}
 
+      {/* Visual Item Pickup Notification Feed */}
+      {phase === 'playing' && (
+        <PickupFeed notifications={hud.pickupNotifications} touchEnabled={touchEnabled} />
+      )}
+
       {/* First-Person Right-Side Touch Camera Look Surface (behind HUD & combat buttons) */}
-      {phase === 'playing' && touchEnabled && hud.cameraMode === 'fps' && !craftOpen && !cookOpen && (
+      {phase === 'playing' && touchEnabled && hud.cameraMode === 'fps' && !craftOpen && !cookOpen && !lootOpen && (
         <TouchLookPad onLookDelta={(dx, dy) => engineRef.current?.applyVirtualLookDelta(dx, dy)} />
       )}
 
       {/* Mobile Touch Controls (Twin-Stick in ISO; Move + Touch Look Pad + Slash/Fire triggers in FPS) */}
-      {phase === 'playing' && touchEnabled && !craftOpen && !cookOpen && (
+      {phase === 'playing' && touchEnabled && !craftOpen && !cookOpen && !lootOpen && (
         <TouchControls
           hud={hud}
           onMoveStick={(nx, ny) => engineRef.current?.setVirtualMove(nx, ny)}
@@ -352,6 +377,16 @@ export default function App() {
           }}
           onCook={(recipeId, grade) => Boolean(engineRef.current?.cookRecipe(recipeId, grade))}
           onUseConsumable={(item) => {if(engineRef.current?.useConsumable(item))setCookOpen(false);}}
+        />
+      )}
+
+      {/* Loot Container Modal */}
+      {phase === 'playing' && hud.activeLootContainer && (
+        <LootModal
+          container={hud.activeLootContainer}
+          onTakeItem={(item) => engineRef.current?.takeLootItem(item)}
+          onTakeAll={() => engineRef.current?.takeAllLoot()}
+          onClose={() => engineRef.current?.closeLootContainer()}
         />
       )}
 
