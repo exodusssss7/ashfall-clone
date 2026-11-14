@@ -1,5 +1,6 @@
-import { getActionCues, actionCueProps } from '../game/actionAlerts';
+import { getActionCues, actionCueProps, canCookAnything } from '../game/actionAlerts';
 import { ItemIcon } from './ItemIcon';
+import { useHudDrag } from './useHudDrag';
 import React from 'react';
 import {
   Backpack,
@@ -17,6 +18,7 @@ import {
   Pause,
   RotateCcw,
   Siren,
+  SlidersHorizontal,
   Volume2,
   VolumeX,
   Wrench,
@@ -32,6 +34,7 @@ interface GameHudProps {
   craftOpen: boolean;
   cookOpen: boolean;
   touchEnabled: boolean;
+  editing: boolean;
   minimapRef: React.RefObject<HTMLCanvasElement | null>;
   onSelectWeapon: (weapon: WeaponId) => void;
   onToggleBuild: (kind?: StructureKind) => void;
@@ -51,6 +54,7 @@ interface GameHudProps {
   onPrimaryInteract: () => void;
   onBarricadeDoor: () => void;
   onOpenNavigation: () => void;
+  onEditHud: () => void;
 }
 
 export const GameHud: React.FC<GameHudProps> = ({
@@ -59,6 +63,7 @@ export const GameHud: React.FC<GameHudProps> = ({
   craftOpen,
   cookOpen,
   touchEnabled,
+  editing,
   minimapRef,
   onSelectWeapon,
   onToggleBuild,
@@ -78,8 +83,12 @@ export const GameHud: React.FC<GameHudProps> = ({
   onPrimaryInteract,
   onBarricadeDoor,
   onOpenNavigation,
+  onEditHud,
 }) => {
   const cues = getActionCues(hud);
+  const vitalsDrag = useHudDrag('vitals', editing);
+  const utilityDrag = useHudDrag('utility', editing);
+  const hotbarDrag = useHudDrag('hotbar', editing);
   const hpPct = Math.max(0, Math.min(100, (hud.hp / hud.maxHp) * 100));
   const foodPct = Math.max(0, Math.min(100, hud.hunger));
   const waterPct = Math.max(0, Math.min(100, hud.thirst));
@@ -101,10 +110,12 @@ export const GameHud: React.FC<GameHudProps> = ({
 
       {/* TOP ROW: Compact Vitality Cluster (Left) + Day/Time & Utility Cluster (Right) */}
       <div className="flex items-start justify-between gap-2 md:gap-4">
-        {/* Top-Left Survival Vitals */}
+        {/* Top-Left Survival Vitals: compact, pinned to the corner */}
         <div
+          ref={vitalsDrag.ref}
+          style={vitalsDrag.style}
           className={`vitals-panel hud-panel flex flex-col ${
-            touchEnabled ? 'px-2.5 py-1.5 gap-1 min-w-[168px] md:min-w-[210px]' : 'px-3.5 py-2.5 gap-1.5 min-w-[205px] md:min-w-[230px]'
+            touchEnabled ? 'px-2 py-1 gap-0.5' : 'px-2.5 py-1.5 gap-1'
           }`}
         >
           {/* Health */}
@@ -191,7 +202,7 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
 
         {/* Top-Right Day/Time, Kills & Utility Controls */}
-        <div className="utility-cluster flex items-start gap-1.5 md:gap-2 shrink-0">
+        <div ref={utilityDrag.ref} style={utilityDrag.style} className="utility-cluster flex items-start gap-1.5 md:gap-2 shrink-0">
           <div className={`clock-panel hud-panel flex items-center ${touchEnabled ? 'px-2.5 py-1.5 gap-2.5' : 'px-3 py-2 gap-3'}`}>
             <div className="whitespace-nowrap">
               <div className="font-telemetry text-[10px] uppercase tracking-wider text-[#8a918d]">
@@ -215,7 +226,7 @@ export const GameHud: React.FC<GameHudProps> = ({
           </div>
 
           <div className="utility-buttons flex items-center gap-1 md:gap-1.5 pointer-events-auto">
-            {(hud.nearCookingHeat || cookOpen) && (
+            {(canCookAnything(hud) || cookOpen) && (
               <button
                 type="button"
                 tabIndex={-1}
@@ -240,15 +251,13 @@ export const GameHud: React.FC<GameHudProps> = ({
               tabIndex={-1}
               onClick={(e) => {
                 e.currentTarget.blur();
-                onToggleCraft();
+                onEditHud();
               }}
-              aria-label="Open Backpack and Crafting (I)"
-              title="Backpack & Craft [I]"
-              className={`hud-slot w-10 h-10 flex items-center justify-center transition-colors cursor-pointer ${
-                craftOpen ? 'hud-slot-active text-[#f0d078]' : 'text-[#c7c2b6] hover:text-white'
-              }`}
+              aria-label="Edit HUD Layout"
+              title="Edit HUD Layout"
+              className="hud-slot w-10 h-10 flex items-center justify-center text-[#c7c2b6] hover:text-white transition-colors cursor-pointer"
             >
-              <Backpack className="w-4 h-4" /><span className="utility-label">Pack</span>
+              <SlidersHorizontal className="w-4 h-4" /><span className="utility-label">HUD</span>
             </button>
 
             <button
@@ -267,33 +276,7 @@ export const GameHud: React.FC<GameHudProps> = ({
               <Gamepad2 className="w-4 h-4" /><span className="utility-label">Touch</span>
             </button>
 
-            <button
-              type="button"
-              tabIndex={-1}
-              onClick={(e) => {
-                e.currentTarget.blur();
-                onToggleMute();
-              }}
-              aria-label={muted ? 'Unmute audio (M)' : 'Mute audio (M)'}
-              title="Toggle Audio [M]"
-              className="hud-slot w-10 h-10 flex items-center justify-center text-[#c7c2b6] hover:text-white transition-colors cursor-pointer"
-            >
-              {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}<span className="utility-label">Audio</span>
-            </button>
 
-            <button
-              type="button"
-              tabIndex={-1}
-              onClick={(e) => {
-                e.currentTarget.blur();
-                onRestart();
-              }}
-              aria-label="Restart Run"
-              title="Restart Run"
-              className="hidden sm:flex hud-slot w-10 h-10 items-center justify-center text-[#c7c2b6] hover:text-white transition-colors cursor-pointer"
-            >
-              <RotateCcw className="w-4 h-4" /><span className="utility-label">Reset</span>
-            </button>
 
             <button
               type="button"
@@ -690,8 +673,31 @@ export const GameHud: React.FC<GameHudProps> = ({
               )}
 
               <div className="equipped-readout"><span className="equipped-dot"/>{hud.buildMode ? STRUCTURES[hud.buildMode].name : WEAPONS[hud.equippedWeapon].name}<span className="equipped-sub">{hud.buildMode ? 'PLACEMENT' : 'EQUIPPED'}</span></div>
-              {/* Main 5-Slot Hotbar + Build Toggle */}
-              <div className="equipment-bar flex items-center gap-1 md:gap-1.5 pointer-events-auto">
+              {/* Main 5-Slot Hotbar + Build Toggle, bag as a standalone chip left of the item slots */}
+              <div ref={hotbarDrag.ref} style={hotbarDrag.style} className="hotbar-wrap pointer-events-auto">
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  onClick={(e) => {
+                    e.currentTarget.blur();
+                    onToggleCraft();
+                  }}
+                  aria-label="Open Backpack and Crafting (I)"
+                  title="Backpack & Craft [I]"
+                  className={`bag-btn flex flex-col items-start transition-colors cursor-pointer ${
+                    craftOpen ? 'bag-btn-active' : ''
+                  }`}
+                >
+                  <div className="w-full flex items-center justify-between gap-1.5 text-[10px] font-telemetry text-[#8a918d]">
+                    <span>[I]</span>
+                    <Backpack className="w-3 h-3 text-[#e8a849]" />
+                  </div>
+                  <ItemIcon kind="bag" className="equipment-icon" />
+                  <div className="equipment-name font-tactical text-[11px] md:text-xs font-bold text-[#f0ece1] mt-0.5 whitespace-nowrap">
+                    Bag
+                  </div>
+                </button>
+                <div className="equipment-bar flex items-center gap-1 md:gap-1.5">
                 {weaponOrder.map((wId) => {
                   const spec = WEAPONS[wId];
                   const active = hud.equippedWeapon === wId && !hud.buildMode;
@@ -787,6 +793,7 @@ export const GameHud: React.FC<GameHudProps> = ({
                     Build
                   </div>
                 </button>
+                </div>
               </div>
             </>
           )}

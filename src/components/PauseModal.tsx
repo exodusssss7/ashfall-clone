@@ -7,6 +7,7 @@ interface PauseModalProps {
   onToggleCamera: () => void;
   onRestart: () => void;
   onTitle: () => void;
+  onEditHud: () => void;
   onOpenSettings: () => void;
 }
 
@@ -16,6 +17,7 @@ export const PauseModal: React.FC<PauseModalProps> = ({
   onToggleCamera,
   onRestart,
   onTitle,
+  onEditHud,
   onOpenSettings,
 }) => {
   return (
@@ -57,6 +59,13 @@ export const PauseModal: React.FC<PauseModalProps> = ({
             className="w-full py-2.5 hud-slot hover:border-[#d9822b] text-[#e6e2d8] font-tactical font-semibold text-sm cursor-pointer"
           >
             View: {hud.cameraMode === 'fps' ? 'First-Person [Z]' : 'Isometric 3D [Z]'}
+          </button>
+          <button
+            type="button"
+            onClick={onEditHud}
+            className="w-full py-2.5 hud-slot hover:border-[#d9822b] text-[#e6e2d8] font-tactical font-semibold text-sm cursor-pointer"
+          >
+            Edit HUD Layout
           </button>
           <button
             type="button"

@@ -4,14 +4,18 @@ import type { HudSnapshot } from '../game/types';
 interface GameOverModalProps {
   hud: HudSnapshot;
   onRestart: () => void;
+  /** Normal mode only: wake at the crossroads camp with gear recovered. */
+  onRespawn: () => void;
   onTitle: () => void;
 }
 
 export const GameOverModal: React.FC<GameOverModalProps> = ({
   hud,
   onRestart,
+  onRespawn,
   onTitle,
 }) => {
+  const hardcore = hud.hardcore;
   return (
     <div className="fixed inset-0 z-30 flex items-center justify-center p-4 bg-black/70">
       <div
@@ -20,9 +24,13 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
         className="hud-panel w-full max-w-md p-6 text-center space-y-5"
       >
         <div>
-          <h2 className="font-pixel text-3xl text-[#e0564f] tracking-wide">You Fell</h2>
+          <h2 className="font-pixel text-3xl text-[#e0564f] tracking-wide">
+            {hardcore ? 'Run Over' : 'You Fell'}
+          </h2>
           <p className="text-xs font-telemetry text-[#9aa09c] mt-1">
-            Survived until Day {hud.day} · {hud.timeLabel}
+            {hardcore
+              ? `HARDCORE · ${hud.playerName || 'The survivor'} is gone for good · save deleted`
+              : `Survived until Day ${hud.day} · ${hud.timeLabel}`}
           </p>
         </div>
 
@@ -44,14 +52,25 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
         </div>
 
         <div className="flex flex-col gap-2.5">
-          <button
-            type="button"
-            data-start="true"
-            onClick={onRestart}
-            className="w-full py-3 bg-[#d9822b] hover:bg-[#e8943c] text-[#0d1012] font-pixel font-bold text-base tracking-wide cursor-pointer"
-          >
-            Try Again
-          </button>
+          {hardcore ? (
+            <button
+              type="button"
+              data-start="true"
+              onClick={onRestart}
+              className="w-full py-3 bg-[#d9822b] hover:bg-[#e8943c] text-[#0d1012] font-pixel font-bold text-base tracking-wide cursor-pointer"
+            >
+              New Run
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-start="true"
+              onClick={onRespawn}
+              className="w-full py-3 bg-[#d9822b] hover:bg-[#e8943c] text-[#0d1012] font-pixel font-bold text-base tracking-wide cursor-pointer"
+            >
+              Respawn at Camp
+            </button>
+          )}
           <button
             type="button"
             onClick={onTitle}

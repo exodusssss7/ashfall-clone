@@ -35,3 +35,13 @@ test('computeAtmosphereLighting mutates state cleanly with zero unexpected NaNs 
     assert.ok(Number.isFinite(state.hemiIntensity) && state.hemiIntensity > 0);
   }
 });
+
+test('night removes the constant ambient sources so terrain really goes dark', () => {
+  const noon = computeAtmosphereLighting(12 * 60, createAtmosphereLightingState());
+  const night = computeAtmosphereLighting(23 * 60, createAtmosphereLightingState());
+  assert.equal(noon.envIntensity, 1);
+  assert.ok(night.envIntensity <= 0.15, 'studio reflection map must fade at night');
+  assert.ok(night.hemiIntensity <= noon.hemiIntensity * 0.2);
+  assert.ok(night.sunIntensity <= noon.sunIntensity * 0.15);
+  assert.ok(night.exposure < noon.exposure);
+});

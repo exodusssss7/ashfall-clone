@@ -1,36 +1,52 @@
-# ASHFALL v0.4
+# ASHFALL v1.3 - Night lighting, action cues, multi-touch safety
 
-Private temporary working copy of the full current game. The original repository is unchanged. No automatic deletion date has been set.
+Private source checkpoint based on owner commit ad7dc0f7b4e03807dc4ac5a7a8b8b7c381c19dc5. No repository push was made.
 
 ## Run and edit
 
 ```sh
 npm ci
 npm run dev
-```
-
-```sh
 npm run lint
 node --import tsx --test src/game/*.test.ts
 npm run build
 ```
 
-## Included
+## v1.3 changes
 
-- React/TypeScript game source, pixel-art generators and UI assets.
-- Licensed audio and credits in `public/audio/CREDITS.txt`.
-- Android WebView wrapper, manifest, icon, local fonts and packaging script.
-- Current signed landscape test APK in `builds/ASHFALL_v0.4_landscape.apk`.
+- Night now darkens the terrain: the constant studio reflection light and hemisphere fill fade with night (sky unchanged). The flashlight, campfires and street lamps now matter.
+- Action-state colours and the emergency pulse work again in the paper skin (ready green, urgent red pulse, timed amber pulse, active teal). A specificity clash had hidden them.
+- COOK buttons show only near heat with ingredients for at least one recipe; unavailable Cook buttons in the menu look disabled.
+- Multi-touch: held buttons track each finger, and every stick or held button releases on cancel, lost capture or when the last finger lifts.
 
-v0.4 removes stamina, adds action animations, moves idle thumbsticks to the approved reference positions and places quick actions in a right-edge column. Floating touch control and inner aim-only / outer aim-and-attack behavior remain.
+## v1.2 base
 
-30 automated tests and browser checks passed. v0.3 was played on the user's phone; v0.4 still needs on-device testing. Android 8.0+; both landscape orientations. APK SHA256: `f84a66b9016dbc5663ab32736faab977f00178c036e26e03e682a1d21c29ce3d`.
+## This version
 
-## Android build
+Preserves v1.1's cream paper/book-page menus, raised cut-corner buttons, transparent day/kills and equipment-label bars, boxed facing inventory pages, and bidirectional touch/mouse drag or tap transfers. Containers and trunks retain items for the current run. No new inventory capacity rule or save/resume system.
 
-Install Java and Android SDK API35/build-tools35.0.0. Set `ANDROID_HOME` to the SDK directory. Run `sh android/build.sh` after `npm ci`. The script builds an unsigned APK. Sign it using your own securely stored key with Android `apksigner`; the same private signing key used for earlier versions is required for in-place updates. Signing keys, passwords and account tokens are deliberately excluded.
+Recorded after-sprint breathing: Joseph Sardin, CC0, approved quieter recording with the additional requested attenuation. Recovery starts after sustained sprinting ends and stops on another sprint, pause, modal, mute, background, death or driving.
 
-Do not publish the repository or redistribute assets under an assumed project-wide license. Individual bundled font/audio licenses and credits remain included. No new project-wide license is granted by this copy.
+The separately supplied signed v1.2 APK includes the approved Mixkit "Human single heart beat" recording (item 490). It replaces the generated heartbeat. Plays only at HP 1-30, at 1.15-second game-time cadence or 0.85 seconds at HP 1-20. Stops when healed above 30, dead, paused, in a modal, muted or backgrounded. Each sample finishes before the next beat. Trailing silence was trimmed and a tail fade applied.
 
-## v0.8 approved HUD style
-Dark cut-corner HUD and buttons, gold equipment selection and dark button edges. Retains the approved preview button positions, floating aim/attack sticks, alerts, audio and gameplay.
+## Important: heartbeat audio excluded from source
+
+The user approved including this recording in the finished APK, but excluding it from shared source. Mixkit permits video-game end products but prohibits redistribution with source files. Therefore `public/audio/heartbeat.mp3` and `android/assets/audio/heartbeat.mp3` are deliberately absent here and ignored by git. Build output, APKs, signing material and dependency directories are also excluded.
+
+A build from this source checkpoint will be silent at the heartbeat trigger unless an appropriately licensed heartbeat file is supplied at `public/audio/heartbeat.mp3`. The missing file is safely skipped; no generated fallback or overlapping beat is used. Do not add the Mixkit file to this shared source checkpoint or a repository.
+
+Heartbeat source: https://mixkit.co/free-sound-effects/heartbeat/
+License: https://mixkit.co/license/modal/sfxFree/
+All other audio credits remain in `public/audio/CREDITS.txt`.
+
+## Android
+
+Package `com.exodus.ashfall`, versionCode 13, versionName 1.3.0, Android 8.0+, both landscape orientations. The separately supplied signed APK retains the original signing certificate.
+
+Install Java and Android SDK API 35/build-tools 35.0.0. Set `ANDROID_HOME` and run `sh android/build.sh` after installing dependencies. This creates an unsigned APK; the original private signing key is required for in-place updates. Keys, passwords and account tokens are not included.
+
+## Verification and limits
+
+88 automated tests, TypeScript and production build passed. Browser checks used assets extracted from the signed v1.2 APK: heartbeat trigger, active stop cases, after-sprint breathing and bidirectional inventory interaction. Gameplay and book-page inventory screenshots were visually inspected. Not installed or performance-tested on an Android phone.
+
+Do not publish or redistribute assets under an assumed project-wide license. Individual bundled font/audio licenses and credits remain included. No new project-wide license is granted by this copy.

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { derivePlayerPalette } from './profile';
 import type { ThreePixelAtlas } from './threeTextures';
 import type { ItemId, PropKind, StructureKind, WeaponId, ZombieArchetype } from './types';
 
@@ -1277,7 +1278,12 @@ export class ThreeModelFactory {
     let shirtHex = '#455b42';
     let pantsHex = '#323b45';
 
-    if (kind === 'walker') {
+    if (kind === 'player') {
+      const pal = derivePlayerPalette();
+      skinHex = pal.skin;
+      shirtHex = pal.shirt;
+      pantsHex = pal.pants;
+    } else if (kind === 'walker') {
       skinHex = '#7d9478';
       shirtHex = '#614a42';
       pantsHex = '#2b3036';
@@ -1548,7 +1554,7 @@ export class ThreeModelFactory {
       map: this.atlas.weaponTex.glove,
       roughness: 0.82,
     });
-    const fingerMat = this.getMat('#d6ac88', { roughness: 0.85 });
+    const fingerMat = this.getMat(derivePlayerPalette().skin, { roughness: 0.85 });
 
     // Pixel-art forearm + cuff + fingerless tactical glove pointing forward along -Z
     const armHolder = new THREE.Group();

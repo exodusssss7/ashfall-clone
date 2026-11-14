@@ -12,3 +12,7 @@ android/assets/assets/
 android/assets/ui/
 android/assets/audio/
 android/assets/index.html
+
+# Mixkit heartbeat: APK-only licence. Never redistribute with source files.
+/public/audio/heartbeat.mp3
+/android/assets/audio/heartbeat.mp3

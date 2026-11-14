@@ -146,7 +146,9 @@ button:disabled { cursor: not-allowed; }
 }
 @media(prefers-reduced-motion:reduce) { button { transition:none!important; } }
 @media(max-width:800px) and (orientation:landscape) {
-  .game-hud[data-touch="true"] .equipment-bar { position:fixed;left:184px;right:224px;bottom:12px;gap:2px; }
+  .game-hud[data-touch="true"] .hotbar-wrap { position:fixed;left:184px;right:224px;bottom:12px; }
+  .game-hud[data-touch="true"] .hotbar-wrap .equipment-bar { gap:2px; }
+  .game-hud[data-touch="true"] .bag-btn { height:61px; }
   .game-hud[data-touch="true"] .equipment-bar>button { flex:1;min-width:0;width:0;padding:3px 2px; }
   .game-hud[data-touch="true"] .equipment-name { font-size:9px; }
   .game-hud[data-touch="true"] .equipment-bar>button>div:first-child { gap:0; }
@@ -164,7 +166,8 @@ button:disabled { cursor: not-allowed; }
   .game-hud[data-touch="true"] .utility-buttons { width:100%;display:grid;grid-template-columns:repeat(4,1fr);gap:3px; }
   .game-hud[data-touch="true"] .utility-buttons>button { width:100%;height:36px; }
   .game-hud[data-touch="true"] .utility-buttons>button[aria-label="Restart Run"] { display:flex; }
-  .game-hud[data-touch="true"] .equipment-bar { position:fixed;left:12px;right:12px;bottom:142px;gap:3px; }
+  .game-hud[data-touch="true"] .hotbar-wrap { position:fixed;left:12px;right:12px;bottom:142px; }
+  .game-hud[data-touch="true"] .hotbar-wrap .equipment-bar { gap:3px; }
   .game-hud[data-touch="true"] .equipment-bar>button { flex:1;min-width:0;width:0;padding:3px; }
   .game-hud[data-touch="true"] .equipment-name { font-size:9px; }
 }
@@ -181,8 +184,8 @@ button[data-start="true"]:hover { background:linear-gradient(#ebcc8e,#c29453); }
 /* Direction A: a compact survival-game HUD, with image-first equipment. */
 .equipped-readout {display:none;}
 html[data-skin="a"] .hud-panel { background:#ede5c7f2;color:#283c33;border:1px solid #fff3c9;border-bottom:3px solid #827952;box-shadow:0 4px 12px #0005; }
-html[data-skin="a"] .vitals-panel { position:relative;padding:10px 12px 8px 61px!important;min-width:230px!important;border-radius:0 18px 18px 18px;border-left:0;min-height:93px; }
-html[data-skin="a"] .vitals-panel::before {content:'';position:absolute;width:41px;height:55px;left:10px;top:18px;background:url('/ui/survivor.svg') center/contain no-repeat;image-rendering:pixelated;filter:drop-shadow(0 2px #a99c72);}
+html[data-skin="a"] .vitals-panel { position:relative;padding:7px 9px 6px 48px!important;min-width:182px!important;border-radius:0 18px 18px 18px;border-left:0;min-height:74px; }
+html[data-skin="a"] .vitals-panel::before {content:'';position:absolute;width:32px;height:44px;left:8px;top:12px;background:url('/ui/survivor.svg') center/contain no-repeat;image-rendering:pixelated;filter:drop-shadow(0 2px #a99c72);}
 html[data-skin="a"] .vitals-panel [class*="text-[#f0ece1]"],html[data-skin="a"] .vitals-panel [class*="text-[#c7c2b6]"],html[data-skin="a"] .vitals-panel [class*="text-[#8a918d]"] { color:#2b4338; }
 html[data-skin="a"] .vitals-panel [class*="bg-[#121518]"] {background:#b5b398;border:0;border-radius:8px;box-shadow:inset 0 1px 2px #0003;}
 html[data-skin="a"] .vitals-panel [class*="h-2.5"] {height:9px;}
@@ -223,8 +226,8 @@ html[data-skin="a"] [role="dialog"] button[class*="bg-[#d9822b]"] {border-radius
  html[data-skin="a"] .equipment-icon {width:33px!important;height:33px!important;}
  html[data-skin="a"] .equipped-readout {position:fixed;bottom:84px;left:210px;right:238px;justify-content:center;font-size:11px;}
  html[data-skin="a"] .equipped-sub {display:none;}
- html[data-skin="a"] .vitals-panel {min-width:204px!important;padding-left:50px!important;}
- html[data-skin="a"] .vitals-panel::before {left:8px;width:34px;}
+ html[data-skin="a"] .vitals-panel {min-width:168px!important;padding-left:42px!important;}
+ html[data-skin="a"] .vitals-panel::before {left:7px;width:28px;}
  html[data-skin="a"] .clock-panel {min-width:190px;top:14px;padding:7px 12px;}
  html[data-skin="a"] [data-testid="mobile-map"] {top:112px;}
 }
@@ -239,7 +242,8 @@ html[data-skin="a"] [role="dialog"] button[class*="bg-[#d9822b]"] {border-radius
 html[data-skin] .equipment-bar>button {justify-content:center;padding-bottom:13px!important;}
 html[data-skin] .equipment-icon {margin:0!important;}
 @media(max-width:800px) and (orientation:landscape) {
- html[data-skin] .game-hud[data-touch="true"] .equipment-bar {left:204px;right:232px;gap:3px;padding-left:4px;padding-right:4px;}
+ html[data-skin] .game-hud[data-touch="true"] .hotbar-wrap {left:204px;right:232px;padding-left:4px;padding-right:4px;}
+ html[data-skin] .game-hud[data-touch="true"] .hotbar-wrap .equipment-bar {gap:3px;}
 }
 @media(max-width:600px) and (orientation:portrait) {
  .touch-controls [data-testid="touch-fire-btn"] {position:absolute;left:0;bottom:226px;}
@@ -405,7 +409,7 @@ html[data-skin="a"] .floating-stick-ring[data-attacking="true"]{border-color:#f4
 .context-action-stack>.quick-action-rail{width:auto;}
 .context-action-stack>[data-testid="touch-door-btn"]{font-size:9px;}
 .left-control-cluster{left:calc(16.7vw - 54px)!important;bottom:calc(29vh - 54px)!important;}
-.left-control-cluster>[data-testid="touch-fire-btn"]{position:absolute;left:116px;bottom:20px;width:50px;height:50px;}
+.left-control-cluster>[data-testid="touch-fire-btn"]{position:absolute;left:116px;bottom:46px;width:50px;height:50px;}
 @media(max-height:360px) and (orientation:landscape){
 .quick-action-rail{top:104px;gap:4px;grid-template-columns:44px;}.quick-action-rail>button{width:44px;min-width:44px;min-height:42px;}
 .context-action-stack{top:100px;right:64px;width:100px;}
@@ -420,7 +424,7 @@ html[data-skin="a"] .floating-stick-ring[data-attacking="true"]{border-color:#f4
  html[data-skin="a"] [data-testid="mobile-map"] canvas{width:44px;height:44px;}
  html[data-skin="a"] [data-testid="mobile-map"]>div{display:none;}
 }
-.left-control-cluster>[data-testid="touch-fire-btn"]{bottom:80px;}
+.left-control-cluster>[data-testid="touch-fire-btn"]{bottom:106px;}
 /* Context actions form a short central shelf above equipment, never over either thumb. */
 .context-action-stack{top:auto;right:auto;left:50%;transform:translateX(-50%);bottom:100px;width:max-content;max-width:38vw;flex-direction:row;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;}
 .context-action-stack>button{width:auto;min-width:94px;max-width:160px;}
@@ -479,11 +483,11 @@ html[data-skin="a"] button[data-action-state]:not([data-action-state="idle"]) :i
    This layer changes HUD/controls only; simulation and world art are untouched. */
 html[data-skin="a"]{--hud-dark:#17151f;--hud-rim:#a28c8f;--hud-inner:#49404c;--hud-gold:#ffe69c;}
 html[data-skin="a"] :is(.vitals-panel,.clock-panel,[data-testid="mobile-map"]){background:linear-gradient(145deg,#25212eea,#17151fed 60%);color:#f3eddf;border:2px solid #8b747b;border-top-color:#c0a0a0;border-bottom:3px solid #4b3a42;border-radius:3px;box-shadow:inset 0 0 0 2px #16141c,inset 0 0 0 3px #50454e,0 3px 0 #0b0a10,0 5px 9px #0008;}
-html[data-skin="a"] .vitals-panel{padding:10px 10px 8px 70px!important;min-width:236px!important;min-height:96px;border-left:2px solid #927c83;border-radius:3px 3px 9px 3px;}
-html[data-skin="a"] .vitals-panel::before{left:9px;top:11px;width:51px;height:72px;background-color:#2c3030;border:2px solid #7c777d;box-shadow:inset 0 0 0 3px #15131c,0 2px 1px #07070c;filter:drop-shadow(0 2px #0b0a10);background-size:86%;}
+html[data-skin="a"] .vitals-panel{padding:7px 8px 6px 52px!important;min-width:184px!important;min-height:76px;border-left:2px solid #927c83;border-radius:3px 3px 9px 3px;}
+html[data-skin="a"] .vitals-panel::before{left:8px;top:9px;width:38px;height:54px;background-color:#2c3030;border:2px solid #7c777d;box-shadow:inset 0 0 0 3px #15131c,0 2px 1px #07070c;filter:drop-shadow(0 2px #0b0a10);background-size:86%;}
 html[data-skin="a"] .vitals-panel :is([class*="text-[#f0ece1]"],[class*="text-[#c7c2b6]"],[class*="text-[#8a918d]"]){color:#ece6d9;}
 html[data-skin="a"] .vitals-panel [class*="bg-[#121518]"]{background:#0d0c13;border:1px solid #62545b;border-radius:2px;box-shadow:inset 0 2px 2px #0008;}
-html[data-skin="a"] .vitals-panel .health-track{height:20px;}
+html[data-skin="a"] .vitals-panel .health-track{height:15px;}
 html[data-skin="a"] .vitals-panel .health-track>div{background:linear-gradient(#d74b4a,#ae252e)!important;box-shadow:inset 0 2px #fb767755;}
 html[data-skin="a"] .vitals-panel>div:first-child{position:relative;gap:5px;}
 html[data-skin="a"] .vitals-panel .health-value{position:absolute;right:5px;top:1px;width:auto;font-size:11px;line-height:18px;text-shadow:0 2px #3d1019;}
@@ -525,7 +529,8 @@ html[data-skin="a"] .floating-stick-ring[data-attacking="true"]{border-color:#ff
 /* Readiness and warning colors remain the approved action-cue palette. */
 html[data-skin="a"] button[data-action-state="ready"]{background:linear-gradient(145deg,#dad89c,#9baa67)!important;border-color:#f3edba;}
 @media(orientation:landscape){
- html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar{position:fixed;left:28vw;right:auto;bottom:14px;width:39vw;gap:4px;padding:5px;}
+ html[data-skin="a"] .game-hud[data-touch="true"] .hotbar-wrap{position:fixed;left:28vw;right:auto;bottom:14px;width:39vw;}
+ html[data-skin="a"] .game-hud[data-touch="true"] .hotbar-wrap .equipment-bar{gap:4px;padding:5px;}
  html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar>button{flex:1;min-width:0;width:0;height:67px;}
  html[data-skin="a"] .game-hud[data-touch="true"] .equipment-icon{width:42px!important;height:42px!important;margin-top:-3px!important;}
  html[data-skin="a"] .game-hud[data-touch="true"] .equipped-readout{position:fixed;left:30vw;right:auto;bottom:99px;width:35vw;justify-content:center;font-size:12px;transform:none;}
@@ -534,16 +539,18 @@ html[data-skin="a"] button[data-action-state="ready"]{background:linear-gradient
  .quick-action-rail>button{width:48px;height:48px;}
  .context-action-stack{left:31vw;bottom:138px;width:37vw;max-width:37vw;transform:none;}
  .context-action-stack>.quick-action-rail{width:auto;}
- .left-control-cluster>[data-testid="touch-fire-btn"]{position:fixed;left:calc(23vw - 29px);bottom:calc(24vh - 29px);width:58px;height:58px;}
+ .left-control-cluster>[data-testid="touch-fire-btn"]{position:fixed;left:calc(23vw - 29px);bottom:calc(24vh - 3px);width:58px;height:58px;}
  .floating-stick-left .floating-stick-ring:not([data-active="true"]){left:11vw!important;top:calc(100% - 24vh)!important;}
  .floating-stick-right .floating-stick-ring:not([data-active="true"]){left:calc(100% - 9vw)!important;top:calc(100% - 24vh)!important;}
  .floating-stick-left{width:27vw;}.floating-stick-right{width:17vw;}
 }
 @media(max-width:800px) and (orientation:landscape){
- html[data-skin="a"] .vitals-panel{min-width:207px!important;width:207px;padding-left:58px!important;min-height:88px;}
- html[data-skin="a"] .vitals-panel::before{width:41px;height:65px;left:7px;top:10px;}
+ html[data-skin="a"] .vitals-panel{min-width:172px!important;width:172px;padding-left:46px!important;min-height:70px;}
+ html[data-skin="a"] .vitals-panel::before{width:32px;height:50px;left:6px;top:8px;}
  html[data-skin="a"] .clock-panel{min-width:210px;padding:7px 9px;}
- html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar{left:27vw;width:39vw;bottom:10px;gap:3px;padding:4px;}
+ html[data-skin="a"] .game-hud[data-touch="true"] .hotbar-wrap{left:27vw;width:39vw;bottom:10px;}
+ html[data-skin="a"] .game-hud[data-touch="true"] .hotbar-wrap .equipment-bar{gap:3px;padding:4px;}
+ html[data-skin="a"] .game-hud[data-touch="true"] .bag-btn{height:57px;}
  html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar>button{height:57px;}
  html[data-skin="a"] .game-hud[data-touch="true"] .equipment-icon{width:33px!important;height:33px!important;}
  html[data-skin="a"] .equipment-bar>button>div:first-child>span{font-size:10px;}
@@ -764,11 +771,6 @@ html[data-skin="a"] [data-testid="touch-attack-btn"][data-weapon="molotov"] svg{
   height:74px;
 }
 @media(orientation:landscape){
-  .touch-controls[data-camera="fps"] .quick-action-rail{
-    left:auto!important;
-    right:max(110px,calc(env(safe-area-inset-right) + 106px));
-    bottom:18px;
-  }
   .touch-controls[data-camera="fps"] .right-control-cluster.on-foot [data-testid="touch-attack-btn"]{
     right:max(18px,env(safe-area-inset-right));
     bottom:22px;
@@ -777,10 +779,6 @@ html[data-skin="a"] [data-testid="touch-attack-btn"][data-weapon="molotov"] svg{
   }
 }
 @media(max-width:800px) and (orientation:landscape){
-  .touch-controls[data-camera="fps"] .quick-action-rail{
-    right:max(94px,calc(env(safe-area-inset-right) + 92px));
-    bottom:12px;
-  }
   .touch-controls[data-camera="fps"] .right-control-cluster.on-foot [data-testid="touch-attack-btn"]{
     right:max(12px,env(safe-area-inset-right));
     bottom:16px;
@@ -795,15 +793,15 @@ html[data-skin="a"] [data-testid="touch-attack-btn"][data-weapon="molotov"] svg{
 @media(max-width:600px) and (orientation:portrait){
   html[data-skin="a"] .game-hud[data-touch="true"] .vitals-panel{
     min-width:0!important;
-    width:46%!important;
-    padding:8px 8px 6px 52px!important;
-    min-height:82px;
+    width:44%!important;
+    padding:6px 7px 5px 44px!important;
+    min-height:66px;
   }
   html[data-skin="a"] .game-hud[data-touch="true"] .vitals-panel::before{
-    width:36px;
-    height:52px;
-    left:7px;
-    top:12px;
+    width:28px;
+    height:42px;
+    left:6px;
+    top:10px;
   }
   html[data-skin="a"] .game-hud[data-touch="true"] .utility-cluster{
     width:51%!important;
@@ -826,15 +824,18 @@ html[data-skin="a"] [data-testid="touch-attack-btn"][data-weapon="molotov"] svg{
     width:100%!important;
     height:34px!important;
   }
-  html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar{
+  html[data-skin="a"] .game-hud[data-touch="true"] .hotbar-wrap{
     position:fixed!important;
     left:10px!important;
     right:10px!important;
     bottom:10px!important;
     width:auto!important;
+  }
+  html[data-skin="a"] .game-hud[data-touch="true"] .hotbar-wrap .equipment-bar{
     gap:3px;
     padding:4px;
   }
+  html[data-skin="a"] .game-hud[data-touch="true"] .bag-btn{height:58px!important;}
   html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar>button{
     flex:1;
     min-width:0;
@@ -948,3 +949,188 @@ html[data-skin="a"] [data-testid="touch-attack-btn"][data-weapon="molotov"] svg{
   border-bottom: 3px solid #3d2a10;
   box-shadow: 0 2px 4px #0009;
 }
+
+/* ===== v1.4: start flow (splash / menu / survivor setup) ===== */
+.paper-title-screen:has(> .splash-fade) {
+  background: radial-gradient(circle at 50% 44%, rgba(8, 10, 11, 0.22) 0%, rgba(8, 10, 11, 0.66) 68%, rgba(6, 8, 9, 0.88) 100%);
+}
+.splash-fade {
+  animation: startSplashFade 0.45s ease-out;
+}
+@keyframes startSplashFade {
+  from { opacity: 0; transform: scale(0.985); }
+  to { opacity: 1; transform: scale(1); }
+}
+.splash-logo {
+  color: #f1e7c9 !important;
+  text-shadow: 0 3px 0 #2c2318, 0 10px 26px rgba(0, 0, 0, 0.85);
+  margin: 0;
+}
+.splash-tap {
+  animation: tapPulse 1.6s ease-in-out infinite;
+  text-shadow: 0 2px 6px #000;
+}
+@keyframes tapPulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+@media (max-width: 700px), (max-height: 500px) {
+  .splash-logo { font-size: 52px; }
+}
+
+/* Menu mode cards + continue + survivor chip, paper styled */
+.menu-mode-row {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 14px;
+}
+.menu-mode-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  text-align: left;
+  padding: 9px 12px;
+  background: #e4d6b4;
+  border: 1px solid #b3a07a;
+  border-radius: 3px;
+  box-shadow: inset 0 1px #fff6, 0 2px 3px #0002;
+}
+.menu-mode-card:hover { border-color: #8a6f45; }
+.menu-mode-card span { color: #4a3d28 !important; }
+.menu-mode-card span:last-child { opacity: 0.75; }
+.menu-mode-active {
+  background: linear-gradient(#6d7c5f, #43543f 80%, #31402f 80%);
+  border-color: #31402f;
+  box-shadow: inset 0 2px #9cac89, inset 0 -4px #2c3a2a;
+}
+.menu-mode-active span { color: #fff1cd !important; }
+.menu-mode-active span:last-child { opacity: 0.85; }
+.menu-continue-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 11px 14px;
+  font: 600 15px var(--font-body);
+  background: linear-gradient(#8a6f45, #6a5335 80%, #503c26 80%);
+  color: #fff1cd !important;
+  border: 0;
+  border-radius: 2px;
+  box-shadow: inset 0 2px #c9b183, inset 0 -5px #4a3826;
+  margin-bottom: 8px;
+}
+.menu-continue-btn:hover { filter: brightness(1.08); }
+.menu-survivor-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid #b3a07a;
+  background: #e0d2b0cc;
+  border-radius: 3px;
+  color: #4a3d28;
+  margin-bottom: 2px;
+}
+.menu-survivor-chip:hover { border-color: #8a6f45; }
+
+/* Setup step */
+.setup-card {
+  animation: startSplashFade 0.3s ease-out;
+}
+.setup-preview canvas {
+  image-rendering: pixelated;
+  background: #d9c9a6;
+  border: 2px solid #b49e76;
+  box-shadow: inset 0 2px 6px #00000022;
+  border-radius: 3px;
+}
+.setup-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  border: 2px solid #00000055;
+  box-shadow: inset 0 -4px 0 #00000022, 0 1px 2px #0005;
+  cursor: pointer;
+  padding: 0;
+}
+.setup-swatch-active {
+  outline: 2px solid #7a5c3e;
+  outline-offset: 2px;
+}
+.setup-name-input {
+  background: #efe5cb;
+  border: 1px solid #b49e76;
+  color: #352d20;
+  border-radius: 3px;
+  outline: none;
+  box-shadow: inset 0 2px 4px #00000018;
+}
+.setup-name-input:focus { border-color: #8a6f45; }
+
+/* ===== v1.4: Edit HUD mode ===== */
+.hud-edit-bar {
+  animation: startSplashFade 0.2s ease-out;
+}
+[data-hud-edit] {
+  outline: 2px dashed #f0d078;
+  outline-offset: 3px;
+  cursor: grab;
+  touch-action: none;
+  z-index: 35;
+}
+[data-hud-edit]:active { cursor: grabbing; }
+/* beat the paper text-colour override inside the selected mode card */
+html[data-skin="a"] .journal-title-card .menu-mode-active span { color: #fff1cd !important; }
+html[data-skin="a"] .journal-title-card .menu-mode-active span:last-child { color: #e3dcbd !important; }
+html[data-skin="a"] .journal-title-card .menu-continue-btn span { color: #fff1cd !important; }
+
+/* v1.4 fit fixes: setup card must fit phone landscape with BEGIN reachable */
+.setup-card {
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+@media (orientation: landscape) and (max-height: 500px) {
+  .setup-card {
+    padding: 14px 20px 14px 24px !important;
+    margin: 0 auto !important;
+    width: min(600px, 92vw) !important;
+  }
+  .setup-card .title-book-kicker { font-size: 8px; }
+  .setup-card h2 { font-size: 17px !important; margin-bottom: 2px !important; }
+  .setup-card p { margin-bottom: 8px !important; font-size: 10px !important; }
+  .setup-card .setup-preview canvas { width: 64px; height: 80px; }
+  .setup-swatch { width: 20px; height: 20px; }
+  .setup-card .mb-2\.5 { margin-bottom: 5px; }
+  .setup-name-input { padding: 4px 8px !important; margin-bottom: 6px !important; font-size: 13px !important; }
+}
+/* dim the world behind splash/menu/setup so paper stays readable */
+.paper-title-screen { background: rgba(7, 9, 10, 0.45); }
+.paper-title-screen:has(> .splash-fade) {
+  background: radial-gradient(circle at 50% 44%, rgba(8, 10, 11, 0.35) 0%, rgba(8, 10, 11, 0.72) 68%, rgba(6, 8, 9, 0.9) 100%);
+}
+/* keep the control-hints footer clear of the journal card */
+.menu-hints {
+  text-align: center;
+  width: 100%;
+  padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
+  background: linear-gradient(transparent, rgba(7, 9, 10, 0.55));
+}
+
+/* Bag chip: standalone backpack/crafting button detached from the hotbar slots (user request:
+   bag must sit left of the item slots, not framed as one of them). */
+.hotbar-wrap { display:flex; align-items:flex-end; gap:10px; }
+.hotbar-wrap .equipment-bar { flex:1; min-width:0; }
+.bag-btn { position:relative; flex:0 0 auto; display:flex; flex-direction:column; justify-content:center; align-items:center; min-width:64px; height:80px; padding:4px 7px; background:#071011b8; border:1px solid #68736680; border-bottom:3px solid #39433d; border-radius:10px; color:#f0ece1; }
+.bag-btn .equipment-icon { width:37px; height:34px; margin:-1px 0 -2px; }
+.bag-btn:hover { border-color:#8a918d; }
+.bag-btn.bag-btn-active { border-color:#e5d087; box-shadow:0 0 8px #d9c57966; }
+.game-hud[data-touch="true"] .bag-btn { min-width:54px; width:54px; height:67px; padding:3px 4px; }
+html[data-skin="a"] .bag-btn { background:linear-gradient(145deg,#211e2bbd,#15141c9c); border:2px solid #77717e; border-top-color:#a19ba8; border-bottom:3px solid #47424e; border-radius:12px; box-shadow:inset 0 0 0 2px #0e0d16,inset 0 0 0 3px #3c3543,0 3px 6px #0009; color:#fff2db; }
+html[data-skin="a"] .bag-btn>div:first-child { color:#c9b8a3; }
+html[data-skin="a"] .bag-btn .equipment-name { color:#fff2db!important; }
+html[data-skin="a"] .bag-btn:hover { border-color:#a89cae; }
+html[data-skin="a"] .bag-btn.bag-btn-active { background:linear-gradient(135deg,#57451a,#241f20 80%); border-color:#ffedaa; box-shadow:inset 0 0 0 2px #493515,inset 0 0 18px #dfac4240,0 0 10px #ffd96b66; }

@@ -551,6 +551,42 @@ export class ThreeIsometricRenderer {
     }
   }
 
+  /** Rebuild player rig + first-person arms after a survivor appearance change. */
+  public refreshPlayerAppearance(): void {
+    this.atlas.refreshPlayerActorTextures();
+
+    const disposeRigMaterials = (root: THREE.Object3D) => {
+      root.traverse((o: THREE.Object3D) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh || !m.material) return;
+        const mats = Array.isArray(m.material) ? m.material : [m.material];
+        for (const mat of mats) (mat as THREE.Material).dispose();
+      });
+    };
+
+    this.scene.remove(this.playerRig.root);
+    disposeRigMaterials(this.playerRig.root);
+    this.playerRig = this.factory.createActorRig('player');
+    // Same ownership rule as at construction: the player owns its materials.
+    this.playerRig.root.traverse((o: THREE.Object3D) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || !m.material) return;
+      m.material = Array.isArray(m.material) ? m.material.map((x) => x.clone()) : m.material.clone();
+    });
+    this.scene.add(this.playerRig.root);
+    const rigBox = new THREE.Box3().setFromObject(this.playerRig.root);
+    if (Number.isFinite(rigBox.max.y - rigBox.min.y) && rigBox.max.y - rigBox.min.y > 0.2) {
+      this.playerRigHeight = rigBox.max.y - rigBox.min.y;
+    }
+
+    const wasVisible = this.fpsViewmodelRig.root.visible;
+    this.fpsCamera.remove(this.fpsViewmodelRig.root);
+    disposeRigMaterials(this.fpsViewmodelRig.root);
+    this.fpsViewmodelRig = this.factory.createFirstPersonViewmodelRig();
+    this.fpsViewmodelRig.root.visible = wasVisible;
+    this.fpsCamera.add(this.fpsViewmodelRig.root);
+  }
+
   private static detectSoftwareGl(): boolean {
     try {
       const probe = document.createElement('canvas').getContext('webgl2');
@@ -1207,7 +1243,9 @@ export class ThreeIsometricRenderer {
 
     this.hemiLight.color.copy(atmo.hemiSkyColor);
     this.hemiLight.groundColor.copy(atmo.hemiGroundColor);
-    this.hemiLight.intensity = isFps ? Math.max(0.32, atmo.hemiIntensity + 0.05) : atmo.hemiIntensity;
+    this.hemiLight.intensity = isFps ? Math.max(0.32 * (1 - nightT * 0.65), atmo.hemiIntensity + 0.05) : atmo.hemiIntensity;
+    this.scene.environmentIntensity = atmo.envIntensity;
+    this.renderer.toneMappingExposure = atmo.exposure;
 
     // Player flashlight SpotLight (tracks vertical pitch in FPS mode!)
     if (state.phase !== 'title' && state.activeVehicleId === null && state.player.flashlightOn && state.player.battery > 0) {

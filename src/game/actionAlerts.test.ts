@@ -50,3 +50,12 @@ test('rest gap uses one awake minute, not the sleep clock skip or paused time', 
   assert.equal(formatRestCooldown(179.1),'3:00');
   assert.equal(formatRestCooldown(59),'0:59');
 });
+
+test('cook controls only appear near heat with ingredients for at least one recipe', async () => {
+  const { canCookAnything } = await import('./actionAlerts');
+  const inv = (o: Record<string, number>) => ({ raw_fish: 0, water: 0, food: 0, wood: 0, ...o }) as any;
+  assert.equal(canCookAnything({ nearCookingHeat: true, inventory: inv({}) }), false);
+  assert.equal(canCookAnything({ nearCookingHeat: false, inventory: inv({ raw_fish: 2 }) }), false);
+  assert.equal(canCookAnything({ nearCookingHeat: true, inventory: inv({ raw_fish: 1 }) }), true);
+  assert.equal(canCookAnything({ nearCookingHeat: true, inventory: inv({ wood: 1 }) }), true);
+});

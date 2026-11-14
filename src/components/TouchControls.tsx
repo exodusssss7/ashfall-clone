@@ -1,7 +1,8 @@
-import { getActionCues, actionCueProps } from '../game/actionAlerts';
+import { getActionCues, actionCueProps, canCookAnything } from '../game/actionAlerts';
 import { formatRestCooldown } from '../game/restCooldown';
 import { FloatingStick } from './FloatingStick';
-import React, { useEffect, useState } from 'react';
+import { useHudDrag } from './useHudDrag';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Car,
   Crosshair,
@@ -24,6 +25,7 @@ import type { HudSnapshot } from '../game/types';
 
 interface TouchControlsProps {
   hud: HudSnapshot;
+  editing?: boolean;
   onMoveStick: (nx: number, ny: number) => void;
   onAimStick: (nx: number, ny: number, active: boolean) => void;
   onFireChange: (held: boolean) => void;
@@ -39,10 +41,53 @@ interface TouchControlsProps {
   onToggleFlashlight: () => void;
   onEnterExitVehicle: () => void;
   onHorn: () => void;
+  /** First-person only: dragging the right fire button aims while it fires. */
+  onAimDelta: (dx: number, dy: number) => void;
+}
+
+
+/** Held buttons track every finger on them, so lifting one finger never releases a button another finger still holds.
+ * Cancels and lost captures release too, so a button can never stay latched. */
+function useHeldButton(apply: (held: boolean) => void, setVisual: (held: boolean) => void) {
+  const ids = useRef<Set<number>>(new Set());
+  const applyRef = useRef(apply); applyRef.current = apply;
+  const visualRef = useRef(setVisual); visualRef.current = setVisual;
+  const set = useCallback((held: boolean) => { visualRef.current(held); applyRef.current(held); }, []);
+  const releaseAll = useCallback(() => { if (ids.current.size === 0) return; ids.current.clear(); set(false); }, [set]);
+  useEffect(() => {
+    const onTouchEnd = (e: TouchEvent) => { if (e.touches.length === 0) releaseAll(); };
+    window.addEventListener('touchend', onTouchEnd, true);
+    window.addEventListener('touchcancel', releaseAll, true);
+    window.addEventListener('blur', releaseAll);
+    return () => {
+      window.removeEventListener('touchend', onTouchEnd, true);
+      window.removeEventListener('touchcancel', releaseAll, true);
+      window.removeEventListener('blur', releaseAll);
+      releaseAll();
+    };
+  }, [releaseAll]);
+  const down = (e: React.PointerEvent<HTMLElement>, onFirst?: () => void) => {
+    e.preventDefault(); e.stopPropagation();
+    try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch { /* synthetic pointer */ }
+    const first = ids.current.size === 0;
+    ids.current.add(e.pointerId);
+    if (first) { set(true); onFirst?.(); }
+  };
+  const up = (e: React.PointerEvent<HTMLElement>) => {
+    e.preventDefault();
+    if (!ids.current.delete(e.pointerId)) return;
+    if (ids.current.size === 0) set(false);
+  };
+  const cancel = (e: React.PointerEvent<HTMLElement>) => {
+    if (!ids.current.delete(e.pointerId)) return;
+    if (ids.current.size === 0) set(false);
+  };
+  return { onPointerDown: down, onPointerUp: up, onPointerCancel: cancel, onLostPointerCapture: cancel };
 }
 
 export const TouchControls: React.FC<TouchControlsProps> = ({
   hud,
+  editing = false,
   onMoveStick,
   onAimStick,
   onFireChange,
@@ -58,10 +103,55 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
   onToggleFlashlight,
   onEnterExitVehicle,
   onHorn,
+  onAimDelta,
 }) => {
+  const leftFireDrag = useHudDrag('leftFire', editing);
+  const fpsAttackDrag = useHudDrag('fpsAttack', editing);
+  const quickRailDrag = useHudDrag('quickRail', editing);
   const [fireHeld, setFireHeld] = useState(false);
   const [attackHeld, setAttackHeld] = useState(false);
   const [boostHeld, setBoostHeld] = useState(false);
+  const isDrivingNow = Boolean(hud.drivingVehicle);
+  const isFishingNow = Boolean(hud.fishing);
+  const fireHold = useHeldButton((held) => {
+    if (!held) { onBrakeChange(false); onFireChange(false); return; }
+    if (isDrivingNow) onBrakeChange(true); else if (!isFishingNow) onFireChange(true);
+  }, setFireHeld);
+  const attackHold = useHeldButton((held) => {
+    if (!held) { onFireChange(false); return; }
+    if (!isFishingNow) onFireChange(true);
+  }, setAttackHeld);
+
+  // Drag-to-aim while the first-person fire button is held (fire + aim with one thumb).
+  const attackDragRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const attackHandlers = {
+    onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => {
+      attackDragRef.current = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
+      attackHold.onPointerDown(e, isFishingNow ? onLoot : undefined);
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLButtonElement>) => {
+      const drag = attackDragRef.current;
+      if (!drag || drag.pointerId !== e.pointerId) return;
+      const dx = e.clientX - drag.x;
+      const dy = e.clientY - drag.y;
+      drag.x = e.clientX;
+      drag.y = e.clientY;
+      if (dx !== 0 || dy !== 0) onAimDelta(dx, dy);
+    },
+    onPointerUp: (e: React.PointerEvent<HTMLButtonElement>) => {
+      if (attackDragRef.current?.pointerId === e.pointerId) attackDragRef.current = null;
+      attackHold.onPointerUp(e);
+    },
+    onPointerCancel: (e: React.PointerEvent<HTMLButtonElement>) => {
+      if (attackDragRef.current?.pointerId === e.pointerId) attackDragRef.current = null;
+      attackHold.onPointerCancel(e);
+    },
+    onLostPointerCapture: (e: React.PointerEvent<HTMLButtonElement>) => {
+      if (attackDragRef.current?.pointerId === e.pointerId) attackDragRef.current = null;
+      attackHold.onLostPointerCapture(e);
+    },
+  };
+  const boostHold = useHeldButton(onBoostChange, setBoostHeld);
   const [isPortrait, setIsPortrait] = useState(false);
   const [dismissRotateHint, setDismissRotateHint] = useState(false);
 
@@ -132,8 +222,9 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
 
   return (
     <div data-camera={hud.cameraMode} className="touch-controls fixed inset-0 z-20 pointer-events-none">
-      <FloatingStick testId="touch-move-stick" side="left" label={isDriving?'Drive':'Move'} accentColor="#b7d994" onChange={(x,y)=>onMoveStick(x,y)} />
-      {!isDriving && !isFps && <FloatingStick testId="touch-aim-stick" side="right" label={aimStickLabel} accentColor="#ead39b" onChange={onAimStick} />}
+      {!editing && <FloatingStick testId="touch-move-stick" side="left" label={isDriving?'Drive':'Move'} accentColor="#b7d994" onChange={(x,y)=>onMoveStick(x,y)} />}
+      {!editing && !isDriving && !isFps && <FloatingStick testId="touch-aim-stick" side="right" label={aimStickLabel} accentColor="#ead39b" onChange={onAimStick} />}
+      {/* While editing the HUD layout, the touch buttons stay visible but the sticks hide */}
       {/* Horizontal orientation recommendation banner if device is held vertically */}
       {isPortrait && !dismissRotateHint && (
         <div className="rotation-hint absolute top-16 left-1/2 -translate-x-1/2 pointer-events-auto hud-panel px-3 py-1.5 flex items-center gap-2 text-[11px] font-telemetry text-[#f0d078] whitespace-nowrap">
@@ -166,31 +257,12 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                     ? 'Left Hand Slash Button'
                     : 'Left Hand Fire Button'
             }
-            onPointerDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              try {
-                e.currentTarget.setPointerCapture?.(e.pointerId);
-              } catch {
-                // Synthetic PointerEvents may not register an active pointer id
-              }
-              setFireHeld(true);
-              if (isDriving) onBrakeChange(true);
-              else if (isFishing) onLoot();
-              else onFireChange(true);
-            }}
-            onPointerUp={(e) => {
-              e.preventDefault();
-              setFireHeld(false);
-              if (isDriving) onBrakeChange(false);
-              else if (!isFishing) onFireChange(false);
-            }}
-            onPointerCancel={() => {
-              setFireHeld(false);
-              if (isDriving) onBrakeChange(false);
-              else if (!isFishing) onFireChange(false);
-            }}
-            style={{ touchAction: 'none' }}
+            onPointerDown={(e) => fireHold.onPointerDown(e, isFishingNow ? onLoot : undefined)}
+            onPointerUp={fireHold.onPointerUp}
+            onPointerCancel={fireHold.onPointerCancel}
+            onLostPointerCapture={fireHold.onLostPointerCapture}
+            ref={leftFireDrag.ref}
+            style={{ touchAction: 'none', ...leftFireDrag.style }}
             className={`w-16 h-16 rounded-full border-2 flex flex-col items-center justify-center transition-transform select-none cursor-pointer ${
               fireHeld
                 ? 'bg-[#c9453e] border-[#ffd266] text-white scale-95 shadow-[0_0_16px_rgba(201,69,62,0.65)]'
@@ -215,26 +287,10 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               type="button"
               data-testid="touch-boost-btn" {...actionCueProps(cues.boost)}
               aria-label="Turbo Boost"
-              onPointerDown={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                try {
-                  e.currentTarget.setPointerCapture?.(e.pointerId);
-                } catch {
-                  // Synthetic PointerEvents may not register an active pointer id
-                }
-                setBoostHeld(true);
-                onBoostChange(true);
-              }}
-              onPointerUp={(e) => {
-                e.preventDefault();
-                setBoostHeld(false);
-                onBoostChange(false);
-              }}
-              onPointerCancel={() => {
-                setBoostHeld(false);
-                onBoostChange(false);
-              }}
+              onPointerDown={(e) => boostHold.onPointerDown(e)}
+              onPointerUp={boostHold.onPointerUp}
+              onPointerCancel={boostHold.onPointerCancel}
+              onLostPointerCapture={boostHold.onLostPointerCapture}
               style={{ touchAction: 'none' }}
               className={`min-w-[46px] min-h-[44px] rounded-lg border-2 flex flex-col items-center justify-center cursor-pointer ${
                 boostHeld || hud.drivingVehicle?.boosting
@@ -348,7 +404,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                 className="w-full min-h-[48px] px-3 flex items-center justify-center gap-2 cursor-pointer">
                 <DoorOpen className="w-5 h-5"/><span className="font-telemetry text-[10px] font-bold">{hud.nearbyDoorAction.label}</span>
               </button>}
-              {hud.nearCookingHeat && (
+              {canCookAnything(hud) && (
                 <button
                   type="button"
                   data-testid="touch-cook-btn" {...actionCueProps(cues.cook)}
@@ -422,7 +478,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                 </div>
               )}
 
-              <div className="quick-action-rail grid grid-cols-2 gap-1.5">
+              <div ref={quickRailDrag.ref} style={quickRailDrag.style} className="quick-action-rail grid grid-cols-2 gap-1.5">
               <button
                 type="button"
                 data-testid="touch-loot-btn" {...actionCueProps(cues.interact)}
@@ -520,28 +576,9 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                           ? 'Throw Molotov'
                           : 'Fire Weapon'
                 }
-                onPointerDown={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  try {
-                    e.currentTarget.setPointerCapture?.(e.pointerId);
-                  } catch {
-                    // Synthetic PointerEvents may not register an active pointer id
-                  }
-                  setAttackHeld(true);
-                  if (isFishing) onLoot();
-                  else onFireChange(true);
-                }}
-                onPointerUp={(e) => {
-                  e.preventDefault();
-                  setAttackHeld(false);
-                  if (!isFishing) onFireChange(false);
-                }}
-                onPointerCancel={() => {
-                  setAttackHeld(false);
-                  if (!isFishing) onFireChange(false);
-                }}
-                style={{ touchAction: 'none' }}
+                {...attackHandlers}
+                ref={fpsAttackDrag.ref}
+                style={{ touchAction: 'none', ...fpsAttackDrag.style }}
                 className={`fps-attack-btn w-[72px] h-[72px] rounded-full border-2 flex flex-col items-center justify-center transition-transform select-none cursor-pointer ${
                   attackHeld
                     ? 'bg-[#c9453e] border-[#ffd266] text-white scale-95 shadow-[0_0_18px_rgba(201,69,62,0.75)]'

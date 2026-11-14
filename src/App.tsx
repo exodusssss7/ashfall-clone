@@ -7,10 +7,12 @@ import { LootModal } from './components/LootModal';
 import { PauseModal } from './components/PauseModal';
 import { PickupFeed } from './components/PickupFeed';
 import { QuickCookModal } from './components/QuickCookModal';
-import { TitleOverlay } from './components/TitleOverlay';
+import { StartScreen } from './components/StartScreen';
 import { TouchControls } from './components/TouchControls';
 import { TouchLookPad } from './components/TouchLookPad';
 import { SurvivalEngine } from './game/engine';
+import { subscribeProfile } from './game/profile';
+import { resetHudLayout } from './game/hudLayout';
 import { soundEngine } from './game/sound';
 import { SettingsModal } from './components/SettingsModal';
 import { getSettings, initSettings, subscribeSettings, updateSettings } from './game/settings';
@@ -19,6 +21,9 @@ import type { GamePhase, HudSnapshot } from './game/types';
 
 const INITIAL_HUD: HudSnapshot = {
   phase: 'title',
+  hardcore: false,
+  playerName: '',
+  hasSave: false,
   hp: 100,
   maxHp: 100,
   hunger: 88,
@@ -86,6 +91,9 @@ export default function App() {
   const [cookOpen, setCookOpen] = useState<boolean>(false);
   const [navOpen, setNavOpen] = useState<boolean>(false);
   const [touchEnabled, setTouchEnabled] = useState<boolean>(() => detectTouchCapability());
+  const [hudEdit, setHudEdit] = useState<boolean>(false);
+  // Bumped whenever the run state outside HUD sync matters to the title menu (save presence).
+  const [menuTick, setMenuTick] = useState(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -109,6 +117,7 @@ export default function App() {
       }
     );
     engineRef.current = engine;
+    setMenuTick((t) => t + 1);
     // Deterministic verification handle, only with ?debug=1 (never in normal play)
     if (new URLSearchParams(window.location.search).get('debug') === '1') {
       (window as any).__ash = engine;
@@ -118,6 +127,8 @@ export default function App() {
     // Boot persisted settings into the audio engine and keep mute state in sync
     initSettings();
     const unsubSettings = subscribeSettings((s) => setMuted(s.muted));
+    // Survivor appearance changes rebuild the player rig + textures live
+    const unsubProfile = subscribeProfile(() => engine.applyAppearance());
 
     // Support ?autostart=1, ?fps=1, and ?spawn=x,y for direct verification
     const params = new URLSearchParams(window.location.search);
@@ -140,6 +151,7 @@ export default function App() {
 
     return () => {
       unsubSettings();
+      unsubProfile();
       engine.destroy();
       engineRef.current = null;
     };
@@ -153,6 +165,19 @@ export default function App() {
       );
     }
   }, [phase, touchEnabled]);
+
+  // Edit-HUD mode freezes the world while the HUD stays visible for dragging.
+  useEffect(() => {
+    engineRef.current?.setHudEditMode(hudEdit);
+  }, [hudEdit]);
+
+  // Leaving play always closes the HUD editor.
+  useEffect(() => {
+    if (phase !== 'playing') {
+      setHudEdit(false);
+      setMenuTick((t) => t + 1);
+    }
+  }, [phase]);
 
   const lootOpen = Boolean(hud.activeLootContainer);
 
@@ -224,13 +249,27 @@ export default function App() {
     updateSettings({ muted: !getSettings().muted });
   };
 
-  const handleStartGame = () => {
+  const handleStartGame = (hardcore: boolean) => {
     if (touchEnabled && typeof screen !== 'undefined' && screen.orientation) {
       const ori = screen.orientation as ScreenOrientation & { lock?: (mode: string) => Promise<void> };
       ori.lock?.('landscape')?.catch(() => {});
     }
-    engineRef.current?.startGame(true);
+    engineRef.current?.startGame(true, undefined, { hardcore });
   };
+
+  const handleContinue = () => {
+    if (touchEnabled && typeof screen !== 'undefined' && screen.orientation) {
+      const ori = screen.orientation as ScreenOrientation & { lock?: (mode: string) => Promise<void> };
+      ori.lock?.('landscape')?.catch(() => {});
+    }
+    engineRef.current?.continueGame();
+  };
+
+  const saveMeta =
+    phase === 'title' && engineRef.current
+      ? engineRef.current.getStoredRunMeta()
+      : null;
+  void menuTick;
 
   return (
     <main className="relative w-screen h-screen overflow-hidden bg-[#0b0d0e]">
@@ -243,13 +282,15 @@ export default function App() {
         />
       </div>
 
-      {/* Title Screen */}
+      {/* Start Flow: splash, menu, survivor setup */}
       {phase === 'title' && (
-        <TitleOverlay
+        <StartScreen
           bestScore={hud.bestScore}
           muted={muted}
           touchEnabled={touchEnabled}
+          saveMeta={saveMeta}
           onStart={handleStartGame}
+          onContinue={handleContinue}
           onToggleMute={handleToggleMute}
           onOpenSettings={() => {
             soundEngine.playUiClick();
@@ -266,6 +307,7 @@ export default function App() {
           craftOpen={craftOpen}
           cookOpen={cookOpen}
           touchEnabled={touchEnabled}
+          editing={hudEdit}
           minimapRef={minimapRef}
           onSelectWeapon={(w) => engineRef.current?.selectWeapon(w)}
           onToggleBuild={(k) => engineRef.current?.toggleBuildMode(k)}
@@ -308,6 +350,10 @@ export default function App() {
             setCookOpen(false);
             setNavOpen((prev) => !prev);
           }}
+          onEditHud={() => {
+            soundEngine.playUiClick();
+            setHudEdit(true);
+          }}
         />
       )}
 
@@ -336,6 +382,7 @@ export default function App() {
       {phase === 'playing' && touchEnabled && !craftOpen && !cookOpen && !lootOpen && (
         <TouchControls
           hud={hud}
+          editing={hudEdit}
           onMoveStick={(nx, ny) => engineRef.current?.setVirtualMove(nx, ny)}
           onAimStick={(nx, ny, active) => engineRef.current?.setVirtualAim(nx, ny, active)}
           onFireChange={(held) => engineRef.current?.setVirtualFire(held)}
@@ -351,6 +398,7 @@ export default function App() {
           onToggleFlashlight={() => engineRef.current?.triggerFlashlight()}
           onEnterExitVehicle={() => engineRef.current?.triggerEnterExitVehicle()}
           onHorn={() => engineRef.current?.triggerHorn()}
+          onAimDelta={(dx, dy) => engineRef.current?.applyVirtualLookDelta(dx, dy)}
         />
       )}
 
@@ -384,7 +432,9 @@ export default function App() {
       {phase === 'playing' && hud.activeLootContainer && (
         <LootModal
           container={hud.activeLootContainer}
+          inventory={hud.inventory}
           onTakeItem={(item) => engineRef.current?.takeLootItem(item)}
+          onDepositItem={(item) => engineRef.current?.depositLootItem(item)}
           onTakeAll={() => engineRef.current?.takeAllLoot()}
           onClose={() => engineRef.current?.closeLootContainer()}
         />
@@ -401,6 +451,11 @@ export default function App() {
           }}
           onRestart={() => engineRef.current?.startGame()}
           onTitle={() => engineRef.current?.returnToTitle()}
+          onEditHud={() => {
+            soundEngine.playUiClick();
+            engineRef.current?.resumeGame();
+            setHudEdit(true);
+          }}
           onOpenSettings={() => {
             soundEngine.playUiClick();
             setSettingsOpen(true);
@@ -423,8 +478,30 @@ export default function App() {
         <GameOverModal
           hud={hud}
           onRestart={() => engineRef.current?.startGame()}
+          onRespawn={() => engineRef.current?.respawnSafe()}
           onTitle={() => engineRef.current?.returnToTitle()}
         />
+      )}
+      {/* Edit-HUD bar */}
+      {phase === 'playing' && hudEdit && (
+        <div className="hud-edit-bar fixed top-2 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 hud-panel px-3 py-1.5 pointer-events-auto">
+          <span className="font-telemetry text-[11px] tracking-wider text-[#f0d078]">EDIT HUD · drag the outlined items</span>
+          <button
+            type="button"
+            onClick={() => resetHudLayout()}
+            className="hud-slot px-2.5 py-1 text-[11px] font-telemetry text-[#c7c2b6] hover:text-white cursor-pointer"
+          >
+            Reset
+          </button>
+          <button
+            type="button"
+            data-start="true"
+            onClick={() => setHudEdit(false)}
+            className="px-3 py-1 bg-[#d9822b] hover:bg-[#e8943c] text-[#0d1012] font-telemetry text-[11px] font-bold cursor-pointer"
+          >
+            Done
+          </button>
+        </div>
       )}
     </main>
   );

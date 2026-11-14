@@ -11,6 +11,9 @@ export function vehicleRepairCue(hpPct: number, canRepair: boolean): ActionCue {
   if (!canRepair) return cue('warning', 'Damaged hull: need more scrap to repair');
   return cue(hpPct <= 30 ? 'urgent' : 'ready', hpPct <= 30 ? 'Critical hull: repair now' : 'Damaged hull: repair available');
 }
+export function canCookAnything(h: Pick<HudSnapshot,'nearCookingHeat'|'inventory'>): boolean {
+  return h.nearCookingHeat && COOK_RECIPES.some(r => canAffordCost(h.inventory, r.cost));
+}
 export function getActionCues(h: HudSnapshot) {
   const car = h.drivingVehicle;
   const repair = car ? vehicleRepairCue(car.hp / car.maxHp * 100, car.canRepair) : cue('idle', 'No vehicle');
@@ -34,7 +37,7 @@ export function getActionCues(h: HudSnapshot) {
   const lightOn = car ? car.headlightsOn : h.flashlightOn;
   const light = !car && h.battery <= 0 ? cue('warning', 'Flashlight battery empty') : lightOn ? cue('active', 'Lights on')
     : dark ? cue('ready', 'Dark outside: switch lights on') : cue('idle', 'Lights off');
-  const cookable = h.nearCookingHeat && COOK_RECIPES.some(r => canAffordCost(h.inventory, r.cost));
+  const cookable = canCookAnything(h);
   const cook = cookable ? cue('ready', 'Heat and ingredients ready') : cue('warning', 'Need heat and recipe ingredients');
   const food = pickBestFoodConsumable(h.inventory) !== null;
   const survival = (value: number, available: boolean, name: string) => !available

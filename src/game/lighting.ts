@@ -27,6 +27,8 @@ export interface AtmosphereLightingState {
   skyHorizon: THREE.Color;
   cloudTop: THREE.Color;
   cloudBottom: THREE.Color;
+  envIntensity: number;
+  exposure: number;
 }
 
 const ISO_DAY = new THREE.Color('#1a2024');
@@ -110,6 +112,8 @@ export function createAtmosphereLightingState(): AtmosphereLightingState {
     skyHorizon: HORIZ_DAY.clone(),
     cloudTop: CLOUD_DAY_TOP.clone(),
     cloudBottom: CLOUD_DAY_BOT.clone(),
+    envIntensity: 1,
+    exposure: 1.08,
   };
 }
 
@@ -177,7 +181,7 @@ export function computeAtmosphereLighting(
   } else if (duskT > 0) {
     out.sunColor.lerp(SUN_DUSK, duskT * 0.88);
   }
-  out.sunIntensity = 1.65 * (1 - nightT * 0.78) + dawnT * 0.28 + duskT * 0.14;
+  out.sunIntensity = 1.65 * (1 - nightT * 0.9) + dawnT * 0.28 + duskT * 0.14;
 
   // Hemisphere sky/ground bounce
   out.hemiSkyColor.copy(HEMI_SKY_DAY).lerp(HEMI_SKY_NIGHT, nightT);
@@ -189,7 +193,7 @@ export function computeAtmosphereLighting(
     out.hemiSkyColor.lerp(HEMI_SKY_DUSK, duskT * 0.85);
     out.hemiGroundColor.lerp(HEMI_GND_DUSK, duskT * 0.85);
   }
-  out.hemiIntensity = 0.85 * (1 - nightT * 0.62) + dawnT * 0.14;
+  out.hemiIntensity = 0.85 * (1 - nightT * 0.82) + dawnT * 0.14;
 
   // Cool opposite rim light separates silhouettes and highlights metallic edges at dawn & twilight
   out.rimColor.copy(RIM_DAY).lerp(RIM_NIGHT, nightT);
@@ -199,6 +203,10 @@ export function computeAtmosphereLighting(
     out.rimColor.lerp(RIM_DUSK, duskT * 0.9);
   }
   out.rimIntensity = 0.22 * (1 - nightT * 0.3) + dawnT * 0.34 + duskT * 0.22;
+
+  // The studio reflection map is a constant light source: fade it so unlit terrain really goes dark at night.
+  out.envIntensity = 1 - nightT * 0.9;
+  out.exposure = 1.08 - nightT * 0.12;
 
   // Sky dome gradient & clouds
   out.skyZenith.copy(ZENITH_DAY).lerp(ZENITH_NIGHT, nightT);

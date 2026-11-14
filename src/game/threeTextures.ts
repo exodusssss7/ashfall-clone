@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { derivePlayerPalette, shadeHex } from './profile';
 import type { ItemId, TileKind } from './types';
 
 function makePixelCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
@@ -532,7 +533,7 @@ function buildActorHeadTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
 
   const skin =
     kind === 'player'
-      ? '#d6ac88'
+      ? derivePlayerPalette().skin
       : kind === 'walker'
         ? '#7d9478'
         : kind === 'runner'
@@ -542,7 +543,7 @@ function buildActorHeadTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
             : '#5f8782';
   const skinShadow =
     kind === 'player'
-      ? '#9e7454'
+      ? derivePlayerPalette().skinShadow
       : kind === 'walker'
         ? '#4e634a'
         : kind === 'runner'
@@ -564,16 +565,21 @@ function buildActorHeadTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
   drawPixelRect(sctx, 1, 11, 14, 4, skinShadow);
 
   drawPixelRect(tctx, 0, 0, 16, 16, '#14171a');
-  drawPixelRect(tctx, 1, 1, 14, 14, kind === 'player' ? '#4b5940' : skinShadow);
+  const playerCap = kind === 'player' ? derivePlayerPalette() : null;
+  const capMain = playerCap ? playerCap.hair : '';
+  const capHi = playerCap ? shadeHex(playerCap.hair, 1.35) : '';
+  const capBrim = playerCap ? shadeHex(playerCap.hair, 0.55) : '';
+  const capBack = playerCap ? shadeHex(playerCap.hair, 0.5) : '';
+  drawPixelRect(tctx, 1, 1, 14, 14, kind === 'player' ? capMain : skinShadow);
 
   if (kind === 'player') {
-    // Olive tactical cap + highlight + brim
-    drawPixelRect(tctx, 2, 2, 12, 12, '#637555');
-    drawPixelRect(tctx, 4, 4, 8, 8, '#4b5940');
+    // Tactical cap + highlight + brim (colour follows the survivor profile)
+    drawPixelRect(tctx, 2, 2, 12, 12, capHi);
+    drawPixelRect(tctx, 4, 4, 8, 8, capMain);
 
-    drawPixelRect(fctx, 1, 1, 14, 4, '#4b5940');
-    drawPixelRect(fctx, 3, 1, 10, 2, '#637555');
-    drawPixelRect(fctx, 1, 5, 14, 2, '#2d3626'); // cap brim
+    drawPixelRect(fctx, 1, 1, 14, 4, capMain);
+    drawPixelRect(fctx, 3, 1, 10, 2, capHi);
+    drawPixelRect(fctx, 1, 5, 14, 2, capBrim); // cap brim
     // Amber tactical visor goggles
     drawPixelRect(fctx, 2, 7, 12, 4, '#1e2226');
     drawPixelRect(fctx, 3, 8, 4, 2, '#e89b38');
@@ -585,17 +591,17 @@ function buildActorHeadTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
     drawPixelRect(fctx, 3, 12, 10, 1, '#5c3d27');
 
     // Side cap + strap + scarf wrap
-    drawPixelRect(sctx, 1, 1, 14, 5, '#4b5940');
-    drawPixelRect(sctx, 2, 1, 12, 2, '#637555');
+    drawPixelRect(sctx, 1, 1, 14, 5, capMain);
+    drawPixelRect(sctx, 2, 1, 12, 2, capHi);
     drawPixelRect(sctx, 1, 6, 14, 2, '#1e2226'); // goggle strap
     drawPixelRect(sctx, 1, 8, 14, 3, skinShadow);
     drawPixelRect(sctx, 1, 11, 14, 4, '#7a5438');
 
     // Back of head: cap crown, dark snapback cutout/hair, scarf wrap
-    drawPixelRect(bctx, 1, 1, 14, 6, '#4b5940');
-    drawPixelRect(bctx, 3, 2, 10, 2, '#637555');
-    drawPixelRect(bctx, 5, 5, 6, 2, '#262e21');
-    drawPixelRect(bctx, 1, 7, 14, 4, '#3a2b20');
+    drawPixelRect(bctx, 1, 1, 14, 6, capMain);
+    drawPixelRect(bctx, 3, 2, 10, 2, capHi);
+    drawPixelRect(bctx, 5, 5, 6, 2, capBack);
+    drawPixelRect(bctx, 1, 7, 14, 4, shadeHex(playerCap!.hair, 0.62));
     drawPixelRect(bctx, 1, 11, 14, 4, '#7a5438');
   } else {
     const eye =
@@ -656,7 +662,7 @@ function buildActorLimbTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
 
   const sleeveCol =
     kind === 'player'
-      ? { main: '#455b42', hi: '#607d5b', dark: '#293727' }
+      ? (() => { const p = derivePlayerPalette(); return { main: p.shirt, hi: p.shirtHi, dark: p.shirtDark }; })()
       : kind === 'walker'
         ? { main: '#7d9478', hi: '#92ab8c', dark: '#4e634a' }
         : kind === 'runner'
@@ -667,7 +673,7 @@ function buildActorLimbTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
 
   const pantsCol =
     kind === 'player'
-      ? { main: '#323b45', hi: '#45515e', dark: '#1f252b' }
+      ? (() => { const p = derivePlayerPalette(); return { main: p.pants, hi: p.pantsHi, dark: p.pantsDark }; })()
       : kind === 'walker'
         ? { main: '#2b3036', hi: '#3a4047', dark: '#181b1f' }
         : kind === 'runner'
@@ -703,7 +709,7 @@ function buildActorTorsoTextures(kind: 'player' | 'walker' | 'runner' | 'bloater
 
   const palette =
     kind === 'player'
-      ? { main: '#455b42', hi: '#607d5b', dark: '#293727' }
+      ? (() => { const p = derivePlayerPalette(); return { main: p.shirt, hi: p.shirtHi, dark: p.shirtDark }; })()
       : kind === 'walker'
         ? { main: '#614a42', hi: '#7a5d54', dark: '#3a2b26' }
         : kind === 'runner'
@@ -1336,6 +1342,28 @@ function buildWreckedCarTexture(): THREE.CanvasTexture {
 }
 
 export class ThreePixelAtlas {
+  /** Rebuild the player's actor textures in place after an appearance change.
+   * Canvas image buffers are swapped on the existing texture objects, so every
+   * material already referencing them (rig, first-person arms) updates live. */
+  public refreshPlayerActorTextures(): void {
+    const swap = (target: THREE.CanvasTexture, next: THREE.CanvasTexture) => {
+      target.image = next.image;
+      target.needsUpdate = true;
+    };
+    const h = buildActorHeadTextures('player');
+    const t = buildActorTorsoTextures('player');
+    const l = buildActorLimbTextures('player');
+    swap(this.actorHeadTex.player.front, h.front);
+    swap(this.actorHeadTex.player.back, h.back);
+    swap(this.actorHeadTex.player.side, h.side);
+    swap(this.actorHeadTex.player.top, h.top);
+    swap(this.actorTorsoTex.player.front, t.front);
+    swap(this.actorTorsoTex.player.back, t.back);
+    swap(this.actorTorsoTex.player.side, t.side);
+    swap(this.actorLimbTex.player.sleeve, l.sleeve);
+    swap(this.actorLimbTex.player.leg, l.leg);
+  }
+
   public readonly tileCanvases = new Map<string, HTMLCanvasElement>();
   public readonly wallSideTextures = new Map<string, THREE.CanvasTexture>();
   public readonly wallCapTextures = new Map<string, THREE.CanvasTexture>();

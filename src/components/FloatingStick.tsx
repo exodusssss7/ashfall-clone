@@ -23,8 +23,13 @@ export function FloatingStick({testId,label,size=108,side,accentColor,onChange}:
   };
   useEffect(()=>{
     const onHidden=()=>{if(document.hidden)reset();};
+    // Multi-touch safety net: when the last finger leaves the screen, or the OS cancels the gesture
+    // (3-finger gestures, notification shade), no stick may stay latched.
+    const onTouchEnd=(e:TouchEvent)=>{if(e.touches.length===0)reset();};
     window.addEventListener('blur',reset); document.addEventListener('visibilitychange',onHidden);
-    return ()=>{window.removeEventListener('blur',reset);document.removeEventListener('visibilitychange',onHidden);callback.current(0,0,false);};
+    window.addEventListener('touchend',onTouchEnd,true); window.addEventListener('touchcancel',reset,true);
+    return ()=>{window.removeEventListener('blur',reset);document.removeEventListener('visibilitychange',onHidden);
+      window.removeEventListener('touchend',onTouchEnd,true);window.removeEventListener('touchcancel',reset,true);callback.current(0,0,false);};
   },[]);
   const update=(x:number,y:number)=>{
     const dx=x-origin.current.x,dy=y-origin.current.y,d=Math.hypot(dx,dy),scale=d>radius?radius/d:1;
@@ -34,7 +39,11 @@ export function FloatingStick({testId,label,size=108,side,accentColor,onChange}:
   return <div ref={zone} data-testid={`${testId}-zone`} className={`floating-stick-zone floating-stick-${side}`}
     role="application" aria-label={`${label} touch zone`} style={{touchAction:'none'}}
     onPointerDown={e=>{
-      if(pointer.current!==null)return;
+      // A second finger never steals a live stick, but a stale pointer (its up event was lost) is replaced.
+      if(pointer.current!==null){
+        let live=false; try{live=e.currentTarget.hasPointerCapture(pointer.current);}catch{live=true;}
+        if(live)return; pointer.current=null;
+      }
       e.preventDefault();e.stopPropagation();pointer.current=e.pointerId;
       const rect=e.currentTarget.getBoundingClientRect(); origin.current={x:e.clientX,y:e.clientY};
       setVisual({x:e.clientX-rect.left,y:e.clientY-rect.top,kx:0,ky:0,active:true});

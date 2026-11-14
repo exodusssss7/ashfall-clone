@@ -1,3 +1,4 @@
+import { tickSprintBreathing, type SprintBreathingState } from './sprintBreathing';
 import type { FootstepSurface } from './footstepSurfaces';
 import type { ImpactMaterial, ZombieArchetype } from './types';
 import { ambienceMix } from './audioMix';
@@ -11,7 +12,7 @@ const SAMPLE_NAMES = [
   'creak1', 'swing0', 'swing1', 'swing2', 'hurt0', 'hurt1', 'hurt2',
   'drink', 'bottleOpen', 'liquid', 'repair0', 'repair1', 'splash', 'handleSmallLeather', 'beltHandle1', 'metalPot1',
   'groan1', 'groan2', 'groan3', 'groan4', 'pistol0', 'pistol1', 'shotgun0', 'shotgun1',
-  'reload', 'rack', 'day', 'night',
+  'reload', 'rack', 'day', 'night', 'breathing', 'heartbeat',
   'lmg0', 'lmg1', 'zombiedie0', 'zombiedie1', 'carhit0', 'carhit1', 'zhurt0', 'zhurt1', 'zhurt2',
 ];
 
@@ -42,6 +43,47 @@ class SurvivalSoundEngine {
   private engineFilter: BiquadFilterNode | null = null;
   private engineGain: GainNode | null = null;
 
+  private sprintBreathing: SprintBreathingState = { sprintSeconds: 0, wasSprinting: false };
+  private breathingVoice: AudioBufferSourceNode | null = null;
+
+  updateSprintBreathing(sprinting: boolean, active: boolean, dt: number): void {
+    const result = tickSprintBreathing(this.sprintBreathing, sprinting, active, dt);
+    this.sprintBreathing = result.state;
+    if (!active || sprinting) this.stopBreathing();
+    if (result.playSeconds > 0) this.playRecoveryBreathing(result.playSeconds);
+  }
+
+  private stopBreathing(): void {
+    if (this.breathingVoice) {
+      try { this.breathingVoice.stop(); } catch { /* already stopped */ }
+      this.breathingVoice = null;
+    }
+  }
+
+  private playRecoveryBreathing(seconds: number): void {
+    if (!this.ctx || !this.dryGain || this.muted || document.hidden || this.ctx.state !== 'running') return;
+    const buffer = this.buffers.get('breathing');
+    if (!buffer) return;
+    this.stopBreathing();
+    const source = this.ctx.createBufferSource();
+    source.buffer = buffer;
+    const gain = this.ctx.createGain();
+    const now = this.ctx.currentTime;
+    const duration = Math.min(seconds, buffer.duration);
+    // Asset is 11 dB below the first preview, another 3 dB below the approved quieter preview.
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(1, now + .15);
+    gain.gain.setValueAtTime(1, now + Math.max(.15, duration - .8));
+    gain.gain.linearRampToValueAtTime(0, now + duration);
+    source.connect(gain); gain.connect(this.dryGain);
+    this.breathingVoice = source;
+    source.onended = () => {
+      if (this.breathingVoice === source) this.breathingVoice = null;
+      source.disconnect(); gain.disconnect();
+    };
+    source.start(now, 0, duration);
+  }
+
   isMuted(): boolean { return this.muted; }
 
   setVolume(volume: number): void {
@@ -60,7 +102,7 @@ class SurvivalSoundEngine {
   setMuted(mute: boolean): void {
     this.muted = mute;
     this.applyMasterGain();
-    if (mute) this.updateEngineSound(false, 0, false);
+    if (mute) { this.updateEngineSound(false, 0, false); this.stopBreathing(); this.stopHeartbeat(); }
   }
 
   toggleMute(): boolean { this.setMuted(!this.muted); return this.muted; }
@@ -152,6 +194,8 @@ class SurvivalSoundEngine {
   }
 
   private stopEffects(): void {
+    this.stopHeartbeat();
+    this.updateSprintBreathing(false, false, 0);
     for (const source of this.voices) { try { source.stop(); } catch { /* already ended */ } }
     this.voices.clear();
   }
@@ -363,17 +407,38 @@ class SurvivalSoundEngine {
   private splash(volume: number, delay = 0): void {
     this.sample('splash', volume, 1, delay);
   }
-  playHeartbeat(): void {
-    if (!this.ctx || this.muted || document.hidden) return;
-    const now = this.ctx.currentTime;
-    for (const [offset, volume] of [[0, 0.13], [0.16, 0.08]]) {
-      const osc = this.ctx.createOscillator(); osc.frequency.value = 48;
-      const gain = this.ctx.createGain();
-      gain.gain.setValueAtTime(volume, now + offset);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.12);
-      osc.connect(gain); this.route(gain); osc.start(now + offset); osc.stop(now + offset + 0.13);
-      osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+  private heartbeatVoice: AudioBufferSourceNode | null = null;
+  private heartbeatCountdown = 0;
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatVoice) {
+      try { this.heartbeatVoice.stop(); } catch { /* already ended */ }
+      this.heartbeatVoice = null;
     }
+    this.heartbeatCountdown = 0;
+  }
+
+  updateHeartbeat(hp: number, active: boolean, dt: number): void {
+    if (!active || hp <= 0 || hp > 30 || this.muted || document.hidden) {
+      this.stopHeartbeat(); return;
+    }
+    this.heartbeatCountdown -= dt;
+    if (this.heartbeatCountdown > 0) return;
+    if (!this.ctx || !this.dryGain || this.ctx.state !== 'running') return;
+    const buffer = this.buffers.get('heartbeat');
+    if (!buffer) return;
+    this.heartbeatCountdown = hp <= 20 ? .85 : 1.15;
+    // Single selected recording replaces the old oscillator completely.
+    if (this.heartbeatVoice) return;
+    const source = this.ctx.createBufferSource(); source.buffer = buffer;
+    const gain = this.ctx.createGain(); gain.gain.value = .38;
+    source.connect(gain); gain.connect(this.dryGain);
+    this.heartbeatVoice = source;
+    source.onended = () => {
+      if (this.heartbeatVoice === source) this.heartbeatVoice = null;
+      source.disconnect(); gain.disconnect();
+    };
+    source.start();
   }
   playCarHorn(police: boolean): void {
     if (this.muted || !this.ctx) return;

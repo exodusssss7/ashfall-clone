@@ -19,7 +19,7 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
   onOpenSettings,
 }) => {
   return (
-    <div className="fixed inset-0 z-20 pointer-events-none flex flex-col justify-between p-4 sm:p-6 md:p-10">
+    <div className="paper-title-screen fixed inset-0 z-20 pointer-events-none flex flex-col justify-between p-4 sm:p-6 md:p-10">
       {/* Subtle atmospheric vignette scrim so title lockup reads cleanly over the live world */}
       <div
         className="absolute inset-0 pointer-events-none"
@@ -31,7 +31,7 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
 
       {/* Top right sound button */}
       <div className="relative z-10 flex justify-between items-center">
-        <span className="font-telemetry text-xs text-[#9aa09c] tracking-wide">v1.0</span>
+        <span className="font-telemetry text-xs text-[#9aa09c] tracking-wide">FIELD EDITION</span>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -59,39 +59,10 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
       </div>
 
       {/* Left-third asymmetric lockup over calm negative space */}
-      <div className="relative z-10 max-w-xl my-auto">
-        {/* Bespoke inline SVG Title Emblem */}
-        <svg
-          viewBox="0 0 420 108"
-          className="w-full max-w-[260px] md:max-w-[400px] h-auto mb-2 md:mb-3 drop-shadow-[0_4px_12px_rgba(0,0,0,0.85)]"
-          role="img"
-          aria-label="ASHFALL"
-        >
-          {/* Weathered stencil backing bar */}
-          <rect x="4" y="10" width="8" height="80" fill="#d9822b" />
-          <rect x="4" y="10" width="8" height="24" fill="#e8a849" />
-          {/* Chunky pixel-stencil letterforms */}
-          <g fill="#f0ece1" stroke="#0d1012" strokeWidth="3" style={{ paintOrder: 'stroke fill' }}>
-            {/* A */}
-            <path d="M26 88 L26 24 L36 14 L64 14 L74 24 L74 88 L58 88 L58 60 L42 60 L42 88 Z M42 46 L58 46 L58 28 L42 28 Z" />
-            {/* S */}
-            <path d="M84 88 L84 72 L114 72 L114 58 L92 58 L84 50 L84 22 L92 14 L128 14 L128 28 L100 28 L100 44 L122 44 L130 52 L130 80 L122 88 Z" />
-            {/* H */}
-            <path d="M140 88 L140 14 L156 14 L156 44 L174 44 L174 14 L190 14 L190 88 L174 88 L174 58 L156 58 L156 88 Z" />
-            {/* F */}
-            <path d="M202 88 L202 14 L248 14 L248 28 L218 28 L218 46 L242 46 L242 60 L218 60 L218 88 Z" />
-            {/* A */}
-            <path d="M256 88 L256 24 L266 14 L294 14 L304 24 L304 88 L288 88 L288 60 L272 60 L272 88 Z M272 46 L288 46 L288 28 L272 28 Z" />
-            {/* L */}
-            <path d="M314 88 L314 14 L330 14 L330 74 L356 74 L356 88 Z" />
-            {/* L */}
-            <path d="M364 88 L364 14 L380 14 L380 74 L406 74 L406 88 Z" />
-          </g>
-          {/* Ash notches */}
-          <rect x="60" y="34" width="6" height="4" fill="#0d1012" />
-          <rect x="210" y="20" width="8" height="3" fill="#0d1012" />
-          <rect x="330" y="74" width="5" height="5" fill="#d9822b" />
-        </svg>
+      <div className="journal-title-card relative z-10 max-w-xl my-auto">
+        <div className="title-book-kicker">THE SURVIVOR'S JOURNAL · VOL. 01</div>
+        <h1 className="title-book-heading" style={{ fontSize: '0.72em' }}>THE ALIVE HORDE</h1>
+        <div className="title-book-rule"><span/>A field guide to staying alive<span/></div>
 
         <p className="font-tactical text-sm md:text-lg text-[#c7c2b6] tracking-wide mb-4 md:mb-7 drop-shadow-[0_2px_6px_rgba(0,0,0,0.9)]">
           Isometric Zombie Apocalypse Survival · Scavenge, Barricade &amp; Outlast the Night

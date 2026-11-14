@@ -438,6 +438,11 @@ export interface PickupNotification {
 export interface HudSnapshot {
   phase: GamePhase;
   cameraMode: CameraMode;
+  /** Hardcore run: death permanently deletes the autosave. */
+  hardcore: boolean;
+  playerName: string;
+  /** A restorable autosave exists. */
+  hasSave: boolean;
   hp: number;
   maxHp: number;
   hunger: number;

@@ -123,3 +123,16 @@ The rejected pack-1 hurt vocals (hurt_02/04/05) are not bundled.
 High-pass 90Hz, low-pass 9.5kHz, endpoint fades, mono 32kHz/96kbps, -3dBFS
 peak. Per-archetype playback rate (bloater lowest, runner highest), throttled
 to 6/s so automatic fire cannot spam it. No creator endorsement implied.
+
+Post-sprint breathing: Joseph SARDIN, "Breathless Man" (sound 1103).
+https://bigsoundbank.com/breathless-man-s1103.html
+CC0 1.0 (public-domain equivalent). Recording after sports exercises.
+Edited: first 12 seconds, loudness-normalized for audition then reduced 11 dB.
+In-game playback uses a short fade-in/fade-out and 2.5-6 second recovery tail.
+
+APK-ONLY heartbeat: "Human single heart beat", Mixkit item 490.
+Source: https://mixkit.co/free-sound-effects/heartbeat/
+License: https://mixkit.co/license/modal/sfxFree/
+Mixkit Sound Effects Free License. Permitted in completed video games;
+redistribution with source files is prohibited. Audio excluded from source ZIP/repo.
+Edited: audition normalization, trailing silence trimmed, short tail fade.

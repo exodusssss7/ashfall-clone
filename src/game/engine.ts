@@ -11,7 +11,7 @@ import {
 } from './cookingQte';
 import { AIM_DIRECTION_DEADZONE, touchAimAttack } from './touchAim';
 import { findZombieRoute, type RoutePoint } from './navigation';
-import { getBiomeDisplayName, sampleBiomeAt } from './worldGen';
+import { applyDoorCellState, getBiomeDisplayName, sampleBiomeAt } from './worldGen';
 import {
   CHUNK_SIZE,
   clamp,
@@ -45,6 +45,17 @@ import {
   wrapAngleRad,
 } from './firstPerson';
 import { ThreeIsometricRenderer } from './threeRenderer';
+import { getProfile } from './profile';
+import {
+  SAVE_VERSION,
+  clearRunSnapshot,
+  decodeExploredChunks,
+  encodeExploredChunks,
+  getRunSaveMeta,
+  loadRunSnapshot,
+  storeRunSnapshot,
+  type RunSnapshot,
+} from './saveGame';
 import { getSettings, particleBudgetScale, pixelRatioCap, subscribeSettings } from './settings';
 import type { GraphicsQuality } from './settings';
 import { COOK_RECIPES, CRAFT_RECIPES, STRUCTURES, WEAPONS, ZOMBIE_CONFIGS } from './recipes';
@@ -114,6 +125,7 @@ import type {
   TileCell,
   Vehicle,
   WeaponId,
+  WorldLandmark,
   WorldStore,
   WorldStructure,
   Zombie,
@@ -137,6 +149,7 @@ interface PooledParticle {
 
 const PARTICLE_POOL_SIZE = 280;
 const BEST_SCORE_KEY = 'ashfall_best_score_v1';
+const AUTOSAVE_INTERVAL_SECONDS = 8;
 
 export class SurvivalEngine {
   private canvas: HTMLCanvasElement;
@@ -212,6 +225,7 @@ export class SurvivalEngine {
     | { type: 'trunk'; vehicle: Vehicle }
     | null = null;
   private activeLootContainer: ActiveLootContainer | null = null;
+  private scoredLootSources = new Set<string>();
   private pickupNotifications: PickupNotification[] = [];
   private nextPickupToastId = { nextId: 1 };
 
@@ -220,6 +234,14 @@ export class SurvivalEngine {
   private kills = 0;
   private score = 0;
   private bestScore = 0;
+  /** Hardcore runs: death permanently deletes the autosave. */
+  private hardcore = false;
+  private saveAvailable = false;
+  private autosaveTimer = AUTOSAVE_INTERVAL_SECONDS;
+  private worldSpawnX = 28.5;
+  private worldSpawnY = 28.5;
+  /** Edit-HUD mode freezes the world while keeping the HUD visible for dragging. */
+  private hudEditMode = false;
   private spawnTimer = 2.5;
   private nextEntityId = 1;
   private hitstopTimer = 0;
@@ -306,6 +328,7 @@ export class SurvivalEngine {
     } catch {
       // ignore storage errors
     }
+    this.saveAvailable = loadRunSnapshot() !== null;
 
     // Pre-allocate zero-GC particle pool & atmospheric ash flakes
     for (let i = 0; i < PARTICLE_POOL_SIZE; i++) {
@@ -415,6 +438,8 @@ export class SurvivalEngine {
     const world = generateWorld(1994);
     const effectiveSpawnX = spawnOverride ? spawnOverride.x : world.spawnX;
     const effectiveSpawnY = spawnOverride ? spawnOverride.y : world.spawnY;
+    this.worldSpawnX = world.spawnX;
+    this.worldSpawnY = world.spawnY;
     this.nextVehicleIdRef = { nextId: 100 };
     this.worldStore = world.worldStore;
     this.worldStore.pendingSpawns = [];
@@ -458,6 +483,7 @@ export class SurvivalEngine {
     this.timeMinutes = titleMode ? 17 * 60 + 45 : 8 * 60 + 30;
     this.kills = 0;
     this.score = 0;
+    this.scoredLootSources.clear();
     this.spawnTimer = 3.0;
     this.hitstopTimer = 0;
     this.trauma = 0;
@@ -533,17 +559,140 @@ export class SurvivalEngine {
     this.threeRenderer.dispose();
   }
 
-  startGame(fromGesture = true, spawnOverride?: { x: number; y: number }): void {
+  startGame(fromGesture = true, spawnOverride?: { x: number; y: number }, opts?: { hardcore?: boolean }): void {
     if (fromGesture) {
       soundEngine.unlock();
       soundEngine.playUiClick();
     }
+    // Mode is chosen explicitly at the start screen; in-run restarts keep the current mode.
+    if (opts) this.hardcore = Boolean(opts.hardcore);
     this.initWorld(false, spawnOverride);
     this.fpsPitch = -0.05;
     this.fpsCarLookOffset = 0;
     this.setPhase('playing');
     this.clearInputs();
+    this.autosaveTimer = AUTOSAVE_INTERVAL_SECONDS;
+    this.saveNow();
     this.emitHud();
+    this.render();
+  }
+
+  /** A restorable autosave exists (normal runs keep theirs; hardcore deletes it on death). */
+  hasStoredRun(): boolean {
+    return this.saveAvailable;
+  }
+
+  getStoredRunMeta(): { day: number; timeLabel: string; hardcore: boolean; playerName: string } | null {
+    return getRunSaveMeta();
+  }
+
+  isHardcore(): boolean {
+    return this.hardcore;
+  }
+
+  continueGame(fromGesture = true): boolean {
+    const save = loadRunSnapshot();
+    if (!save) return false;
+    if (fromGesture) {
+      soundEngine.unlock();
+      soundEngine.playUiClick();
+    }
+    this.initWorld(false);
+    this.applyRunSnapshot(save);
+    this.fpsPitch = -0.05;
+    this.fpsCarLookOffset = 0;
+    this.setPhase('playing');
+    this.clearInputs();
+    this.autosaveTimer = AUTOSAVE_INTERVAL_SECONDS;
+    this.showBanner(
+      save.hardcore ? 'HARDCORE RUN RESTORED · ONE LIFE' : 'RUN RESTORED · AUTOSAVE ON',
+      2.6
+    );
+    this.emitHud();
+    this.render();
+    return true;
+  }
+
+  /** Normal-mode death: wake up at the crossroads camp, gear kept, next morning. */
+  respawnSafe(fromGesture = true): void {
+    if (this.hardcore) return;
+    if (fromGesture) {
+      soundEngine.unlock();
+      soundEngine.playUiClick();
+    }
+    const p = this.player;
+    p.x = this.worldSpawnX;
+    p.y = this.worldSpawnY;
+    p.vx = 0;
+    p.vy = 0;
+    p.hp = p.maxHp;
+    p.bleeding = false;
+    p.infected = false;
+    p.hunger = Math.max(p.hunger, 55);
+    p.thirst = Math.max(p.thirst, 55);
+    p.reloadingTimer = 0;
+    p.reloadingWeapon = null;
+    p.attackCooldown = 0;
+    p.meleeSwingTimer = 0;
+    p.dodgeTimer = 0;
+    p.dodgeCooldown = 0;
+    p.hitFlash = 0;
+    p.invulnTimer = 3;
+    p.scaleX = 1;
+    p.scaleY = 1;
+    p.buildMode = null;
+    p.stepAccumulator = 0;
+    this.pendingGameOver = false;
+    this.deathDelayTimer = 0;
+    this.trauma = 0;
+    this.hitstopTimer = 0;
+    this.activeVehicleId = null;
+    this.activeLootSource = null;
+    this.activeLootContainer = null;
+    this.fishing = createIdleFishingState();
+    // Time and world carry on exactly as they were: the run continues from the same
+    // moment. Only the immediate wake-up spot is made survivable - zombies standing
+    // inside the camp are shoved just outside it, never deleted.
+    for (const z of this.zombies) {
+      if (z.state === 'dying') continue;
+      const d = dist(z.x, z.y, p.x, p.y);
+      if (d < 5) {
+        const ang = Math.atan2(z.y - p.y, z.x - p.x) || Math.random() * Math.PI * 2;
+        z.x = p.x + Math.cos(ang) * 7;
+        z.y = p.y + Math.sin(ang) * 7;
+        z.wanderTargetX = z.x;
+        z.wanderTargetY = z.y;
+        z.state = 'wander';
+      }
+    }
+    const iso = worldToIso(p.x, p.y, 0);
+    this.camX = iso.sx;
+    this.camY = iso.sy;
+    this.lastFogGX = Math.floor(p.x);
+    this.lastFogGY = Math.floor(p.y);
+    this.revealFogAround(p.x, p.y, 9);
+    this.setPhase('playing');
+    this.clearInputs();
+    this.autosaveTimer = AUTOSAVE_INTERVAL_SECONDS;
+    this.showBanner('YOU WAKE AT THE CROSSROADS CAMP · GEAR RECOVERED', 3.2);
+    this.saveNow();
+    this.emitHud();
+    this.render();
+  }
+
+  /** Edit-HUD mode: freeze the world while the HUD stays visible for drag layout editing. */
+  setHudEditMode(on: boolean): void {
+    if (this.hudEditMode === on) return;
+    this.hudEditMode = on;
+    if (on) {
+      this.clearInputs();
+      this.releasePointerLock();
+    }
+  }
+
+  /** Rebuild the player rig and textures after the survivor appearance changes. */
+  applyAppearance(): void {
+    this.threeRenderer.refreshPlayerAppearance();
     this.render();
   }
 
@@ -563,6 +712,7 @@ export class SurvivalEngine {
     this.releasePointerLock();
     soundEngine.playUiClick();
     soundEngine.updateEngineSound(false, 0, false);
+    this.saveNow();
     this.setPhase('paused');
     this.clearInputs();
     this.emitHud();
@@ -589,6 +739,139 @@ export class SurvivalEngine {
     }
     document.body.dataset.state = next;
     this.onPhaseChange(next);
+  }
+
+  /** Persist the current run. No-op outside active play or once the run is lost. */
+  private saveNow(): void {
+    if (this.phase !== 'playing' || this.pendingGameOver || this.player.hp <= 0) return;
+    this.flushPendingChunkSpawns();
+    const save: RunSnapshot = {
+      version: SAVE_VERSION,
+      savedAt: Date.now(),
+      hardcore: this.hardcore,
+      playerName: getProfile().name,
+      day: this.day,
+      timeMinutes: Math.floor(this.timeMinutes),
+      timeLabel: getDaylightInfo(this.timeMinutes).formattedTime,
+      kills: this.kills,
+      score: this.score,
+      restCooldownSeconds: this.restCooldownSeconds,
+      player: { ...this.player },
+      inventory: { ...this.inventory },
+      activeVehicleId: this.activeVehicleId,
+      nextVehicleId: this.nextVehicleIdRef.nextId,
+      nextEntityId: this.nextEntityId,
+      nextPickupToastId: this.nextPickupToastId.nextId,
+      scoredLootSources: [...this.scoredLootSources],
+      populatedChunks: [...this.worldStore.populatedChunks],
+      landmarks: [...this.worldStore.landmarks.values()].map((lm) => ({
+        ...lm,
+        hotspotPacks: [...lm.hotspotPacks],
+      })),
+      containers: this.containers,
+      structures: this.structures,
+      vehicles: this.vehicles,
+      doors: this.doors,
+      zombies: this.zombies,
+      explored: encodeExploredChunks(this.worldStore.chunks),
+    };
+    storeRunSnapshot(save);
+    this.saveAvailable = true;
+  }
+
+  /** Overlay a snapshot onto the freshly regenerated deterministic world. */
+  private applyRunSnapshot(save: RunSnapshot): void {
+    this.hardcore = Boolean(save.hardcore);
+    this.saveAvailable = true;
+    this.day = Math.max(1, Math.floor(save.day));
+    this.timeMinutes = ((save.timeMinutes % 1440) + 1440) % 1440;
+    this.kills = Math.max(0, Math.floor(save.kills));
+    this.score = Math.max(0, Math.floor(save.score));
+    this.restCooldownSeconds = Math.max(0, save.restCooldownSeconds || 0);
+
+    const p = { ...createInitialPlayer(save.player.x, save.player.y), ...save.player };
+    // Strip transient combat timers so a save can never restore a stuck state.
+    p.vx = 0;
+    p.vy = 0;
+    p.reloadingTimer = 0;
+    p.reloadingWeapon = null;
+    p.attackCooldown = 0;
+    p.meleeSwingTimer = 0;
+    p.dodgeTimer = 0;
+    p.dodgeCooldown = 0;
+    p.hitFlash = 0;
+    p.invulnTimer = 0.6;
+    p.scaleX = 1;
+    p.scaleY = 1;
+    p.buildMode = null;
+    p.stepAccumulator = 0;
+    p.hp = clamp(p.hp, 1, Math.max(1, p.maxHp || 100));
+    p.hunger = clamp(p.hunger, 0, 100);
+    p.thirst = clamp(p.thirst, 0, 100);
+    this.player = p;
+    this.inventory = { ...createInitialInventory(), ...save.inventory };
+
+    this.containers = save.containers.map((c) => ({ ...c, items: { ...c.items } }));
+    this.structures = save.structures.map((s) => ({ ...s }));
+    this.vehicles = save.vehicles.map((v) => ({
+      ...v,
+      trunkItems: v.trunkItems ? { ...v.trunkItems } : undefined,
+    }));
+    this.doors = save.doors.map((d) => ({ ...d }));
+    this.zombies = save.zombies.map((z) => ({ ...z, hitFlash: 0 }));
+
+    // Entity ids must never collide with future spawns.
+    let maxVehicleId = 99;
+    for (const v of this.vehicles) maxVehicleId = Math.max(maxVehicleId, v.id);
+    let maxEntityId = 0;
+    for (const z of this.zombies) maxEntityId = Math.max(maxEntityId, z.id);
+    this.nextVehicleIdRef = {
+      nextId: Math.max(100, Math.floor(save.nextVehicleId), maxVehicleId + 1),
+    };
+    this.worldStore.nextVehicleIdRef = this.nextVehicleIdRef;
+    this.nextEntityId = Math.max(1, Math.floor(save.nextEntityId), maxEntityId + 1);
+    this.nextPickupToastId = { nextId: Math.max(1, Math.floor(save.nextPickupToastId || 1)) };
+    this.scoredLootSources = new Set(save.scoredLootSources);
+
+    // Regenerate every previously streamed chunk's cells (spawned entities are
+    // discarded: the saved lists already carry their exact state), then re-apply
+    // the tile effects of saved doors and player-built barricades.
+    this.worldStore.populatedChunks = new Set(save.populatedChunks);
+    for (const key of save.populatedChunks) {
+      const [cx, cy] = key.split(',').map(Number);
+      if (Number.isFinite(cx) && Number.isFinite(cy) && !this.worldStore.chunks.has(key)) {
+        generateChunk(this.worldStore, cx, cy, this.nextVehicleIdRef);
+      }
+    }
+    this.worldStore.pendingSpawns = [];
+
+    this.doorByTile.clear();
+    for (const d of this.doors) {
+      this.doorByTile.set(`${d.gx}_${d.gy}`, d);
+      applyDoorCellState(this.getCell(d.gx, d.gy), d.status);
+    }
+    for (const s of this.structures) {
+      if (s.kind === 'barricade') this.getCell(s.gx, s.gy).solid = true;
+    }
+
+    const lm = new Map<string, WorldLandmark>();
+    for (const l of save.landmarks) {
+      lm.set(l.id, { ...l, hotspotPacks: Array.isArray(l.hotspotPacks) ? [...l.hotspotPacks] : [] });
+    }
+    this.worldStore.landmarks = lm;
+    decodeExploredChunks(this.worldStore.chunks, save.explored);
+
+    const activeId = save.activeVehicleId;
+    this.activeVehicleId =
+      activeId !== null && this.vehicles.some((v) => v.id === activeId) ? activeId : null;
+
+    this.zombieRoutes.clear();
+    this.spawnTimer = 3.0;
+    const iso = worldToIso(this.player.x, this.player.y, 0);
+    this.camX = iso.sx;
+    this.camY = iso.sy;
+    this.lastFogGX = Math.floor(this.player.x);
+    this.lastFogGY = Math.floor(this.player.y);
   }
 
   getPhase(): GamePhase {
@@ -832,6 +1115,13 @@ export class SurvivalEngine {
     );
   }
 
+  private awardLootScore(): void {
+    const source = this.activeLootContainer;
+    if (!source || this.scoredLootSources.has(source.sourceId) || !source.entries.length) return;
+    this.scoredLootSources.add(source.sourceId);
+    this.score += source.sourceType === 'trunk' ? 20 : 15;
+  }
+
   takeLootItem(item: ItemId): void {
     if (this.phase !== 'playing' || !this.activeLootSource) return;
     const src = this.activeLootSource;
@@ -844,6 +1134,7 @@ export class SurvivalEngine {
     );
     if (takenQty <= 0) return;
 
+    this.awardLootScore();
     this.inventory = nextInventory;
     const kind =
       src.type === 'container'
@@ -867,7 +1158,6 @@ export class SurvivalEngine {
       }
     }
 
-    this.score += 5;
     soundEngine.playLootPickup();
     this.recordItemPickups({ [item]: takenQty }, meta.title);
 
@@ -875,18 +1165,35 @@ export class SurvivalEngine {
       const fxX = src.type === 'container' ? src.container.gx + 0.5 : src.vehicle.x;
       const fxY = src.type === 'container' ? src.container.gy + 0.5 : src.vehicle.y;
       this.spawnParticles(fxX, fxY, 0.4, 6, '#d9b566', 2.0, 1.8);
-      this.activeLootSource = null;
-      this.activeLootContainer = null;
       this.actionVisual = null;
-    } else {
-      const sourceId = src.type === 'container' ? src.container.id : `trunk_${src.vehicle.id}`;
-      this.activeLootContainer = buildActiveLootContainer(
-        src.type,
-        sourceId,
-        kind,
-        nextContainerItems
-      );
     }
+    const sourceId = src.type === 'container' ? src.container.id : `trunk_${src.vehicle.id}`;
+    this.activeLootContainer = buildActiveLootContainer(src.type, sourceId, kind, nextContainerItems);
+    this.emitHud();
+  }
+
+  depositLootItem(item: ItemId): void {
+    if (this.phase !== 'playing' || !this.activeLootSource) return;
+    const src = this.activeLootSource;
+    if (src.type === 'container' && src.container.kind === 'zombie_drop') return;
+    const qty = this.inventory[item] ?? 0;
+    if (qty <= 0) return;
+    this.inventory = { ...this.inventory, [item]: 0 };
+    let kind: LootContainer['kind'];
+    let sourceId: string;
+    let items: Partial<Inventory>;
+    if (src.type === 'container') {
+      items = { ...src.container.items, [item]: (src.container.items[item] ?? 0) + qty };
+      src.container.items = items; src.container.searched = false;
+      kind = src.container.kind; sourceId = src.container.id;
+    } else {
+      items = { ...src.vehicle.trunkItems, [item]: (src.vehicle.trunkItems?.[item] ?? 0) + qty };
+      src.vehicle.trunkItems = items; src.vehicle.trunkSearched = false;
+      kind = src.vehicle.kind === 'police' ? 'car_police' : 'car_sedan';
+      sourceId = `trunk_${src.vehicle.id}`;
+    }
+    this.activeLootContainer = buildActiveLootContainer(src.type, sourceId, kind, items);
+    soundEngine.playUiClick();
     this.emitHud();
   }
 
@@ -899,6 +1206,7 @@ export class SurvivalEngine {
       currentItems,
       this.inventory
     );
+    this.awardLootScore();
     this.inventory = nextInventory;
 
     const kind =
@@ -914,11 +1222,9 @@ export class SurvivalEngine {
       src.container.searched = true;
       src.container.openAnim = Math.max(0.08, src.container.openAnim ?? 0);
       src.container.popTimer = 0.48;
-      this.score += 15;
     } else {
       src.vehicle.trunkItems = nextContainerItems;
       src.vehicle.trunkSearched = true;
-      this.score += 20;
     }
 
     const entries = extractLootEntries(taken);
@@ -938,8 +1244,8 @@ export class SurvivalEngine {
     this.addFloatingText(fxX, fxY, 1.15, label, '#f0d078');
     this.spawnParticles(fxX, fxY, 0.4, 6, '#d9b566', 2.0, 1.8);
 
-    this.activeLootSource = null;
-    this.activeLootContainer = null;
+    const sourceId = src.type === 'container' ? src.container.id : `trunk_${src.vehicle.id}`;
+    this.activeLootContainer = buildActiveLootContainer(src.type, sourceId, kind, nextContainerItems);
     this.actionVisual = null;
     this.emitHud();
   }
@@ -1488,9 +1794,14 @@ export class SurvivalEngine {
 
   private onVisibilityChange = (): void => {
     if (document.hidden) {
+      this.saveNow();
       this.releasePointerLock();
       this.clearInputs();
     }
+  };
+
+  private onPageHide = (): void => {
+    this.saveNow();
   };
 
   private bindEvents(): void {
@@ -1498,6 +1809,7 @@ export class SurvivalEngine {
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('blur', this.onBlur);
+    window.addEventListener('pagehide', this.onPageHide);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
     this.canvas.addEventListener('mousemove', this.onMouseMove);
@@ -1511,6 +1823,7 @@ export class SurvivalEngine {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('blur', this.onBlur);
+    window.removeEventListener('pagehide', this.onPageHide);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     this.canvas.removeEventListener('mousemove', this.onMouseMove);
@@ -1550,10 +1863,12 @@ export class SurvivalEngine {
   }
 
   private update(dt: number): void {
+    soundEngine.updateHeartbeat(this.player.hp, this.phase === 'playing' && !this.modalOpen && !this.pendingGameOver && !document.hidden, dt);
     soundEngine.updateAmbience(this.phase === 'playing', this.timeMinutes);
+    if (this.phase !== 'playing' || this.modalOpen || this.pendingGameOver || document.hidden) soundEngine.updateSprintBreathing(false, false, 0);
     this.elapsedClock += dt;
 
-    if (this.phase === 'paused' || this.phase === 'gameover') {
+    if (this.phase === 'paused' || this.phase === 'gameover' || this.hudEditMode) {
       return;
     }
 
@@ -1613,6 +1928,11 @@ export class SurvivalEngine {
       this.deathDelayTimer -= dt;
       if (this.deathDelayTimer <= 0) {
         this.pendingGameOver = false;
+        if (this.hardcore) {
+          // Hardcore: death permanently deletes the run.
+          clearRunSnapshot();
+          this.saveAvailable = false;
+        }
         this.setPhase('gameover');
         this.emitHud();
       }
@@ -1627,6 +1947,13 @@ export class SurvivalEngine {
     }
 
     this.restCooldownSeconds = tickRestCooldown(this.restCooldownSeconds, dt, this.sleepTransitionTimer <= 0);
+
+    // Periodic autosave; also saved on pause and when the app is backgrounded.
+    this.autosaveTimer -= dt;
+    if (this.autosaveTimer <= 0) {
+      this.autosaveTimer = AUTOSAVE_INTERVAL_SECONDS;
+      this.saveNow();
+    }
 
     // Advance Day-Night clock (1 full 24h cycle = ~9.6 real minutes)
     const prevTime = this.timeMinutes;
@@ -1652,6 +1979,7 @@ export class SurvivalEngine {
       soundEngine.updateEngineSound(false, 0, false);
       this.updatePlayer(dt);
     }
+    soundEngine.updateSprintBreathing(this.activeVehicleId === null && this.isSprinting, this.phase === 'playing' && !this.modalOpen && !this.pendingGameOver && !document.hidden && this.player.hp > 0 && this.activeVehicleId === null, dt);
     this.updateDoors(dt);
     this.updateContainers(dt);
     this.updateFishing(dt);
@@ -2054,14 +2382,6 @@ export class SurvivalEngine {
         soundEngine.playCampfireCrackle();
       }
     }
-    if (this.player.hp > 0 && (this.player.hp <= 30 || this.player.bleeding)) {
-      this.heartbeatTimer -= dt;
-      if (this.heartbeatTimer <= 0) {
-        this.heartbeatTimer = this.player.hp <= 20 ? 0.85 : 1.15;
-        soundEngine.playHeartbeat();
-      }
-    }
-
     // Auto-collect zombie loot pouches when walking directly over them
     for (const c of this.containers) {
       if (c.kind === 'zombie_drop' && !c.searched && dist(this.player.x, this.player.y, c.gx + 0.5, c.gy + 0.5) <= 0.78) {
@@ -2599,7 +2919,7 @@ export class SurvivalEngine {
   }
 
   private collectContainer(c: LootContainer): void {
-    if (c.searched) return;
+    if (c.searched && c.kind === 'zombie_drop') return;
     if (c.kind === 'zombie_drop') {
       this.animateAction('search', 'SCAVENGING', 0.6);
       c.searched = true;
@@ -2623,14 +2943,6 @@ export class SurvivalEngine {
     const entries = extractLootEntries(c.items);
     c.openAnim = Math.max(0.08, c.openAnim ?? 0);
     c.popTimer = 0.42;
-    if (entries.length === 0) {
-      c.searched = true;
-      soundEngine.playLootPickup();
-      this.addFloatingText(c.gx + 0.5, c.gy + 0.5, 1.1, 'Empty', '#9aa894');
-      this.emitHud();
-      return;
-    }
-
     this.animateAction('search', 'INSPECTING', 0.75);
     soundEngine.playUiClick();
     this.activeLootSource = { type: 'container', container: c };
@@ -2641,17 +2953,8 @@ export class SurvivalEngine {
   }
 
   private collectVehicleTrunk(v: Vehicle): void {
-    if (v.trunkSearched) return;
     const trunkItems = v.trunkItems ?? {};
     const entries = extractLootEntries(trunkItems);
-    if (entries.length === 0) {
-      v.trunkSearched = true;
-      soundEngine.playLootPickup();
-      this.addFloatingText(v.x, v.y, 1.2, 'Empty Trunk', '#9aa894');
-      this.emitHud();
-      return;
-    }
-
     this.animateAction('search', 'INSPECTING TRUNK', 0.75);
     soundEngine.playUiClick();
     const trunkKind = v.kind === 'police' ? 'car_police' : 'car_sedan';
@@ -2669,7 +2972,7 @@ export class SurvivalEngine {
 
   private findNearestLootable(): LootContainer | null {
     if (this.cameraMode === 'fps') {
-      const candidates = this.containers.filter((c) => !c.searched);
+      const candidates = this.containers.filter((c) => c.kind !== 'zombie_drop' || !c.searched);
       return pickBestDirectionalTarget(
         this.player.x,
         this.player.y,
@@ -2682,7 +2985,7 @@ export class SurvivalEngine {
     let best: LootContainer | null = null;
     let bestD = 1.95;
     for (const c of this.containers) {
-      if (c.searched) continue;
+      if (c.searched && c.kind === 'zombie_drop') continue;
       const d = dist(this.player.x, this.player.y, c.gx + 0.5, c.gy + 0.5);
       if (d < bestD) {
         bestD = d;
@@ -2694,7 +2997,7 @@ export class SurvivalEngine {
 
   private findNearestVehicleTrunk(): Vehicle | null {
     if (this.cameraMode === 'fps') {
-      const candidates = this.vehicles.filter((v) => !v.trunkSearched);
+      const candidates = this.vehicles;
       return pickBestDirectionalTarget(
         this.player.x,
         this.player.y,
@@ -2707,7 +3010,6 @@ export class SurvivalEngine {
     let best: Vehicle | null = null;
     let bestD = 2.3;
     for (const v of this.vehicles) {
-      if (v.trunkSearched) continue;
       const d = dist(this.player.x, this.player.y, v.x, v.y);
       if (d < bestD) {
         bestD = d;
@@ -4278,6 +4580,9 @@ export class SurvivalEngine {
 
     this.onHudUpdate({
       phase: this.phase,
+      hardcore: this.hardcore,
+      playerName: getProfile().name,
+      hasSave: this.saveAvailable,
       cameraMode: this.cameraMode,
       hp: Math.round(this.player.hp),
       maxHp: this.player.maxHp,
