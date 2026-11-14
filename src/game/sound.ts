@@ -12,6 +12,7 @@ const SAMPLE_NAMES = [
   'drink', 'bottleOpen', 'liquid', 'repair0', 'repair1', 'splash', 'handleSmallLeather', 'beltHandle1', 'metalPot1',
   'groan1', 'groan2', 'groan3', 'groan4', 'pistol0', 'pistol1', 'shotgun0', 'shotgun1',
   'reload', 'rack', 'day', 'night',
+  'lmg0', 'lmg1', 'zombiedie0', 'zombiedie1', 'carhit0', 'carhit1', 'zhurt0', 'zhurt1', 'zhurt2',
 ];
 
 /** Recorded foley/weapon banks, with quiet continuous day/night soundscapes.
@@ -23,6 +24,8 @@ class SurvivalSoundEngine {
   private masterGain: GainNode | null = null;
   private dryGain: GainNode | null = null;
   private muted = false;
+  private volume = 1;
+  private lastZombieHurtTime = -10;
   private buffers = new Map<string, AudioBuffer>();
   private loading: Promise<void> | null = null;
   private ambience = new Map<string, { source: AudioBufferSourceNode; gain: GainNode }>();
@@ -41,11 +44,22 @@ class SurvivalSoundEngine {
 
   isMuted(): boolean { return this.muted; }
 
+  setVolume(volume: number): void {
+    this.volume = Math.min(1, Math.max(0, volume));
+    this.applyMasterGain();
+  }
+
+  getVolume(): number { return this.volume; }
+
+  private applyMasterGain(): void {
+    if (this.masterGain && this.ctx) {
+      this.masterGain.gain.setTargetAtTime(this.muted ? 0 : 0.72 * this.volume, this.ctx.currentTime, 0.025);
+    }
+  }
+
   setMuted(mute: boolean): void {
     this.muted = mute;
-    if (this.masterGain && this.ctx) {
-      this.masterGain.gain.setTargetAtTime(mute ? 0 : 0.72, this.ctx.currentTime, 0.025);
-    }
+    this.applyMasterGain();
     if (mute) this.updateEngineSound(false, 0, false);
   }
 
@@ -64,7 +78,7 @@ class SurvivalSoundEngine {
       compressor.attack.value = 0.003;
       compressor.release.value = 0.18;
       this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.value = this.muted ? 0 : 0.72;
+      this.masterGain.gain.value = this.muted ? 0 : 0.72 * this.volume;
       this.dryGain = this.ctx.createGain();
       this.dryGain.connect(compressor);
       compressor.connect(this.masterGain);
@@ -193,13 +207,39 @@ class SurvivalSoundEngine {
   }
 
   playFootstep(surface: FootstepSurface, sprinting: boolean): void {
+    if (surface === 'water') {
+      this.sample('splash', sprinting ? 0.2 : 0.15, (sprinting ? 1.2 : 1.05) + Math.random() * 0.12);
+      return;
+    }
     const level = { concrete: 0.17, grass: 0.17, dirt: 0.17, planks: 0.19, carpet: 0.12, tile: 0.16 }[surface];
     this.sample(this.choose(surface, 4), level * (sprinting ? 1.28 : 1), sprinting ? 1.07 : 1);
   }
   playMeleeSwing(): void { this.sample(this.choose('swing', 3), 0.42, 0.9); }
   playDodge(): void { this.sample('cloth2', 0.22, 0.85); this.sample('cloth3', 0.14, 1.05, 0.06); }
   playMeleeHit(heavy = false): void { this.sample(this.choose('punch', 2), heavy ? 0.54 : 0.4, heavy ? 0.88 : 1); }
-  playGunshot(kind: 'pistol' | 'shotgun'): void { this.sample(this.choose(kind, 2), kind === 'pistol' ? 0.75 : 0.85); }
+  playGunshot(kind: 'pistol' | 'shotgun' | 'lmg'): void {
+    // LMG fires ~11 rounds/s, so each shot sits lower than the handguns to keep the mix clean.
+    const level = kind === 'pistol' ? 0.75 : kind === 'shotgun' ? 0.85 : 0.5;
+    this.sample(this.choose(kind, 2), level, kind === 'lmg' ? 1.02 : 1);
+  }
+  /** Wet impact when a zombie goes down for good. A low groan tail sells the collapse. */
+  playZombieDeath(archetype: ZombieArchetype): void {
+    this.sample(this.choose('zombiedie', 2), 0.5);
+    const rates = { walker: 0.62, runner: 0.78, spitter: 0.7, bloater: 0.5 };
+    this.sample(`groan${1 + Math.floor(Math.random() * 4)}`, 0.15, rates[archetype], 0.05);
+  }
+  /** Short pained reaction on every non-lethal hit, throttled so automatic fire cannot spam it. */
+  playZombieHurt(archetype: ZombieArchetype): void {
+    if (!this.ctx || this.ctx.currentTime - this.lastZombieHurtTime < 0.16) return;
+    this.lastZombieHurtTime = this.ctx.currentTime;
+    const rates = { walker: 0.95, runner: 1.14, spitter: 1.05, bloater: 0.74 };
+    this.sample(this.choose('zhurt', 3), 0.3, rates[archetype]);
+  }
+  /** Fleshy slam when the car runs through a zombie, with a hint of bodywork under it. */
+  playCarZombieImpact(): void {
+    this.sample(this.choose('carhit', 2), 0.6);
+    this.sample(this.choose('metal', 2), 0.2, 0.78, 0.02);
+  }
   playBulletImpact(kind: ImpactMaterial | 'flesh' | 'headshot'): void {
     if (kind === 'headshot') {
       this.sample(this.choose('punch', 2), 0.52, 0.86);

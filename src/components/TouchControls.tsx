@@ -100,7 +100,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
     if (hud.buildMode) return <Hammer className={className} />;
     if (hud.equippedWeapon === 'crowbar' && !isFishing) return <Sword className={className} />;
     if (hud.equippedWeapon === 'molotov' && !isFishing) return <Flame className={className} />;
-    if ((hud.equippedWeapon === 'pistol' || hud.equippedWeapon === 'shotgun') && !isFishing) {
+    if ((hud.equippedWeapon === 'pistol' || hud.equippedWeapon === 'shotgun' || hud.equippedWeapon === 'lmg') && !isFishing) {
       return <Crosshair className={className} />;
     }
     return <Flame className={className} />;

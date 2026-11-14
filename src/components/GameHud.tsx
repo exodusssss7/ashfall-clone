@@ -85,7 +85,7 @@ export const GameHud: React.FC<GameHudProps> = ({
   const waterPct = Math.max(0, Math.min(100, hud.thirst));
   const bestFood = pickBestFoodConsumable(hud.inventory) ?? 'food';
 
-  const weaponOrder: WeaponId[] = ['crowbar', 'pistol', 'shotgun', 'molotov'];
+  const weaponOrder: WeaponId[] = ['crowbar', 'pistol', 'shotgun', 'lmg', 'molotov'];
 
   return (
     <div data-touch={touchEnabled} data-camera={hud.cameraMode} className="game-hud fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-3 md:p-4">
@@ -705,7 +705,9 @@ export const GameHud: React.FC<GameHudProps> = ({
                       ? 'Pistol'
                       : wId === 'shotgun'
                         ? 'Shotgun'
-                        : spec.name;
+                        : wId === 'lmg'
+                          ? 'LMG'
+                          : spec.name;
 
                   return (
                     <button
@@ -753,7 +755,7 @@ export const GameHud: React.FC<GameHudProps> = ({
                   } flex flex-col items-start transition-colors cursor-pointer`}
                 >
                   <div className="w-full flex items-center justify-between gap-1.5 text-[10px] font-telemetry text-[#8a918d]">
-                    <span>[5]</span>
+                    <span>[H]</span>
                     <span className="text-[#c7c2b6]">x{hud.inventory.bandage}</span>
                   </div>
                   <ItemIcon kind="bandage" className="equipment-icon" />

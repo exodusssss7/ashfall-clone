@@ -202,3 +202,13 @@ test('FPS headshot hitbox distinguishes head shots from chest shots and respects
   const occluded = traceSegmentZombieHit(3.0, 5.0, 0.88, 6.0, 5.0, 0.88, [z], true, 0.35);
   assert.equal(occluded, null);
 });
+
+test('LMG spec: full-auto, unlimited ammo, weakest per-hit firearm', async () => {
+  const { WEAPONS } = await import('./recipes');
+  const lmg = WEAPONS.lmg;
+  assert.equal(lmg.ammoItem, undefined, 'LMG has no ammo item (unlimited ammo)');
+  assert.equal(lmg.reloadTime, 0, 'LMG never reloads');
+  assert.ok(lmg.pellets === 1 && lmg.cooldown <= 0.1, 'LMG is full-auto single-bullet');
+  assert.ok(lmg.damage < WEAPONS.pistol.damage, 'LMG per-hit damage below pistol');
+  assert.ok(lmg.damage < WEAPONS.shotgun.damage, 'LMG per-hit damage below a single shotgun pellet');
+});

@@ -75,7 +75,7 @@ export type LandmarkKind =
 
 export type StructureKind = 'barricade' | 'spike_trap' | 'campfire';
 
-export type WeaponId = 'crowbar' | 'pistol' | 'shotgun' | 'molotov';
+export type WeaponId = 'crowbar' | 'pistol' | 'shotgun' | 'lmg' | 'molotov';
 
 export type ItemId =
   | 'wood'

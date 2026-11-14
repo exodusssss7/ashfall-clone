@@ -1091,6 +1091,25 @@ export class ThreeModelFactory {
       g.add(this.box(0.24, 0.086, 0.074, stock, -0.02, 0.006, 0));
       g.add(this.box(0.19, 0.056, 0.076, stock, 0.3, 0.018, 0));
       g.add(this.box(0.022, 0.022, 0.022, bead, 0.56, 0.096, 0, false, false));
+    } else if (weapon === 'lmg') {
+      const barrel = this.getMat('#4b545c', { roughness: 0.3, metalness: 0.88 });
+      const receiver = this.getMat('#2e343a', { roughness: 0.4, metalness: 0.8 });
+      const furniture = this.getMat('#3a4132', { roughness: 0.7, metalness: 0.2 });
+      const ammoBox = this.getMat('#55603c', { roughness: 0.62, metalness: 0.35 });
+      const sightDot = this.getMat('#f5d78e', { emissive: '#e8aa35', emissiveIntensity: 0.6, roughness: 0.3 });
+      // Long barrel with perforated shroud and muzzle brake
+      g.add(this.box(0.62, 0.046, 0.05, barrel, 0.34, 0.07, 0));
+      g.add(this.box(0.3, 0.056, 0.06, receiver, 0.22, 0.07, 0));
+      g.add(this.box(0.05, 0.05, 0.062, barrel, 0.66, 0.07, 0));
+      // Receiver, top cover and belt box slung underneath
+      g.add(this.box(0.3, 0.08, 0.08, receiver, 0.08, 0.045, 0));
+      g.add(this.box(0.16, 0.1, 0.07, ammoBox, 0.08, -0.03, 0));
+      // Buttstock, pistol grip and carry handle
+      g.add(this.box(0.2, 0.075, 0.07, furniture, -0.12, 0.03, 0));
+      g.add(this.box(0.05, 0.09, 0.05, furniture, 0.02, -0.045, 0));
+      g.add(this.box(0.14, 0.02, 0.03, barrel, 0.3, 0.115, 0));
+      // Front sight post
+      g.add(this.box(0.016, 0.03, 0.016, sightDot, 0.62, 0.1, 0, false, false));
     } else {
       const glass = this.getMat(0xffffff, { map: wTex.molotovGlass, roughness: 0.24, metalness: 0.12 });
       const cloth = this.getMat('#e6dcc8', { roughness: 0.9 });
@@ -1343,6 +1362,7 @@ export class ThreeModelFactory {
         crowbar: this.createWeaponGroup('crowbar'),
         pistol: this.createWeaponGroup('pistol'),
         shotgun: this.createWeaponGroup('shotgun'),
+        lmg: this.createWeaponGroup('lmg'),
         molotov: this.createWeaponGroup('molotov'),
       };
       for (const key of Object.keys(weapons) as WeaponId[]) {
@@ -1413,11 +1433,13 @@ export class ThreeModelFactory {
       crowbar: this.createWeaponGroup('crowbar'),
       pistol: this.createWeaponGroup('pistol'),
       shotgun: this.createWeaponGroup('shotgun'),
+      lmg: this.createWeaponGroup('lmg'),
       molotov: this.createWeaponGroup('molotov'),
     };
     weapons.crowbar.rotation.z = 0.2;
     weapons.pistol.position.set(0.02, 0.005, 0);
     weapons.shotgun.position.set(-0.02, 0.005, 0);
+    weapons.lmg.position.set(-0.04, 0.005, 0);
     weapons.molotov.position.set(0.02, -0.02, 0);
     for (const key of Object.keys(weapons) as WeaponId[]) {
       weapons[key].visible = key === 'crowbar';

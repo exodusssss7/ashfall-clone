@@ -1,5 +1,5 @@
 import React from 'react';
-import { Volume2, VolumeX } from 'lucide-react';
+import { Settings, Volume2, VolumeX } from 'lucide-react';
 
 interface TitleOverlayProps {
   bestScore: number;
@@ -7,6 +7,7 @@ interface TitleOverlayProps {
   touchEnabled: boolean;
   onStart: () => void;
   onToggleMute: () => void;
+  onOpenSettings: () => void;
 }
 
 export const TitleOverlay: React.FC<TitleOverlayProps> = ({
@@ -15,6 +16,7 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
   touchEnabled,
   onStart,
   onToggleMute,
+  onOpenSettings,
 }) => {
   return (
     <div className="fixed inset-0 z-20 pointer-events-none flex flex-col justify-between p-4 sm:p-6 md:p-10">
@@ -29,18 +31,31 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
 
       {/* Top right sound button */}
       <div className="relative z-10 flex justify-between items-center">
-        <span className="font-telemetry text-xs text-[#9aa09c] tracking-wide">v0.8</span>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.currentTarget.blur();
-            onToggleMute();
-          }}
-          aria-label={muted ? 'Unmute audio' : 'Mute audio'}
-          className="pointer-events-auto hud-slot w-11 h-11 flex items-center justify-center text-[#c7c2b6] hover:text-white hover:border-[#d9822b] transition-colors cursor-pointer"
-        >
-          {muted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
-        </button>
+        <span className="font-telemetry text-xs text-[#9aa09c] tracking-wide">v1.0</span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.currentTarget.blur();
+              onOpenSettings();
+            }}
+            aria-label="Open settings"
+            className="pointer-events-auto hud-slot w-11 h-11 flex items-center justify-center text-[#c7c2b6] hover:text-white hover:border-[#d9822b] transition-colors cursor-pointer"
+          >
+            <Settings className="w-5 h-5" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.currentTarget.blur();
+              onToggleMute();
+            }}
+            aria-label={muted ? 'Unmute audio' : 'Mute audio'}
+            className="pointer-events-auto hud-slot w-11 h-11 flex items-center justify-center text-[#c7c2b6] hover:text-white hover:border-[#d9822b] transition-colors cursor-pointer"
+          >
+            {muted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+          </button>
+        </div>
       </div>
 
       {/* Left-third asymmetric lockup over calm negative space */}

@@ -21,6 +21,7 @@ import {
 } from './threeModels';
 import { ThreePixelAtlas } from './threeTextures';
 import { getBuildTargetTile, getDaylightInfo } from './survivalLogic';
+import { getSettings } from './settings';
 import { STRUCTURES } from './recipes';
 import type {
   BloodDecal,
@@ -158,6 +159,7 @@ const MAX_DYNAMIC_POINT_LIGHTS = 6;
 
 export class ThreeIsometricRenderer {
   public readonly isSoftwareGl: boolean;
+  private qualityPixelRatio = 1;
   private canvas: HTMLCanvasElement;
   private overlayCanvas: HTMLCanvasElement;
   private overlayCtx: CanvasRenderingContext2D;
@@ -193,6 +195,9 @@ export class ThreeIsometricRenderer {
   private vehicleRigs = new Map<number, VehicleRig3D>();
   private zombieRigs = new Map<number, { rig: ActorRig3D; archetype: string; ring: THREE.Mesh }>();
   private playerRig: ActorRig3D;
+  private playerWadeDepth = 0;
+  private playerRigHeight = 1.8;
+  private playerWadePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private fpsViewmodelRig: FirstPersonViewmodelRig;
 
   private projectileMeshes = new Map<number, THREE.Group>();
@@ -255,9 +260,11 @@ export class ThreeIsometricRenderer {
       powerPreference: 'high-performance',
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.localClippingEnabled = true;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
     this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2));
+    this.qualityPixelRatio = this.renderer.getPixelRatio();
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -348,6 +355,14 @@ export class ThreeIsometricRenderer {
     // Player 3D rig & First-Person 3D pixel-art viewmodel rig
     this.playerRig = this.factory.createActorRig('player');
     this.scene.add(this.playerRig.root);
+    // Own the player's materials so the wading clip never affects zombies; measure height once.
+    this.playerRig.root.traverse((o: THREE.Object3D) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || !m.material) return;
+      m.material = Array.isArray(m.material) ? m.material.map((x) => x.clone()) : m.material.clone();
+    });
+    const rigBox = new THREE.Box3().setFromObject(this.playerRig.root);
+    if (Number.isFinite(rigBox.max.y - rigBox.min.y) && rigBox.max.y - rigBox.min.y > 0.2) this.playerRigHeight = rigBox.max.y - rigBox.min.y;
     this.fpsViewmodelRig = this.factory.createFirstPersonViewmodelRig();
     this.fpsViewmodelRig.root.visible = false;
     this.fpsCamera.add(this.fpsViewmodelRig.root);
@@ -504,6 +519,16 @@ export class ThreeIsometricRenderer {
       }
     };
     window.setTimeout(poll, 5);
+  }
+
+  /** Apply the Settings graphics-quality pixel ratio (no-op under software GL, which stays at 1). */
+  public setQualityPixelRatio(cap: number): void {
+    if (this.isSoftwareGl) return;
+    const next = Math.max(0.6, cap);
+    if (Math.abs(next - this.qualityPixelRatio) < 0.001) return;
+    this.qualityPixelRatio = next;
+    this.renderer.setPixelRatio(next);
+    if (this.viewW > 0) this.resize(this.viewW, this.viewH);
   }
 
   public resize(w: number, h: number): void {
@@ -746,8 +771,8 @@ export class ThreeIsometricRenderer {
   public render(state: RenderFrameState): void {
     const isFps = state.cameraMode === 'fps' && state.phase !== 'title';
 
-    // Trauma camera shake
-    const shakeMag = state.trauma * state.trauma * (isFps ? 0.11 : 0.28);
+    // Trauma camera shake (can be switched off in Settings)
+    const shakeMag = getSettings().screenShake ? state.trauma * state.trauma * (isFps ? 0.11 : 0.28) : 0;
     const shakeX = shakeMag > 0.004 ? (Math.random() * 2 - 1) * shakeMag : 0;
     const shakeY = shakeMag > 0.004 ? (Math.random() * 2 - 1) * shakeMag * 0.7 : 0;
     const shakeZ = shakeMag > 0.004 ? (Math.random() * 2 - 1) * shakeMag : 0;
@@ -1403,7 +1428,8 @@ export class ThreeIsometricRenderer {
       }
       this.fpsViewmodelRig.fishingRod.visible = state.fishing.phase !== 'idle';
       const showMuzzle =
-        state.muzzleFlashTimer > 0 && (p.equippedWeapon === 'pistol' || p.equippedWeapon === 'shotgun');
+        state.muzzleFlashTimer > 0 &&
+        (p.equippedWeapon === 'pistol' || p.equippedWeapon === 'shotgun' || p.equippedWeapon === 'lmg');
       this.fpsViewmodelRig.muzzleFlash.visible = showMuzzle;
       if (showMuzzle) {
         this.fpsViewmodelRig.muzzleFlash.position.x = p.equippedWeapon === 'pistol' ? 0.32 : 0.58;
@@ -1465,6 +1491,21 @@ export class ThreeIsometricRenderer {
     this.playerRig.root.rotation.y = -p.facingAngle;
     this.playerRig.root.scale.set(p.scaleX, p.scaleY, p.scaleX);
 
+    // Wading: while standing in lake/river water, about 55% of the body sits below the surface.
+    const inWater = state.getCell(Math.floor(p.x), Math.floor(p.y)).tile === 'water';
+    this.playerWadeDepth += ((inWater ? 0.55 : 0) - this.playerWadeDepth) * 0.25;
+    if (Math.abs(this.playerWadeDepth - (inWater ? 0.55 : 0)) < 0.004) this.playerWadeDepth = inWater ? 0.55 : 0;
+    const wadePlanes = this.playerWadeDepth > 0 ? [this.playerWadePlane] : [];
+    if (wadePlanes.length) this.playerWadePlane.constant = -this.playerWadeDepth * this.playerRigHeight * p.scaleY;
+    this.playerRig.root.traverse((o: THREE.Object3D) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || !m.material) return;
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      for (const mat of mats) {
+        if (mat.clippingPlanes?.length !== wadePlanes.length) { mat.clippingPlanes = wadePlanes; mat.needsUpdate = true; }
+      }
+    });
+
     if (this.playerRig.weapons) {
       for (const wKey of Object.keys(this.playerRig.weapons) as Array<keyof typeof this.playerRig.weapons>) {
         this.playerRig.weapons[wKey].visible =
@@ -1476,11 +1517,12 @@ export class ThreeIsometricRenderer {
     }
     if (this.playerRig.muzzleFlash) {
       this.playerRig.muzzleFlash.visible =
-        state.muzzleFlashTimer > 0 && (p.equippedWeapon === 'pistol' || p.equippedWeapon === 'shotgun');
+        state.muzzleFlashTimer > 0 &&
+        (p.equippedWeapon === 'pistol' || p.equippedWeapon === 'shotgun' || p.equippedWeapon === 'lmg');
     }
 
     // Articulated pose
-    const isGun = p.equippedWeapon === 'pistol' || p.equippedWeapon === 'shotgun';
+    const isGun = p.equippedWeapon === 'pistol' || p.equippedWeapon === 'shotgun' || p.equippedWeapon === 'lmg';
     if (animState === 'dodge') {
       const rollProg = 1 - clamp(p.dodgeTimer / 0.22, 0, 1);
       this.playerRig.bodyPivot.rotation.z = -rollProg * Math.PI * 2;

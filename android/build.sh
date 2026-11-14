@@ -20,5 +20,5 @@ javac -source 8 -target 8 -classpath "$PLAT" -d android/.build/classes android/s
 "$BT/d8" --lib "$PLAT" --min-api 26 --output android/.build/dex android/.build/classes/com/exodus/ashfall/*.class
 "$BT/aapt" package -f -M android/AndroidManifest.xml -S android/res -A android/assets -I "$PLAT" -F android/.build/unsigned.apk
 (cd android/.build/dex && zip -j -u ../unsigned.apk classes.dex)
-"$BT/zipalign" -f 4 android/.build/unsigned.apk android/.build/ASHFALL_v0.8_unsigned.apk
-printf '%s\n' 'Unsigned aligned APK: android/.build/ASHFALL_v0.8_unsigned.apk'
+"$BT/zipalign" -f 4 android/.build/unsigned.apk android/.build/ASHFALL_v1.0_unsigned.apk
+printf '%s\n' 'Unsigned aligned APK: android/.build/ASHFALL_v1.0_unsigned.apk'

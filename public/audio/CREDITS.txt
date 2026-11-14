@@ -96,3 +96,27 @@ High-pass 90Hz, low-pass 8.5kHz, trimmed/faded, mono 32kHz/96kbps,
 -3dBFS sample peak. Runtime gain 0.16 (running 1.28x). No endorsement implied.
 Replaces the rejected Fantozzi Stone tile interpretation; those stone samples
 are not bundled. The unselected Nox_Sound option A is not bundled either.
+
+v1.0 additions (all CC0 1.0):
+
+LMG fire: Tabasco, Gunshot Sounds (2010)
+https://opengameart.org/content/gunshot-sounds
+SKS rifle shots cut from sks.wav (shots at 0.3s and 7.7s) -> lmg0/1.mp3.
+Real recorded semi-auto rifle crack; high-pass 75Hz, low-pass 10kHz, trimmed,
+short fades, mono 32kHz/96kbps MP3, -3dBFS peak. Runtime gain 0.5 with small
+pitch variation; full-auto cadence comes from the game's fire rate.
+
+Zombie kill and car-vs-zombie impacts: Independent.nu (via qubodup),
+8 wet squish, slurp impacts (2009)
+https://opengameart.org/content/8-wet-squish-slurp-impacts
+impactsplat03 -> zombiedie0, impactsplat07 -> zombiedie1,
+impactsplat01 -> carhit0, impactsplat04 -> carhit1.
+High-pass 60-70Hz, low-pass 10kHz, trimmed, endpoint fades, mono 32kHz/96kbps,
+-3dBFS peak. The car impact layers a quiet existing metal hit on top.
+
+Zombie hurt reactions: rubberduck, 80 CC0 creature SFX
+https://opengameart.org/content/80-cc0-creature-sfx
+hurt_02, hurt_04, hurt_05 -> zhurt0/1/2.mp3.
+High-pass 90Hz, low-pass 9.5kHz, endpoint fades, mono 32kHz/96kbps, -3dBFS
+peak. Per-archetype playback rate (bloater lowest, runner highest), throttled
+to 6/s so automatic fire cannot spam it. No creator endorsement implied.

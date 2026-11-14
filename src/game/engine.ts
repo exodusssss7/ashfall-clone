@@ -45,6 +45,8 @@ import {
   wrapAngleRad,
 } from './firstPerson';
 import { ThreeIsometricRenderer } from './threeRenderer';
+import { getSettings, particleBudgetScale, pixelRatioCap, subscribeSettings } from './settings';
+import type { GraphicsQuality } from './settings';
 import { COOK_RECIPES, CRAFT_RECIPES, STRUCTURES, WEAPONS, ZOMBIE_CONFIGS } from './recipes';
 import { soundEngine } from './sound';
 import {
@@ -274,6 +276,8 @@ export class SurvivalEngine {
   ) {
     this.canvas = canvas;
     this.threeRenderer = new ThreeIsometricRenderer(canvas);
+    this.applyGraphicsQuality(getSettings().graphicsQuality);
+    subscribeSettings((s) => this.applyGraphicsQuality(s.graphicsQuality));
     this.onHudUpdate = onHudUpdate;
     this.onPhaseChange = onPhaseChange;
     this.onRequestOpenCook = onRequestOpenCook;
@@ -381,6 +385,10 @@ export class SurvivalEngine {
       }
     }
     this.flushPendingChunkSpawns();
+  }
+
+  private applyGraphicsQuality(q: GraphicsQuality): void {
+    this.threeRenderer?.setQualityPixelRatio(pixelRatioCap(typeof window !== 'undefined' ? window.devicePixelRatio : 1));
   }
 
   private initWorld(titleMode: boolean, spawnOverride?: { x: number; y: number }): void {
@@ -850,16 +858,17 @@ export class SurvivalEngine {
     soundEngine.unlock();
     this.usingVirtualAim = true;
     if (this.phase !== 'playing' || this.modalOpen || this.cameraMode !== 'fps') return;
+    const sens = getSettings().touchSensitivity;
     if (this.activeVehicleId !== null) {
       const car = this.getActiveVehicle();
-      const res = applyFirstPersonTouchLookDelta(this.fpsCarLookOffset, this.fpsPitch, dx, dy);
+      const res = applyFirstPersonTouchLookDelta(this.fpsCarLookOffset, this.fpsPitch, dx * sens, dy * sens);
       this.fpsCarLookOffset = clamp(res.yaw, -Math.PI * 0.65, Math.PI * 0.65);
       this.fpsPitch = clamp(res.pitch, -0.22, 0.28);
       if (car) {
         this.player.facingAngle = wrapAngleRad(car.angle + this.fpsCarLookOffset);
       }
     } else {
-      const res = applyFirstPersonTouchLookDelta(this.player.facingAngle, this.fpsPitch, dx, dy);
+      const res = applyFirstPersonTouchLookDelta(this.player.facingAngle, this.fpsPitch, dx * sens, dy * sens);
       this.player.facingAngle = res.yaw;
       this.fpsPitch = res.pitch;
     }
@@ -1202,7 +1211,9 @@ export class SurvivalEngine {
       this.selectWeapon('shotgun');
     } else if (code === 'Digit4' && this.activeVehicleId === null) {
       this.selectWeapon('molotov');
-    } else if (code === 'Digit5' || code === 'KeyH') {
+    } else if (code === 'Digit5' && this.activeVehicleId === null) {
+      this.selectWeapon('lmg');
+    } else if (code === 'KeyH') {
       this.useConsumable('bandage');
     } else if (code === 'Digit6') {
       this.useConsumable(pickBestFoodConsumable(this.inventory) ?? 'food');
@@ -1225,16 +1236,17 @@ export class SurvivalEngine {
   };
 
   private applyFpsMouseLookDelta(dx: number, dy: number): void {
+    const sens = getSettings().touchSensitivity;
     if (this.activeVehicleId !== null) {
       const car = this.getActiveVehicle();
-      const res = applyFirstPersonLookDelta(this.fpsCarLookOffset, this.fpsPitch, dx, dy);
+      const res = applyFirstPersonLookDelta(this.fpsCarLookOffset, this.fpsPitch, dx * sens, dy * sens);
       this.fpsCarLookOffset = clamp(res.yaw, -Math.PI * 0.65, Math.PI * 0.65);
       this.fpsPitch = res.pitch;
       if (car) {
         this.player.facingAngle = wrapAngleRad(car.angle + this.fpsCarLookOffset);
       }
     } else {
-      const res = applyFirstPersonLookDelta(this.player.facingAngle, this.fpsPitch, dx, dy);
+      const res = applyFirstPersonLookDelta(this.player.facingAngle, this.fpsPitch, dx * sens, dy * sens);
       this.player.facingAngle = res.yaw;
       this.fpsPitch = res.pitch;
     }
@@ -1662,7 +1674,7 @@ export class SurvivalEngine {
           next.speed *= 0.88;
           next.hp = Math.max(0, next.hp - (z.archetype === 'bloater' ? 7 : 2));
           next.hitFlash = 0.08;
-          soundEngine.playCarImpact();
+          soundEngine.playCarZombieImpact();
           this.trauma = Math.min(1, this.trauma + (ram.heavy ? 0.35 : 0.18));
         }
       }
@@ -1912,7 +1924,7 @@ export class SurvivalEngine {
       this.virtualFireJustPressed ||
       this.virtualFireHeld ||
       aimStickAttack ||
-      (this.mouseDown && p.equippedWeapon === 'crowbar') ||
+      (this.mouseDown && (p.equippedWeapon === 'crowbar' || p.equippedWeapon === 'lmg')) ||
       this.justPressed.has('KeyJ');
 
     if (
@@ -2145,6 +2157,31 @@ export class SurvivalEngine {
         this.spawnParticles(p.x - sinF * 0.25, p.y + cosF * 0.25, 0.75, 1, '#d1493b', 1.9, 2.7, 14);
       }
       this.emitHud();
+      return;
+    }
+
+    if (p.equippedWeapon === 'lmg') {
+      // Full-auto, belt-fed: no magazine, no reload, no ammo economy. Lower per-hit damage than
+      // the pistol or a single shotgun pellet, paid back with rate of fire and noise.
+      p.attackCooldown = spec.cooldown;
+      p.scaleX = 0.95;
+      p.scaleY = 1.05;
+      this.muzzleFlashTimer = 0.05;
+      soundEngine.playGunshot('lmg');
+      this.trauma = Math.min(1, this.trauma + 0.1);
+      this.emitSound(p.x, p.y, spec.noiseRadius, true);
+      this.fireProjectiles('bullet', p.x, p.y, p.facingAngle, 1, spec.spreadRad, spec.damage, BULLET_SPEED);
+      if (this.cameraMode === 'fps') {
+        this.fpsPitch = clamp(this.fpsPitch + 0.006, FPS_PITCH_MIN, FPS_PITCH_MAX);
+      }
+      const cosF = Math.cos(p.facingAngle);
+      const sinF = Math.sin(p.facingAngle);
+      if (this.cameraMode === 'fps') {
+        this.spawnParticles(p.x + cosF * 0.45 - sinF * 0.32, p.y + sinF * 0.45 + cosF * 0.32, 0.62, 1, '#e6be53', 1.3, 1.7, 14);
+      } else {
+        this.spawnParticles(p.x + cosF * 0.42, p.y + sinF * 0.42, 0.65, 3, '#ffd978', 3.2, 0.55);
+        this.spawnParticles(p.x - sinF * 0.25, p.y + cosF * 0.25, 0.75, 1, '#e6be53', 1.5, 2.2, 14);
+      }
       return;
     }
 
@@ -2971,6 +3008,7 @@ export class SurvivalEngine {
     hitZ = 0.58
   ): void {
     z.hp -= amount;
+    if (z.hp > 0 && z.state !== 'dying') soundEngine.playZombieHurt(z.archetype);
     z.hitFlash = isHeadshot ? 0.12 : 0.08;
     z.scaleX = isHeadshot ? 1.28 : 1.22;
     z.scaleY = isHeadshot ? 0.76 : 0.8;
@@ -3026,6 +3064,10 @@ export class SurvivalEngine {
       // Bloater toxic explosion on death!
       if (z.archetype === 'bloater') {
         soundEngine.playMolotovShatter();
+      } else {
+        soundEngine.playZombieDeath(z.archetype);
+      }
+      if (z.archetype === 'bloater') {
         this.trauma = Math.min(1, this.trauma + 0.55);
         this.spawnParticles(z.x, z.y, 0.5, 22, '#99db3d', 4.5, 3.2);
         this.firePatches.push({
@@ -3560,7 +3602,8 @@ export class SurvivalEngine {
     upSpeed: number,
     gravity = 9.8
   ): void {
-    for (let i = 0; i < count; i++) {
+    const budgeted = Math.max(1, Math.round(count * particleBudgetScale()));
+    for (let i = 0; i < budgeted; i++) {
       const p = this.particles[this.particleCursor];
       this.particleCursor = (this.particleCursor + 1) % PARTICLE_POOL_SIZE;
       const ang = Math.random() * Math.PI * 2;
@@ -3593,7 +3636,8 @@ export class SurvivalEngine {
     maxSpeed: number,
     gravity = 9.8
   ): void {
-    for (let i = 0; i < count; i++) {
+    const budgeted = Math.max(1, Math.round(count * particleBudgetScale()));
+    for (let i = 0; i < budgeted; i++) {
       const p = this.particles[this.particleCursor];
       this.particleCursor = (this.particleCursor + 1) % PARTICLE_POOL_SIZE;
       const spd = minSpeed + Math.random() * (maxSpeed - minSpeed);

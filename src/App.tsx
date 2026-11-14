@@ -10,6 +10,8 @@ import { TouchControls } from './components/TouchControls';
 import { TouchLookPad } from './components/TouchLookPad';
 import { SurvivalEngine } from './game/engine';
 import { soundEngine } from './game/sound';
+import { SettingsModal } from './components/SettingsModal';
+import { getSettings, initSettings, subscribeSettings, updateSettings } from './game/settings';
 import { createInitialInventory } from './game/survivalLogic';
 import type { GamePhase, HudSnapshot } from './game/types';
 
@@ -74,7 +76,8 @@ export default function App() {
 
   const [phase, setPhase] = useState<GamePhase>('title');
   const [hud, setHud] = useState<HudSnapshot>(INITIAL_HUD);
-  const [muted, setMuted] = useState<boolean>(false);
+  const [muted, setMuted] = useState<boolean>(() => getSettings().muted);
+  const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [craftOpen, setCraftOpen] = useState<boolean>(false);
   const [cookOpen, setCookOpen] = useState<boolean>(false);
   const [navOpen, setNavOpen] = useState<boolean>(false);
@@ -104,6 +107,10 @@ export default function App() {
     engineRef.current = engine;
     engine.start();
 
+    // Boot persisted settings into the audio engine and keep mute state in sync
+    initSettings();
+    const unsubSettings = subscribeSettings((s) => setMuted(s.muted));
+
     // Support ?autostart=1, ?fps=1, and ?spawn=x,y for direct verification
     const params = new URLSearchParams(window.location.search);
     if (params.get('fps') === '1') {
@@ -124,6 +131,7 @@ export default function App() {
     }
 
     return () => {
+      unsubSettings();
       engine.destroy();
       engineRef.current = null;
     };
@@ -145,8 +153,7 @@ export default function App() {
   useEffect(() => {
     const onGlobalKey = (e: KeyboardEvent) => {
       if (e.code === 'KeyM') {
-        const nextMuted = soundEngine.toggleMute();
-        setMuted(nextMuted);
+        updateSettings({ muted: !getSettings().muted });
         return;
       }
       if (e.code === 'Escape' && (craftOpen || cookOpen || navOpen)) {
@@ -190,8 +197,7 @@ export default function App() {
   }, [phase, craftOpen, cookOpen, navOpen]);
 
   const handleToggleMute = () => {
-    const nextMuted = soundEngine.toggleMute();
-    setMuted(nextMuted);
+    updateSettings({ muted: !getSettings().muted });
   };
 
   const handleStartGame = () => {
@@ -221,6 +227,10 @@ export default function App() {
           touchEnabled={touchEnabled}
           onStart={handleStartGame}
           onToggleMute={handleToggleMute}
+          onOpenSettings={() => {
+            soundEngine.playUiClick();
+            setSettingsOpen(true);
+          }}
         />
       )}
 
@@ -352,6 +362,20 @@ export default function App() {
           }}
           onRestart={() => engineRef.current?.startGame()}
           onTitle={() => engineRef.current?.returnToTitle()}
+          onOpenSettings={() => {
+            soundEngine.playUiClick();
+            setSettingsOpen(true);
+          }}
+        />
+      )}
+
+      {/* Settings Modal (available from title and pause) */}
+      {settingsOpen && (
+        <SettingsModal
+          onClose={() => {
+            soundEngine.playUiClick();
+            setSettingsOpen(false);
+          }}
         />
       )}
 
