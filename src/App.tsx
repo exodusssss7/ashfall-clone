@@ -485,7 +485,7 @@ export default function App() {
       {/* Edit-HUD bar */}
       {phase === 'playing' && hudEdit && (
         <div className="hud-edit-bar fixed top-2 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 hud-panel px-3 py-1.5 pointer-events-auto">
-          <span className="font-telemetry text-[11px] tracking-wider text-[#f0d078]">EDIT HUD · drag the outlined items</span>
+          <span className="font-telemetry text-[11px] tracking-wider text-[#f0d078]">EDIT HUD · drag moves · corner-drag resizes</span>
           <button
             type="button"
             onClick={() => resetHudLayout()}

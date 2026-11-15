@@ -1,7 +1,9 @@
 import { getActionCues, actionCueProps, canCookAnything } from '../game/actionAlerts';
+import type { ActionCue } from '../game/actionAlerts';
 import { ItemIcon } from './ItemIcon';
 import { useHudDrag } from './useHudDrag';
-import React from 'react';
+import { applyButtonScales } from '../game/hudLayout';
+import React, { useEffect } from 'react';
 import {
   Backpack,
   Car,
@@ -85,6 +87,11 @@ export const GameHud: React.FC<GameHudProps> = ({
   onOpenNavigation,
   onEditHud,
 }) => {
+  // Saved per-button sizes (Edit HUD corner-drag) ride on data-btn-id attributes.
+  useEffect(() => {
+    applyButtonScales(document.documentElement);
+  });
+
   const cues = getActionCues(hud);
   const vitalsDrag = useHudDrag('vitals', editing);
   const utilityDrag = useHudDrag('utility', editing);
@@ -95,6 +102,20 @@ export const GameHud: React.FC<GameHudProps> = ({
   const bestFood = pickBestFoodConsumable(hud.inventory) ?? 'food';
 
   const weaponOrder: WeaponId[] = ['crowbar', 'pistol', 'shotgun', 'lmg', 'molotov'];
+
+  /** Empty-and-no-reserve weapons blink red like the other emergency action buttons. */
+  const weaponSlotCue = (wId: WeaponId): ActionCue => {
+    if (wId === 'pistol' && hud.pistolMag <= 0 && hud.inventory.ammo_9mm <= 0) {
+      return { state: 'urgent', reason: 'Pistol out of ammunition' };
+    }
+    if (wId === 'shotgun' && hud.shotgunMag <= 0 && hud.inventory.ammo_shell <= 0) {
+      return { state: 'urgent', reason: 'Shotgun out of shells' };
+    }
+    if (wId === 'molotov' && hud.inventory.molotov <= 0) {
+      return { state: 'urgent', reason: 'No molotovs left' };
+    }
+    return { state: 'idle', reason: `${WEAPONS[wId].name} ready` };
+  };
 
   return (
     <div data-touch={touchEnabled} data-camera={hud.cameraMode} className="game-hud fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-3 md:p-4">
@@ -130,7 +151,7 @@ export const GameHud: React.FC<GameHudProps> = ({
             </svg>
             <div className="health-track flex-1 h-2.5 bg-[#121518] border border-[#2c3331] overflow-hidden">
               <div
-                className="h-full"
+                className={`h-full ${hud.hp <= 30 ? 'vital-critical' : ''}`}
                 style={{
                   width: `${hpPct}%`,
                   backgroundColor: hud.hp <= 30 ? '#ef5350' : '#c9453e',
@@ -144,11 +165,13 @@ export const GameHud: React.FC<GameHudProps> = ({
 
           {/* Hunger & Thirst compact quick-use buttons */}
           <div className="flex items-center gap-2 pt-0.5 pointer-events-auto">
-            <button {...actionCueProps(cues.food)}
+            <button data-btn-id="vitals:food" {...actionCueProps(cues.food)}
               type="button"
               tabIndex={-1}
-              onClick={(e) => {
-                e.currentTarget.blur();
+              onPointerDown={(e) => {
+                e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                 onUseConsumable(bestFood);
               }}
               aria-label={`Eat Food (${bestFood}, key 6)`}
@@ -166,11 +189,13 @@ export const GameHud: React.FC<GameHudProps> = ({
               </span>
             </button>
 
-            <button {...actionCueProps(cues.water)}
+            <button data-btn-id="vitals:water" {...actionCueProps(cues.water)}
               type="button"
               tabIndex={-1}
-              onClick={(e) => {
-                e.currentTarget.blur();
+              onPointerDown={(e) => {
+                e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                 onUseConsumable('water');
               }}
               aria-label={`Drink Purified Water (${hud.inventory.water} left, key 7)`}
@@ -181,9 +206,19 @@ export const GameHud: React.FC<GameHudProps> = ({
                 <Droplet className="w-3 h-3" aria-label="Water" />
               </span>
               <div className="flex-1 h-1.5 bg-[#121518] border border-[#2c3331] overflow-hidden">
-                <div className="h-full bg-[#4ea2d4]" style={{ width: `${waterPct}%` }} />
+                <div
+                  className={`h-full ${hud.thirst <= 20 ? 'vital-critical' : ''}`}
+                  style={{
+                    width: `${waterPct}%`,
+                    backgroundColor: hud.thirst <= 20 ? '#ef5350' : '#4ea2d4',
+                  }}
+                />
               </div>
-              <span className="font-telemetry text-[10px] text-[#c7c2b6] text-right">
+              <span
+                className={`font-telemetry text-[10px] text-right ${
+                  hud.thirst <= 20 ? 'text-[#ef5350] font-bold vital-critical' : 'text-[#c7c2b6]'
+                }`}
+              >
                 {hud.thirst}
               </span>
             </button>
@@ -227,10 +262,12 @@ export const GameHud: React.FC<GameHudProps> = ({
 
           <div className="utility-buttons flex items-center gap-1 md:gap-1.5 pointer-events-auto">
             {(canCookAnything(hud) || cookOpen) && (
-              <button
+              <button data-btn-id="util:cook"
                 type="button"
                 tabIndex={-1}
-                onClick={(e) => {
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   e.currentTarget.blur();
                   onToggleCook();
                 }}
@@ -246,11 +283,13 @@ export const GameHud: React.FC<GameHudProps> = ({
               </button>
             )}
 
-            <button
+            <button data-btn-id="util:hud"
               type="button"
               tabIndex={-1}
-              onClick={(e) => {
-                e.currentTarget.blur();
+              onPointerDown={(e) => {
+                e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                 onEditHud();
               }}
               aria-label="Edit HUD Layout"
@@ -260,11 +299,13 @@ export const GameHud: React.FC<GameHudProps> = ({
               <SlidersHorizontal className="w-4 h-4" /><span className="utility-label">HUD</span>
             </button>
 
-            <button
+            <button data-btn-id="util:touch"
               type="button"
               tabIndex={-1}
-              onClick={(e) => {
-                e.currentTarget.blur();
+              onPointerDown={(e) => {
+                e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                 onToggleTouch();
               }}
               aria-label={touchEnabled ? 'Hide Touch Controls' : 'Show Touch Controls'}
@@ -278,11 +319,13 @@ export const GameHud: React.FC<GameHudProps> = ({
 
 
 
-            <button
+            <button data-btn-id="util:camera"
               type="button"
               tabIndex={-1}
-              onClick={(e) => {
-                e.currentTarget.blur();
+              onPointerDown={(e) => {
+                e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                 onToggleCamera();
               }}
               aria-label={hud.cameraMode === 'fps' ? 'Switch to Isometric 3D View (Z)' : 'Switch to First-Person View (Z)'}
@@ -294,11 +337,13 @@ export const GameHud: React.FC<GameHudProps> = ({
               <Eye className="w-4 h-4" /><span className="utility-label">{hud.cameraMode === 'fps' ? '1P' : 'ISO'}</span>
             </button>
 
-            <button
+            <button data-btn-id="util:pause"
               type="button"
               tabIndex={-1}
-              onClick={(e) => {
-                e.currentTarget.blur();
+              onPointerDown={(e) => {
+                e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                 onPause();
               }}
               aria-label="Pause Game (Esc)"
@@ -330,8 +375,10 @@ export const GameHud: React.FC<GameHudProps> = ({
             type="button"
             tabIndex={-1}
             aria-label="Open world navigation map"
-            onClick={(e) => {
-              e.currentTarget.blur();
+            onPointerDown={(e) => {
+              e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
               onOpenNavigation();
             }}
             title="World Map & Landmarks [N]"
@@ -357,8 +404,10 @@ export const GameHud: React.FC<GameHudProps> = ({
                 <button {...actionCueProps(cues.interact)}
                   type="button"
                   tabIndex={-1}
-                  onClick={(e) => {
-                    e.currentTarget.blur();
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                     onPrimaryInteract();
                   }}
                   className={`hud-panel px-3.5 py-1.5 text-xs font-telemetry flex items-center gap-2.5 whitespace-nowrap cursor-pointer ${
@@ -393,8 +442,10 @@ export const GameHud: React.FC<GameHudProps> = ({
                   <button {...actionCueProps(cues.interact)}
                     type="button"
                     tabIndex={-1}
-                    onClick={(e) => {
-                      e.currentTarget.blur();
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                       onPrimaryInteract();
                     }}
                     className="hud-panel px-3 py-1 text-xs font-telemetry text-[#f0d078] hover:text-white flex items-center gap-2 whitespace-nowrap cursor-pointer"
@@ -417,8 +468,10 @@ export const GameHud: React.FC<GameHudProps> = ({
                     <button
                       type="button"
                       tabIndex={-1}
-                      onClick={(e) => {
-                        e.currentTarget.blur();
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                         onBarricadeDoor();
                       }}
                       className="hud-panel px-2.5 py-1 text-xs font-telemetry text-[#e0bd5e] hover:text-white flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
@@ -438,8 +491,10 @@ export const GameHud: React.FC<GameHudProps> = ({
                     type="button"
                     tabIndex={-1}
                     disabled={!hud.nearbyVehiclePrompt.canDrive}
-                    onClick={(e) => {
-                      e.currentTarget.blur();
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                       onEnterExitVehicle();
                     }}
                     className="hud-panel px-3 py-1 text-xs font-telemetry text-[#7ec4ff] hover:text-white disabled:opacity-55 flex items-center gap-2 whitespace-nowrap cursor-pointer border-[#4f84b8]"
@@ -457,8 +512,10 @@ export const GameHud: React.FC<GameHudProps> = ({
                     <button {...actionCueProps(cues.nearbyRepair)}
                       type="button"
                       tabIndex={-1}
-                      onClick={(e) => {
-                        e.currentTarget.blur();
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                         onRepairVehicle();
                       }}
                       className={`hud-panel px-2.5 py-1 text-xs font-telemetry flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
@@ -551,8 +608,10 @@ export const GameHud: React.FC<GameHudProps> = ({
                     <button {...actionCueProps(cues.fuel)}
                       type="button"
                       tabIndex={-1}
-                      onClick={(e) => {
-                        e.currentTarget.blur();
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                         onRefuel();
                       }}
                       title="Refuel [R]"
@@ -564,8 +623,10 @@ export const GameHud: React.FC<GameHudProps> = ({
                     <button {...actionCueProps(cues.repair)}
                       type="button"
                       tabIndex={-1}
-                      onClick={(e) => {
-                        e.currentTarget.blur();
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                         onRepairVehicle();
                       }}
                       title={`Field Repair (${hud.drivingVehicle.repairCost} Scrap) [T]`}
@@ -581,8 +642,10 @@ export const GameHud: React.FC<GameHudProps> = ({
                     <button {...actionCueProps(cues.light)}
                       type="button"
                       tabIndex={-1}
-                      onClick={(e) => {
-                        e.currentTarget.blur();
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                         onToggleHeadlights();
                       }}
                       title="Toggle Headlights [F]"
@@ -596,8 +659,10 @@ export const GameHud: React.FC<GameHudProps> = ({
                     <button {...actionCueProps(cues.horn)}
                       type="button"
                       tabIndex={-1}
-                      onClick={(e) => {
-                        e.currentTarget.blur();
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                         onHorn();
                       }}
                       title={hud.drivingVehicle.kind === 'police' ? 'Horn & Siren [Q]' : 'Horn [Q]'}
@@ -611,8 +676,10 @@ export const GameHud: React.FC<GameHudProps> = ({
                     <button
                       type="button"
                       tabIndex={-1}
-                      onClick={(e) => {
-                        e.currentTarget.blur();
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                         onEnterExitVehicle();
                       }}
                       className="hud-slot px-2.5 py-1 text-[11px] font-telemetry text-[#f0ece1] hover:border-[#eb4d4b] cursor-pointer whitespace-nowrap"
@@ -639,8 +706,10 @@ export const GameHud: React.FC<GameHudProps> = ({
                         key={kind}
                         type="button"
                         tabIndex={-1}
-                        onClick={(e) => {
-                          e.currentTarget.blur();
+                        onPointerDown={(e) => {
+                          e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                           onToggleBuild(kind);
                         }}
                         className={`px-2 py-1 text-[11px] font-telemetry border transition-colors cursor-pointer whitespace-nowrap ${
@@ -661,8 +730,10 @@ export const GameHud: React.FC<GameHudProps> = ({
                   <button
                     type="button"
                     tabIndex={-1}
-                    onClick={(e) => {
-                      e.currentTarget.blur();
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                       onToggleBuild(hud.buildMode!);
                     }}
                     className="px-2 py-1 text-[11px] font-telemetry text-[#e06c64] hover:text-white cursor-pointer"
@@ -675,11 +746,13 @@ export const GameHud: React.FC<GameHudProps> = ({
               <div className="equipped-readout"><span className="equipped-dot"/>{hud.buildMode ? STRUCTURES[hud.buildMode].name : WEAPONS[hud.equippedWeapon].name}<span className="equipped-sub">{hud.buildMode ? 'PLACEMENT' : 'EQUIPPED'}</span></div>
               {/* Main 5-Slot Hotbar + Build Toggle, bag as a standalone chip left of the item slots */}
               <div ref={hotbarDrag.ref} style={hotbarDrag.style} className="hotbar-wrap pointer-events-auto">
-                <button
+                <button data-btn-id="hotbar:bag"
                   type="button"
                   tabIndex={-1}
-                  onClick={(e) => {
-                    e.currentTarget.blur();
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                     onToggleCraft();
                   }}
                   aria-label="Open Backpack and Crafting (I)"
@@ -719,11 +792,15 @@ export const GameHud: React.FC<GameHudProps> = ({
                     <button
                       key={wId}
                       data-item={wId}
+                      data-btn-id={`hotbar:${wId}`}
+                      {...actionCueProps(weaponSlotCue(wId))}
                       aria-label={`Equip ${spec.name}`}
                       type="button"
                       tabIndex={-1}
-                      onClick={(e) => {
-                        e.currentTarget.blur();
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                         onSelectWeapon(wId);
                       }}
                       className={`${
@@ -749,11 +826,13 @@ export const GameHud: React.FC<GameHudProps> = ({
                 })}
 
                 {/* Slot 5: Quick Bandage */}
-                <button {...actionCueProps(cues.heal)}
+                <button data-btn-id="hotbar:bandage" {...actionCueProps(cues.heal)}
                   type="button"
                   tabIndex={-1}
-                  onClick={(e) => {
-                    e.currentTarget.blur();
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                     onUseConsumable('bandage');
                   }}
                   className={`hud-slot hover:border-[#56615d] ${
@@ -771,11 +850,13 @@ export const GameHud: React.FC<GameHudProps> = ({
                 </button>
 
                 {/* Build Mode Toggle */}
-                <button
+                <button data-btn-id="hotbar:build"
                   type="button"
                   tabIndex={-1}
-                  onClick={(e) => {
-                    e.currentTarget.blur();
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
                     onToggleBuild();
                   }}
                   className={`${

@@ -1,4 +1,4 @@
-# ASHFALL v1.3 - Night lighting, action cues, multi-touch safety
+# The Alive Horde v1.5 - multitouch weapon switching, warning blinks, HUD resizing
 
 Private source checkpoint based on owner commit ad7dc0f7b4e03807dc4ac5a7a8b8b7c381c19dc5. No repository push was made.
 
@@ -11,6 +11,17 @@ npm run lint
 node --import tsx --test src/game/*.test.ts
 npm run build
 ```
+
+## v1.5 changes
+
+- Weapon switching (and every other HUD button) now fires on pointer-down, not click. Android Chrome only delivers click events for the first finger's tap, so item slots, the bag, eat/drink and the utility buttons were unresponsive to a second finger while walking or shooting. Reported from a real phone; fixed and verified with simulated two-finger touches.
+- Item slots join the emergency cue system: a completely dry weapon (empty magazine and no reserve, or no molotovs left) turns red and blinks like the other emergency action buttons.
+- Low health and low thirst now blink red: the health bar pulses at 30 HP or below, the thirst bar and its value pulse at 20 or below.
+- Edit HUD can resize as well as move: in Edit HUD mode, dragging an outlined item moves it, dragging from an individual button's corner resizes just that button, and dragging from a group's corner resizes the whole group (0.6x-1.8x). Every button in the editable groups (item slots, bag, action rail, top buttons, eat/drink, fire buttons) can be sized on its own. Positions and sizes persist in the same saved layout, Reset restores defaults, and moves/resizes are clamped so a control can never leave the screen.
+
+## v1.4 base
+
+Autosave with Continue, game modes with Hardcore permadeath, first-run setup (name + look), Edit HUD drag positioning, The Alive Horde name and badge branding, separated bag chip left of the item slots, Reset/Audio removed from the gameplay HUD, safe normal respawn, FPS-only right-drag aim-and-fire, sprint breathing.
 
 ## v1.3 changes
 
@@ -41,12 +52,12 @@ All other audio credits remain in `public/audio/CREDITS.txt`.
 
 ## Android
 
-Package `com.exodus.ashfall`, versionCode 13, versionName 1.3.0, Android 8.0+, both landscape orientations. The separately supplied signed APK retains the original signing certificate.
+Package `com.exodus.ashfall`, versionCode 15, versionName 1.5.0, Android 8.0+, both landscape orientations. The separately supplied signed APK retains the original signing certificate.
 
 Install Java and Android SDK API 35/build-tools 35.0.0. Set `ANDROID_HOME` and run `sh android/build.sh` after installing dependencies. This creates an unsigned APK; the original private signing key is required for in-place updates. Keys, passwords and account tokens are not included.
 
 ## Verification and limits
 
-88 automated tests, TypeScript and production build passed. Browser checks used assets extracted from the signed v1.2 APK: heartbeat trigger, active stop cases, after-sprint breathing and bidirectional inventory interaction. Gameplay and book-page inventory screenshots were visually inspected. Not installed or performance-tested on an Android phone.
+95 automated tests, TypeScript and production build passed. Browser checks on the production build: two-finger weapon switching while the move stick is held, while FIRE is held, and while FPS aim/fire is held with a drag (shotgun and pistol; exactly one activation per tap); dry-weapon red pulse states; low-health and low-thirst red blink states verified red through the whole pulse; individual button resize, group resize, move drag, viewport clamping and persistence in Edit HUD; HUD screenshots at 900x420 landscape, all visually inspected. Signed with the original certificate for in-place updates; saves preserved. Not installed or performance-tested on an Android phone.
 
 Do not publish or redistribute assets under an assumed project-wide license. Individual bundled font/audio licenses and credits remain included. No new project-wide license is granted by this copy.

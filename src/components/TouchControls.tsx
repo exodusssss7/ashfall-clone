@@ -2,6 +2,7 @@ import { getActionCues, actionCueProps, canCookAnything } from '../game/actionAl
 import { formatRestCooldown } from '../game/restCooldown';
 import { FloatingStick } from './FloatingStick';
 import { useHudDrag } from './useHudDrag';
+import { applyButtonScales } from '../game/hudLayout';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Car,
@@ -164,6 +165,11 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
     return () => window.removeEventListener('resize', checkOrientation);
   }, []);
 
+  // Saved per-button sizes (Edit HUD corner-drag) ride on data-btn-id attributes.
+  useEffect(() => {
+    applyButtonScales(document.documentElement);
+  });
+
   const cues = getActionCues(hud);
   const isDriving = Boolean(hud.drivingVehicle);
   const isFishing = Boolean(hud.fishing);
@@ -283,7 +289,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
       <div className={`right-control-cluster ${isDriving?'is-driving':'on-foot'} absolute right-3 bottom-3 flex items-end gap-2.5 pointer-events-none`}>
         {isDriving ? (
           <div className="grid grid-cols-3 gap-1.5">
-            <button
+            <button data-btn-id="veh:boost"
               type="button"
               data-testid="touch-boost-btn" {...actionCueProps(cues.boost)}
               aria-label="Turbo Boost"
@@ -302,7 +308,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               <span className="font-telemetry text-[9px] font-bold">BOOST</span>
             </button>
 
-            <button
+            <button data-btn-id="veh:repair"
               type="button"
               data-testid="touch-repair-btn" {...actionCueProps(cues.repair)}
               aria-label="Repair Vehicle"
@@ -322,7 +328,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               <span className="font-telemetry text-[9px] font-bold">REPAIR</span>
             </button>
 
-            <button
+            <button data-btn-id="veh:exit"
               type="button"
               data-testid="touch-exit-vehicle-btn"
               aria-label="Exit Vehicle"
@@ -338,7 +344,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               <span className="font-telemetry text-[9px] font-bold">EXIT</span>
             </button>
 
-            <button
+            <button data-btn-id="veh:fuel"
               type="button"
               data-testid="touch-refuel-btn" {...actionCueProps(cues.fuel)}
               aria-label="Refuel Vehicle"
@@ -354,7 +360,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               <span className="font-telemetry text-[9px] font-bold">FUEL</span>
             </button>
 
-            <button
+            <button data-btn-id="veh:light"
               type="button"
               data-testid="touch-light-btn" {...actionCueProps(cues.light)}
               aria-label="Toggle Headlights"
@@ -374,7 +380,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               <span className="font-telemetry text-[9px] font-bold">LIGHT</span>
             </button>
 
-            <button
+            <button data-btn-id="veh:horn"
               type="button"
               data-testid="touch-horn-btn" {...actionCueProps(cues.horn)}
               aria-label="Car Horn or Siren"
@@ -399,13 +405,13 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
         ) : (
           <>
             <div className="context-action-stack flex flex-col items-end gap-1.5">
-              {hud.nearbyDoorAction && <button type="button" data-testid="touch-door-btn" {...actionCueProps(cues.door)} aria-label={hud.nearbyDoorAction.label}
+              {hud.nearbyDoorAction && <button data-btn-id="ctx:door" type="button" data-testid="touch-door-btn" {...actionCueProps(cues.door)} aria-label={hud.nearbyDoorAction.label}
                 onPointerDown={e=>{e.preventDefault();e.stopPropagation();onDoor();}} style={{touchAction:'none'}}
                 className="w-full min-h-[48px] px-3 flex items-center justify-center gap-2 cursor-pointer">
                 <DoorOpen className="w-5 h-5"/><span className="font-telemetry text-[10px] font-bold">{hud.nearbyDoorAction.label}</span>
               </button>}
               {canCookAnything(hud) && (
-                <button
+                <button data-btn-id="ctx:cook"
                   type="button"
                   data-testid="touch-cook-btn" {...actionCueProps(cues.cook)}
                   aria-label="Open Quick Cook"
@@ -423,7 +429,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               )}
 
               {hud.nearbyPrompt?.secondaryLabel && (
-                <button
+                <button data-btn-id="ctx:board"
                   type="button"
                   data-testid="touch-barricade-btn" {...actionCueProps(cues.board)}
                   aria-label="Barricade Door"
@@ -443,7 +449,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               {hud.nearbyVehiclePrompt && (
                 <div className="flex items-center gap-1.5 w-full">
                   {hud.nearbyVehiclePrompt.canDrive && (
-                    <button
+                    <button data-btn-id="ctx:drive"
                       type="button"
                       data-testid="touch-drive-btn" {...actionCueProps(cues.drive)}
                       aria-label="Enter Vehicle"
@@ -460,7 +466,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                     </button>
                   )}
                   {hud.nearbyVehiclePrompt.hpPct < 100 && (
-                    <button
+                    <button data-btn-id="ctx:repair"
                       type="button"
                       data-testid="touch-repair-nearby-btn" {...actionCueProps(cues.nearbyRepair)}
                       aria-label="Repair Vehicle"
@@ -479,7 +485,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               )}
 
               <div ref={quickRailDrag.ref} style={quickRailDrag.style} className="quick-action-rail grid grid-cols-2 gap-1.5">
-              <button
+              <button data-btn-id="rail:loot"
                 type="button"
                 data-testid="touch-loot-btn" {...actionCueProps(cues.interact)}
                 data-loot-ready={hud.nearbyPrompt?.action === 'loot'}
@@ -505,7 +511,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                 {hud.nearbyPrompt?.action === 'sleep' && hud.restCooldownSeconds > 0 && <span className="font-telemetry text-[8px]">{formatRestCooldown(hud.restCooldownSeconds)}</span>}
               </button>
 
-              <button
+              <button data-btn-id="rail:dodge"
                 type="button"
                 data-testid="touch-dodge-btn" {...actionCueProps(cues.dodge)}
                 aria-label="Dodge Roll"
@@ -521,7 +527,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                 <span className="font-telemetry text-[9px] font-bold">DODGE</span>
               </button>
 
-              <button
+              <button data-btn-id="rail:reload"
                 type="button"
                 data-testid="touch-reload-btn" {...actionCueProps(cues.reload)}
                 aria-label="Reload Weapon"
@@ -537,7 +543,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                 <span className="font-telemetry text-[9px] font-bold">RELOAD</span>
               </button>
 
-              <button
+              <button data-btn-id="rail:light"
                 type="button"
                 data-testid="touch-light-btn" {...actionCueProps(cues.light)}
                 aria-label="Toggle Flashlight"

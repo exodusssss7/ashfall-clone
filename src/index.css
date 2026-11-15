@@ -1073,8 +1073,15 @@ html[data-skin="a"] [data-testid="touch-attack-btn"][data-weapon="molotov"] svg{
 /* ===== v1.4: Edit HUD mode ===== */
 .hud-edit-bar {
   animation: startSplashFade 0.2s ease-out;
+  white-space: nowrap;
+  max-width: calc(100vw - 16px);
+}
+.hud-edit-bar > span {
+  font-size: 10px;
+  white-space: nowrap;
 }
 [data-hud-edit] {
+  position: relative;
   outline: 2px dashed #f0d078;
   outline-offset: 3px;
   cursor: grab;
@@ -1134,3 +1141,35 @@ html[data-skin="a"] .bag-btn>div:first-child { color:#c9b8a3; }
 html[data-skin="a"] .bag-btn .equipment-name { color:#fff2db!important; }
 html[data-skin="a"] .bag-btn:hover { border-color:#a89cae; }
 html[data-skin="a"] .bag-btn.bag-btn-active { background:linear-gradient(135deg,#57451a,#241f20 80%); border-color:#ffedaa; box-shadow:inset 0 0 0 2px #493515,inset 0 0 18px #dfac4240,0 0 10px #ffd96b66; }
+
+/* ===== v1.5: critical vitals blink + Edit HUD corner-resize grip ===== */
+/* Brightness pulse keeps the bar clearly red through the whole cycle; the old
+   opacity fade washed out to beige against the paper panel. */
+@keyframes vital-critical-blink {
+  0%, 100% { filter: brightness(1.35); }
+  50% { filter: brightness(0.7); }
+}
+.vital-critical {
+  animation: vital-critical-blink 1s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vital-critical { animation: none; box-shadow: 0 0 0 1px #ff8a80; }
+}
+/* paper.css forces a muted health fill with !important; win on specificity so
+   low health is unmistakably red. */
+html[data-skin="a"] .vitals-panel .health-track > div.vital-critical {
+  background: linear-gradient(#ff5b54, #c81e1e) !important;
+  box-shadow: inset 0 1px #ff9d97, 0 0 8px #ff3b3066 !important;
+}
+/* Edit HUD: visible corner grip shows every outlined item can be resized. */
+[data-hud-edit]::before {
+  content: '';
+  position: absolute;
+  right: -7px;
+  bottom: -7px;
+  width: 14px;
+  height: 14px;
+  background: linear-gradient(135deg, transparent 50%, #f0d078 50%);
+  z-index: 36;
+  pointer-events: none;
+}
