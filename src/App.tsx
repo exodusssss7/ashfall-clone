@@ -187,6 +187,13 @@ export default function App() {
 
   useEffect(() => {
     const onGlobalKey = (e: KeyboardEvent) => {
+      if (e.code === 'Escape' && settingsOpen) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        soundEngine.playUiClick();
+        setSettingsOpen(false);
+        return;
+      }
       if (e.code === 'KeyM') {
         updateSettings({ muted: !getSettings().muted });
         return;
@@ -243,7 +250,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onGlobalKey, true);
     return () => window.removeEventListener('keydown', onGlobalKey, true);
-  }, [phase, craftOpen, cookOpen, navOpen, lootOpen]);
+  }, [phase, craftOpen, cookOpen, navOpen, lootOpen, settingsOpen]);
 
   const handleToggleMute = () => {
     updateSettings({ muted: !getSettings().muted });
@@ -466,6 +473,8 @@ export default function App() {
       {/* Settings Modal (available from title and pause) */}
       {settingsOpen && (
         <SettingsModal
+          activeCameraMode={phase === 'title' ? undefined : hud.cameraMode}
+          onChangeCameraMode={(mode) => engineRef.current?.setCameraMode(mode, true)}
           onClose={() => {
             soundEngine.playUiClick();
             setSettingsOpen(false);

@@ -5,13 +5,13 @@ import { CHUNK_SIZE, PIXEL_SCALE, TILE_W, clamp, dist, isoToWorld } from './isom
 import { getPrimaryLootItem } from './lootUi';
 import { WEAPONS } from './recipes';
 import {
-  FPS_BASE_FOV,
   FPS_CAR_EYE_HEIGHT,
   FPS_EYE_HEIGHT,
   computeFirstPersonHeadBob,
   computeFirstPersonStrafeRoll,
   computeFirstPersonWeaponRaiseOffset,
 } from './firstPerson';
+import { createAshFlakeGeometry, createDebrisShardGeometry } from './modelSculpt';
 import { batchStaticObjectGroups } from './threeBatching';
 import { ThreeGrassSystem } from './threeGrass';
 import {
@@ -153,6 +153,7 @@ const _vec3B = new THREE.Vector3();
 const _mat4 = new THREE.Matrix4();
 const _quat = new THREE.Quaternion();
 const _quatB = new THREE.Quaternion();
+const _euler = new THREE.Euler();
 const _xAxis = new THREE.Vector3(1, 0, 0);
 const _zAxis = new THREE.Vector3(0, 0, 1);
 const _scale = new THREE.Vector3();
@@ -182,7 +183,8 @@ export class ThreeIsometricRenderer {
   private camera: THREE.OrthographicCamera;
   private fpsCamera: THREE.PerspectiveCamera;
   private activeCamera: THREE.Camera;
-  private currentFpsFov = FPS_BASE_FOV;
+  private currentFpsFov = getSettings().fpsFov;
+  private currentIsoZoom = getSettings().isoZoom;
   private currentFpsRoll = 0;
   private envRT: THREE.WebGLRenderTarget;
 
@@ -242,6 +244,12 @@ export class ThreeIsometricRenderer {
   private bulletTracerGeo = new THREE.BoxGeometry(0.76, 0.036, 0.036);
   private bulletCoreGeo = new THREE.BoxGeometry(0.32, 0.056, 0.056);
   private pelletTracerGeo = new THREE.BoxGeometry(0.48, 0.032, 0.032);
+  private flameCardGeo = new THREE.PlaneGeometry(1, 1);
+  private flameSpireGeo = new THREE.ConeGeometry(0.5, 1.0, 6);
+  private emberSparkGeo = new THREE.OctahedronGeometry(0.032, 0);
+  private molotovBodyGeo = new THREE.CylinderGeometry(0.062, 0.066, 0.17, 10);
+  private molotovNeckGeo = new THREE.CylinderGeometry(0.028, 0.062, 0.075, 10);
+  private molotovRagGeo = new THREE.CylinderGeometry(0.034, 0.038, 0.055, 8);
   private impactDecalGeo = new THREE.PlaneGeometry(1, 1);
   private impactDecalMeshes: THREE.Mesh[] = [];
   private impactFlashGeo = new THREE.PlaneGeometry(0.36, 0.09);
@@ -329,11 +337,13 @@ export class ThreeIsometricRenderer {
 
     // Locked 2:1 Orthographic Isometric Camera
     this.camera = new THREE.OrthographicCamera(-10, 10, 10, -10, -60, 140);
+    this.camera.zoom = this.currentIsoZoom;
+    this.camera.updateProjectionMatrix();
     this.camera.position.copy(_camOffsetDir).multiplyScalar(28);
     this.camera.lookAt(0, 0, 0);
 
     // First-Person Perspective Camera (far=240 so SkyCloudDome + distant clouds never clip)
-    this.fpsCamera = new THREE.PerspectiveCamera(FPS_BASE_FOV, 16 / 9, 0.08, 240);
+    this.fpsCamera = new THREE.PerspectiveCamera(this.currentFpsFov, 16 / 9, 0.08, 240);
     this.scene.add(this.fpsCamera);
     this.activeCamera = this.camera;
 
@@ -431,8 +441,8 @@ export class ThreeIsometricRenderer {
     this.fpsViewmodelRig.root.visible = false;
     this.fpsCamera.add(this.fpsViewmodelRig.root);
 
-    // Instanced 3D pixel particles
-    const partGeo = new THREE.BoxGeometry(0.11, 0.11, 0.11);
+    // Instanced 3D faceted debris shards (splinters, rock chips, blood spray, sparks)
+    const partGeo = createDebrisShardGeometry();
     const partMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     this.particleInstanced = new THREE.InstancedMesh(partGeo, partMat, MAX_PARTICLE_INSTANCES);
     this.particleInstanced.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -440,9 +450,14 @@ export class ThreeIsometricRenderer {
     this.particleInstanced.count = 0;
     this.scene.add(this.particleInstanced);
 
-    // Instanced 3D ambient ashfall
-    const ashGeo = new THREE.BoxGeometry(0.06, 0.06, 0.06);
-    const ashMat = new THREE.MeshBasicMaterial({ color: 0xc2beb4, transparent: true, opacity: 0.45 });
+    // Instanced 3D fluttering ash flakes & glowing embers
+    const ashGeo = createAshFlakeGeometry();
+    const ashMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.56,
+      side: THREE.DoubleSide,
+    });
     this.ashInstanced = new THREE.InstancedMesh(ashGeo, ashMat, MAX_ASH_INSTANCES);
     this.ashInstanced.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.ashInstanced.frustumCulled = false;
@@ -786,7 +801,7 @@ export class ThreeIsometricRenderer {
       f.traverse((c: THREE.Object3D) => {
         if ((c as THREE.Mesh).isMesh) {
           const mesh = c as THREE.Mesh;
-          mesh.geometry.dispose();
+          if (!c.userData.sharedGeo) mesh.geometry.dispose();
           if (mesh === f.children[0]) (mesh.material as THREE.Material).dispose();
         }
       });
@@ -1014,10 +1029,11 @@ export class ThreeIsometricRenderer {
   }
 
   public render(state: RenderFrameState): void {
+    const settings = getSettings();
     const isFps = state.cameraMode === 'fps' && state.phase !== 'title';
 
     // Trauma camera shake (can be switched off in Settings)
-    const shakeMag = getSettings().screenShake ? state.trauma * state.trauma * (isFps ? 0.11 : 0.28) : 0;
+    const shakeMag = settings.screenShake ? state.trauma * state.trauma * (isFps ? 0.11 : 0.28) : 0;
     const shakeX = shakeMag > 0.004 ? (Math.random() * 2 - 1) * shakeMag : 0;
     const shakeY = shakeMag > 0.004 ? (Math.random() * 2 - 1) * shakeMag * 0.7 : 0;
     const shakeZ = shakeMag > 0.004 ? (Math.random() * 2 - 1) * shakeMag : 0;
@@ -1038,7 +1054,8 @@ export class ThreeIsometricRenderer {
       let eyeX = p.x;
       let eyeY = FPS_EYE_HEIGHT;
       let eyeZ = p.y;
-      let targetFov = FPS_BASE_FOV;
+      const baseFov = settings.fpsFov;
+      let targetFov = baseFov;
       let targetRoll = 0;
 
       if (activeCar) {
@@ -1046,18 +1063,21 @@ export class ThreeIsometricRenderer {
         eyeY = FPS_CAR_EYE_HEIGHT;
         eyeZ = activeCar.y + Math.sin(activeCar.angle) * 0.08;
         const speedNorm = clamp(Math.abs(activeCar.speed) / 10, 0, 1);
-        targetFov = FPS_BASE_FOV + speedNorm * 6 + (activeCar.boosting ? 5 : 0);
+        targetFov = baseFov + speedNorm * 6 + (activeCar.boosting ? 5 : 0);
       } else {
         const speedNow = Math.hypot(state.playerVelX, state.playerVelY);
-        const bob = computeFirstPersonHeadBob(p.walkCycle, speedNow, state.isSprinting, p.dodgeTimer);
+        const bob = settings.fpsHeadBob
+          ? computeFirstPersonHeadBob(p.walkCycle, speedNow, state.isSprinting, p.dodgeTimer)
+          : { eyeOffsetY: p.dodgeTimer > 0 ? -0.28 : 0, swayX: 0, swayY: 0 };
         eyeY = FPS_EYE_HEIGHT + bob.eyeOffsetY;
-        targetRoll = computeFirstPersonStrafeRoll(state.strafeInput, speedNow);
-        if (state.isSprinting && speedNow > 0.5) targetFov = FPS_BASE_FOV + 4.5;
-        else if (p.dodgeTimer > 0) targetFov = FPS_BASE_FOV + 6;
+        targetRoll = settings.fpsHeadBob ? computeFirstPersonStrafeRoll(state.strafeInput, speedNow) : 0;
+        if (state.isSprinting && speedNow > 0.5) targetFov = baseFov + 4.5;
+        else if (p.dodgeTimer > 0) targetFov = baseFov + 6;
       }
 
       if (Math.abs(this.currentFpsFov - targetFov) > 0.05) {
         this.currentFpsFov += (targetFov - this.currentFpsFov) * 0.18;
+        if (Math.abs(this.currentFpsFov - targetFov) <= 0.05) this.currentFpsFov = targetFov;
         this.fpsCamera.fov = this.currentFpsFov;
         this.fpsCamera.updateProjectionMatrix();
       }
@@ -1081,6 +1101,15 @@ export class ThreeIsometricRenderer {
       this.activeCamera = this.fpsCamera;
       this.fogExp.density = 0.0115;
     } else {
+      const targetIsoZoom = state.phase === 'title' ? 1 : settings.isoZoom;
+      if (Math.abs(this.currentIsoZoom - targetIsoZoom) > 0.001) {
+        this.currentIsoZoom += (targetIsoZoom - this.currentIsoZoom) * 0.22;
+        if (Math.abs(this.currentIsoZoom - targetIsoZoom) < 0.002) {
+          this.currentIsoZoom = targetIsoZoom;
+        }
+        this.camera.zoom = this.currentIsoZoom;
+        this.camera.updateProjectionMatrix();
+      }
       const centerWorld = isoToWorld(state.camX, state.camY);
       targetX = centerWorld.wx + shakeX;
       targetZ = centerWorld.wy + shakeZ;
@@ -1520,9 +1549,34 @@ export class ThreeIsometricRenderer {
       if (s.kind === 'campfire') {
         const fg = g.userData.flameGroup as THREE.Group | undefined;
         if (fg) {
-          const flick = 0.85 + Math.sin(elapsedClock * 15 + s.gx * 2.1) * 0.25;
+          const phase = s.gx * 2.1 + s.gy * 1.3;
+          const flick = 0.88 + Math.sin(elapsedClock * 15 + phase) * 0.22;
           fg.scale.set(1, flick, 1);
-          fg.rotation.y = Math.sin(elapsedClock * 8 + s.gy) * 0.25;
+          fg.rotation.y = Math.sin(elapsedClock * 7.5 + s.gy) * 0.22;
+          const tongues = fg.userData.tongues as THREE.Object3D[] | undefined;
+          if (tongues) {
+            for (let i = 0; i < tongues.length; i++) {
+              const t = tongues[i];
+              if (t.userData.baseScaleY === undefined) {
+                t.userData.baseScaleY = t.scale.y;
+                t.userData.baseRotZ = t.rotation.z;
+              }
+              const wave = Math.sin(elapsedClock * (14 + i * 2.3) + phase + i * 1.7);
+              t.scale.y = (t.userData.baseScaleY as number) * (0.82 + wave * 0.26);
+              t.rotation.z = (t.userData.baseRotZ as number) + Math.cos(elapsedClock * 11 + i * 1.4) * 0.08;
+            }
+          }
+          const embers = fg.userData.embers as THREE.Mesh[] | undefined;
+          if (embers) {
+            for (let i = 0; i < embers.length; i++) {
+              const em = embers[i];
+              const cycle = ((elapsedClock * 0.95 + i * 0.21 + s.gx * 0.13) % 1 + 1) % 1;
+              const ang = elapsedClock * 2.6 + i * 1.6;
+              const r = 0.06 + cycle * 0.11;
+              em.position.set(Math.cos(ang) * r, 0.14 + cycle * 0.72, Math.sin(ang) * r);
+              em.scale.setScalar(0.18 * (1 - cycle * 0.72));
+            }
+          }
         }
       }
       const scaleFlash = s.hitFlash > 0 ? 1.06 : 1;
@@ -1802,7 +1856,9 @@ export class ThreeIsometricRenderer {
       }
 
       const speedNow = Math.hypot(state.playerVelX, state.playerVelY);
-      const bob = computeFirstPersonHeadBob(p.walkCycle, speedNow, state.isSprinting, p.dodgeTimer);
+      const bob = getSettings().fpsHeadBob
+        ? computeFirstPersonHeadBob(p.walkCycle, speedNow, state.isSprinting, p.dodgeTimer)
+        : { eyeOffsetY: 0, swayX: 0, swayY: 0 };
       const idleBreathY = Math.sin(state.elapsedClock * 2.4) * 0.006;
       const idleBreathX = Math.cos(state.elapsedClock * 1.4) * 0.004;
       const raiseDip = computeFirstPersonWeaponRaiseOffset(state.weaponSwapTimer);
@@ -1969,17 +2025,50 @@ export class ThreeIsometricRenderer {
       if (!g) {
         g = new THREE.Group();
         if (pr.kind === 'molotov') {
-          g.add(
-            new THREE.Mesh(
-              new THREE.BoxGeometry(0.14, 0.22, 0.14),
-              this.factory.getMat('#5f8a4b', { roughness: 0.3 })
-            ),
-            new THREE.Mesh(
-              new THREE.BoxGeometry(0.1, 0.1, 0.1),
-              this.factory.getMat('#ffae38', { emissive: '#ffae38', emissiveIntensity: 2.0 })
-            )
-          );
-          g.children[1].position.y = 0.15;
+          const glassMat = this.factory.getMat(0xffffff, {
+            map: this.atlas.weaponTex.molotovGlass,
+            roughness: 0.22,
+            metalness: 0.14,
+          });
+          const clothMat = this.factory.getMat('#e6dcc8', { roughness: 0.9 });
+          const flameCardMat = this.factory.getMat(0xffffff, {
+            map: this.atlas.flameTex,
+            emissive: '#ffaa38',
+            emissiveMap: this.atlas.flameTex,
+            emissiveIntensity: 1.8,
+            alphaTest: 0.18,
+            transparent: true,
+            side: THREE.DoubleSide,
+          });
+          const coreFlameMat = this.factory.getMat('#fff3b0', { emissive: '#fff3b0', emissiveIntensity: 2.3 });
+
+          const body = new THREE.Mesh(this.molotovBodyGeo, glassMat);
+          body.userData.sharedGeo = true;
+          const neck = new THREE.Mesh(this.molotovNeckGeo, glassMat);
+          neck.position.y = 0.12;
+          neck.userData.sharedGeo = true;
+          const rag = new THREE.Mesh(this.molotovRagGeo, clothMat);
+          rag.position.y = 0.175;
+          rag.userData.sharedGeo = true;
+          g.add(body, neck, rag);
+
+          const projFlame = new THREE.Group();
+          projFlame.position.set(0, 0.24, 0);
+          for (const ry of [0, Math.PI * 0.5]) {
+            const card = new THREE.Mesh(this.flameCardGeo, flameCardMat);
+            card.scale.set(0.22, 0.28, 1);
+            card.position.y = 0.06;
+            card.rotation.y = ry;
+            card.userData.sharedGeo = true;
+            projFlame.add(card);
+          }
+          const core = new THREE.Mesh(this.flameSpireGeo, coreFlameMat);
+          core.scale.set(0.085, 0.16, 0.085);
+          core.position.y = 0.05;
+          core.userData.sharedGeo = true;
+          projFlame.add(core);
+          g.add(projFlame);
+          g.userData.projFlame = projFlame;
         } else if (pr.kind === 'acid') {
           g.add(
             new THREE.Mesh(
@@ -2011,6 +2100,11 @@ export class ThreeIsometricRenderer {
       if (pr.kind === 'molotov') {
         g.rotation.z = elapsedClock * 12;
         g.rotation.x = elapsedClock * 8;
+        const projFlame = g.userData.projFlame as THREE.Group | undefined;
+        if (projFlame) {
+          const pPulse = 0.9 + Math.sin(elapsedClock * 28 + pr.id) * 0.25;
+          projFlame.scale.set(pPulse, 0.85 + pPulse * 0.35, pPulse);
+        }
       } else if (pr.kind === 'bullet' || pr.kind === 'pellet') {
         _vec3A.set(pr.vx, pr.vz, pr.vy);
         if (_vec3A.lengthSq() > 1e-6) {
@@ -2041,11 +2135,12 @@ export class ThreeIsometricRenderer {
         g = new THREE.Group();
         const isFire = fp.kind === 'fire';
         const disc = new THREE.Mesh(
-          new THREE.CircleGeometry(fp.radius, 18),
+          new THREE.CircleGeometry(fp.radius, 22),
           new THREE.MeshBasicMaterial({
-            color: isFire ? 0xf57e20 : 0x4ee674,
+            color: isFire ? 0xffffff : 0x4ee674,
+            map: isFire ? this.atlas.firePuddleTex : null,
             transparent: true,
-            opacity: 0.42,
+            opacity: isFire ? 0.78 : 0.42,
             depthWrite: false,
             polygonOffset: true,
             polygonOffsetFactor: -1,
@@ -2055,25 +2150,103 @@ export class ThreeIsometricRenderer {
         disc.position.y = 0.025;
         g.add(disc);
         if (isFire) {
+          const flameCardMat = this.factory.getMat(0xffffff, {
+            map: this.atlas.flameTex,
+            emissive: '#ff9624',
+            emissiveMap: this.atlas.flameTex,
+            emissiveIntensity: 1.7,
+            alphaTest: 0.18,
+            transparent: true,
+            side: THREE.DoubleSide,
+          });
+          const outerSpireMat = this.factory.getMat('#ff5c14', { emissive: '#ff5210', emissiveIntensity: 1.85 });
+          const coreSpireMat = this.factory.getMat('#fff3b0', { emissive: '#fff2a6', emissiveIntensity: 2.35 });
+
+          const tongues: THREE.Object3D[] = [];
+          const embers: THREE.Mesh[] = [];
+          const sparkMat = this.factory.getMat('#ffd966', { emissive: '#ffae33', emissiveIntensity: 2.2 });
+
+          // Multi-ring inferno: tall center spire + 8 swirling outer & mid flame tongues
+          const spots: Array<[number, number, number, number]> = [[0, 0, 1.15, 0]];
           for (let i = 0; i < 4; i++) {
-            const a = (i / 4) * Math.PI * 2;
-            const flame = new THREE.Mesh(
-              new THREE.BoxGeometry(0.18, 0.34, 0.18),
-              this.factory.getMat('#ff982b', { emissive: '#ff982b', emissiveIntensity: 1.8 })
-            );
-            flame.position.set(Math.cos(a) * fp.radius * 0.45, 0.18, Math.sin(a) * fp.radius * 0.45);
-            g.add(flame);
+            const a = (i / 4) * Math.PI * 2 + 0.35;
+            spots.push([Math.cos(a) * fp.radius * 0.36, Math.sin(a) * fp.radius * 0.36, 0.88, a]);
           }
+          for (let i = 0; i < 4; i++) {
+            const a = (i / 4) * Math.PI * 2 + 0.9;
+            spots.push([Math.cos(a) * fp.radius * 0.66, Math.sin(a) * fp.radius * 0.66, 0.68, a + 0.6]);
+          }
+
+          for (let i = 0; i < spots.length; i++) {
+            const [sx, sz, sScale, rotOffset] = spots[i];
+            const cardA = new THREE.Mesh(this.flameCardGeo, flameCardMat);
+            cardA.scale.set(0.42 * sScale, 0.64 * sScale, 1);
+            cardA.position.set(sx, 0.28 * sScale, sz);
+            cardA.rotation.y = rotOffset;
+            cardA.userData.sharedGeo = true;
+            cardA.userData.baseScaleY = cardA.scale.y;
+            cardA.userData.baseRotZ = 0;
+            g.add(cardA);
+            tongues.push(cardA);
+
+            const cardB = new THREE.Mesh(this.flameCardGeo, flameCardMat);
+            cardB.scale.set(0.42 * sScale, 0.64 * sScale, 1);
+            cardB.position.set(sx, 0.28 * sScale, sz);
+            cardB.rotation.y = rotOffset + Math.PI * 0.5;
+            cardB.userData.sharedGeo = true;
+            cardB.userData.baseScaleY = cardB.scale.y;
+            cardB.userData.baseRotZ = 0;
+            g.add(cardB);
+            tongues.push(cardB);
+
+            const spire = new THREE.Mesh(this.flameSpireGeo, i < 5 ? coreSpireMat : outerSpireMat);
+            spire.scale.set(0.14 * sScale, 0.38 * sScale, 0.14 * sScale);
+            spire.position.set(sx, 0.18 * sScale, sz);
+            spire.userData.sharedGeo = true;
+            spire.userData.baseScaleY = spire.scale.y;
+            spire.userData.baseRotZ = (i % 2 === 0 ? 1 : -1) * 0.06;
+            g.add(spire);
+            tongues.push(spire);
+          }
+
+          for (let e = 0; e < 6; e++) {
+            const em = new THREE.Mesh(this.emberSparkGeo, sparkMat);
+            em.userData.sharedGeo = true;
+            g.add(em);
+            embers.push(em);
+          }
+
+          g.userData.tongues = tongues;
+          g.userData.embers = embers;
         }
         this.scene.add(g);
         this.firePatchMeshes.set(fp.id, g);
       }
       g.position.set(fp.x, 0, fp.y);
-      const alpha = Math.min(0.45, fp.life * 0.2);
+      const lifeFade = clamp(fp.life * 0.45, 0.12, 1);
       const discMat = (g.children[0] as THREE.Mesh).material as THREE.MeshBasicMaterial;
-      discMat.opacity = alpha;
-      for (let i = 1; i < g.children.length; i++) {
-        g.children[i].scale.y = 0.75 + Math.sin(elapsedClock * 16 + i * 2) * 0.35;
+      discMat.opacity = fp.kind === 'fire' ? clamp(lifeFade * 0.85, 0.1, 0.82) : Math.min(0.45, fp.life * 0.2);
+
+      const fid = typeof fp.id === 'number' && Number.isFinite(fp.id) ? fp.id : 1;
+      const tongues = g.userData.tongues as THREE.Object3D[] | undefined;
+      if (tongues) {
+        for (let i = 0; i < tongues.length; i++) {
+          const t = tongues[i];
+          const flick = 0.78 + Math.sin(elapsedClock * (16 + (i % 5) * 2.1) + i * 1.9 + fid) * 0.32;
+          t.scale.y = (t.userData.baseScaleY as number) * flick * (0.45 + lifeFade * 0.55);
+          t.rotation.z = (t.userData.baseRotZ as number) + Math.cos(elapsedClock * 11 + i * 1.3) * 0.1;
+        }
+      }
+      const embers = g.userData.embers as THREE.Mesh[] | undefined;
+      if (embers) {
+        for (let i = 0; i < embers.length; i++) {
+          const em = embers[i];
+          const cycle = ((elapsedClock * 1.15 + i * 0.18 + fid * 0.27) % 1 + 1) % 1;
+          const a = i * 1.05 + elapsedClock * 2.2;
+          const r = fp.radius * (0.18 + cycle * 0.55);
+          em.position.set(Math.cos(a) * r, 0.12 + cycle * 0.95, Math.sin(a) * r);
+          em.scale.setScalar((1 - cycle * 0.75) * lifeFade);
+        }
       }
     }
     for (const [id, g] of this.firePatchMeshes.entries()) {
@@ -2082,7 +2255,7 @@ export class ThreeIsometricRenderer {
         g.traverse((c: THREE.Object3D) => {
           if ((c as THREE.Mesh).isMesh) {
             const mesh = c as THREE.Mesh;
-            mesh.geometry.dispose();
+            if (!c.userData.sharedGeo) mesh.geometry.dispose();
             if (mesh === g.children[0]) (mesh.material as THREE.Material).dispose();
           }
         });
@@ -2410,8 +2583,9 @@ export class ThreeIsometricRenderer {
       if (!p.active) continue;
       const alphaScale = clamp(p.life / p.maxLife, 0.15, 1);
       _vec3A.set(p.x, Math.max(0.04, p.z), p.y);
-      _quat.identity();
-      const s = (0.55 + p.size * 0.35) * alphaScale;
+      _euler.set(p.life * 8.5 + i * 1.1, p.x * 4 + p.life * 6.5, p.y * 4 + i * 0.7);
+      _quat.setFromEuler(_euler);
+      const s = (0.58 + p.size * 0.38) * alphaScale;
       _scale.set(s, s, s);
       _mat4.compose(_vec3A, _quat, _scale);
       this.particleInstanced.setMatrixAt(count, _mat4);
@@ -2429,8 +2603,7 @@ export class ThreeIsometricRenderer {
   private syncAmbientAsh(ashList: RenderAshFlake[], targetX: number, targetZ: number, timeMinutes: number): void {
     const { darkness } = getDaylightInfo(timeMinutes);
     const mat = this.ashInstanced.material as THREE.MeshBasicMaterial;
-    mat.color.setHex(0xd4dad6);
-    mat.opacity = clamp(0.24 + darkness * 0.3, 0.22, 0.56);
+    mat.opacity = clamp(0.28 + darkness * 0.32, 0.25, 0.62);
 
     const span = 18;
     const count = Math.min(ashList.length, MAX_ASH_INSTANCES);
@@ -2441,13 +2614,24 @@ export class ThreeIsometricRenderer {
         0.3 + ((1 - a.y) * 2.8),
         targetZ + (a.y - 0.5) * span * 2
       );
-      _quat.identity();
-      _scale.setScalar(a.size * 0.42);
+      _euler.set(
+        Math.sin(a.y * 10 + i) * 0.75,
+        a.x * 12 + a.y * 6 + i * 0.5,
+        Math.cos(a.x * 10 + i) * 0.65
+      );
+      _quat.setFromEuler(_euler);
+      const isEmber = i % 5 === 0;
+      _scale.setScalar(a.size * (isEmber ? 0.38 : 0.48));
       _mat4.compose(_vec3A, _quat, _scale);
       this.ashInstanced.setMatrixAt(i, _mat4);
+      _color.setHex(isEmber ? (i % 10 === 0 ? 0xff9d42 : 0xffcf6e) : (i % 2 === 0 ? 0xd2d8d4 : 0x9fa6a2));
+      this.ashInstanced.setColorAt(i, _color);
     }
     this.ashInstanced.count = count;
     this.ashInstanced.instanceMatrix.needsUpdate = true;
+    if (this.ashInstanced.instanceColor) {
+      this.ashInstanced.instanceColor.needsUpdate = true;
+    }
   }
 
   private worldToScreen(wx: number, wy: number, wz: number): { sx: number; sy: number; visible: boolean } {
@@ -2743,6 +2927,12 @@ export class ThreeIsometricRenderer {
     this.bulletTracerGeo.dispose();
     this.bulletCoreGeo.dispose();
     this.pelletTracerGeo.dispose();
+    this.flameCardGeo.dispose();
+    this.flameSpireGeo.dispose();
+    this.emberSparkGeo.dispose();
+    this.molotovBodyGeo.dispose();
+    this.molotovNeckGeo.dispose();
+    this.molotovRagGeo.dispose();
     this.impactDecalGeo.dispose();
     this.impactFlashGeo.dispose();
     this.impactSparkGeo.dispose();

@@ -1,4 +1,13 @@
 import * as THREE from 'three';
+import {
+  SUPERCAR_CANOPY_PROFILE,
+  SUPERCAR_HULL_PROFILE,
+  TENT_PROFILE,
+  WRECKED_SUPERCAR_PROFILE,
+  createFacetedBoulderGeometry,
+  createSculptedProfileGeometry,
+  createTaperedBoxGeometry,
+} from './modelSculpt';
 import { derivePlayerPalette } from './profile';
 import type { ThreePixelAtlas } from './threeTextures';
 import type { ItemId, PropKind, StructureKind, WeaponId, ZombieArchetype } from './types';
@@ -63,11 +72,32 @@ export interface ActorRig3D {
 export class ThreeModelFactory {
   private atlas: ThreePixelAtlas;
   private geometries: THREE.BufferGeometry[] = [];
+  private geoCache = new Map<string, THREE.BufferGeometry>();
   private materials: THREE.Material[] = [];
   private matCache = new Map<string, THREE.MeshStandardMaterial>();
   private unitBox: THREE.BoxGeometry;
   private unitCylX: THREE.CylinderGeometry;
   private unitWheelGeo: THREE.CylinderGeometry;
+  private supercarHullGeo: THREE.BufferGeometry;
+  private supercarCanopyGeo: THREE.BufferGeometry;
+  private wreckedHullGeo: THREE.BufferGeometry;
+  private wreckedCanopyGeo: THREE.BufferGeometry;
+  private pustuleGeo: THREE.IcosahedronGeometry;
+  private spineConeGeo: THREE.ConeGeometry;
+  private tentBodyGeo: THREE.BufferGeometry;
+  private boulderMainGeo: THREE.BufferGeometry;
+  private boulderSideGeo: THREE.BufferGeometry;
+  private boulderTopGeo: THREE.BufferGeometry;
+  private campStoneGeo: THREE.BufferGeometry;
+  private pineTrunkGeo: THREE.CylinderGeometry;
+  private pineConeGeo: THREE.ConeGeometry;
+  private deadTrunkGeo: THREE.CylinderGeometry;
+  private branchCylGeo: THREE.CylinderGeometry;
+  private logCylGeo: THREE.CylinderGeometry;
+  private logCapGeo: THREE.CylinderGeometry;
+  private flameCardGeo: THREE.PlaneGeometry;
+  private flameSpireGeo: THREE.ConeGeometry;
+  private glintDiamondGeo: THREE.OctahedronGeometry;
 
   constructor(atlas: ThreePixelAtlas) {
     this.atlas = atlas;
@@ -78,11 +108,110 @@ export class ThreeModelFactory {
     const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 24);
     wheelGeo.rotateX(Math.PI * 0.5);
     this.unitWheelGeo = this.trackGeo(wheelGeo);
+
+    this.supercarHullGeo = this.trackGeo(
+      createSculptedProfileGeometry(SUPERCAR_HULL_PROFILE, 0.88, {
+        bevelThickness: 0.025,
+        bevelSize: 0.02,
+        bevelSegments: 1,
+        multiMaterialGroups: true,
+      })
+    );
+    this.supercarCanopyGeo = this.trackGeo(
+      createSculptedProfileGeometry(SUPERCAR_CANOPY_PROFILE, 0.70, {
+        bevelThickness: 0.02,
+        bevelSize: 0.018,
+        bevelSegments: 1,
+        multiMaterialGroups: true,
+      })
+    );
+    this.wreckedHullGeo = this.trackGeo(
+      createSculptedProfileGeometry(WRECKED_SUPERCAR_PROFILE, 0.78, {
+        bevelThickness: 0.02,
+        bevelSize: 0.016,
+        bevelSegments: 1,
+        multiMaterialGroups: false,
+      })
+    );
+    this.wreckedCanopyGeo = this.trackGeo(
+      createSculptedProfileGeometry(SUPERCAR_CANOPY_PROFILE, 0.62, {
+        bevelThickness: 0.015,
+        bevelSize: 0.012,
+        bevelSegments: 1,
+        multiMaterialGroups: false,
+      })
+    );
+    this.pustuleGeo = this.trackGeo(new THREE.IcosahedronGeometry(0.06, 0));
+    this.spineConeGeo = this.trackGeo(new THREE.ConeGeometry(0.036, 0.11, 5));
+    this.tentBodyGeo = this.trackGeo(
+      createSculptedProfileGeometry(TENT_PROFILE, 0.88, {
+        bevelThickness: 0.014,
+        bevelSize: 0.012,
+        bevelSegments: 1,
+        multiMaterialGroups: false,
+      })
+    );
+    this.boulderMainGeo = this.trackGeo(createFacetedBoulderGeometry(0.41, 7, 0.72));
+    this.boulderSideGeo = this.trackGeo(createFacetedBoulderGeometry(0.25, 23, 0.68));
+    this.boulderTopGeo = this.trackGeo(createFacetedBoulderGeometry(0.23, 53, 0.62));
+    this.campStoneGeo = this.trackGeo(createFacetedBoulderGeometry(0.11, 89, 0.65));
+    this.pineTrunkGeo = this.trackGeo(new THREE.CylinderGeometry(0.085, 0.175, 1.04, 8));
+    this.pineConeGeo = this.trackGeo(new THREE.ConeGeometry(0.5, 1.0, 7));
+    this.deadTrunkGeo = this.trackGeo(new THREE.CylinderGeometry(0.068, 0.165, 1.14, 7));
+    const branchGeo = new THREE.CylinderGeometry(0.012, 0.052, 1.0, 6);
+    branchGeo.translate(0, 0.5, 0);
+    this.branchCylGeo = this.trackGeo(branchGeo);
+    const logCyl = new THREE.CylinderGeometry(0.16, 0.185, 0.90, 9);
+    logCyl.rotateZ(Math.PI * 0.5);
+    this.logCylGeo = this.trackGeo(logCyl);
+    const logCap = new THREE.CylinderGeometry(0.15, 0.15, 0.016, 9);
+    logCap.rotateZ(Math.PI * 0.5);
+    this.logCapGeo = this.trackGeo(logCap);
+    this.flameCardGeo = this.trackGeo(new THREE.PlaneGeometry(1, 1));
+    this.flameSpireGeo = this.trackGeo(new THREE.ConeGeometry(0.5, 1.0, 6));
+    this.glintDiamondGeo = this.trackGeo(new THREE.OctahedronGeometry(0.08, 0));
   }
 
   private trackGeo<T extends THREE.BufferGeometry>(g: T): T {
     this.geometries.push(g);
     return g;
+  }
+
+  private getTaperedGeo(
+    topW: number,
+    topD: number,
+    botW: number,
+    botD: number,
+    height: number,
+    centerY = false
+  ): THREE.BufferGeometry {
+    const key = `${topW}_${topD}_${botW}_${botD}_${height}_${centerY ? 1 : 0}`;
+    const existing = this.geoCache.get(key);
+    if (existing) return existing;
+    const g = this.trackGeo(createTaperedBoxGeometry(topW, topD, botW, botD, height, centerY));
+    this.geoCache.set(key, g);
+    return g;
+  }
+
+  private taperedMesh(
+    topW: number,
+    topD: number,
+    botW: number,
+    botD: number,
+    height: number,
+    mat: THREE.Material | THREE.Material[],
+    x = 0,
+    y = 0,
+    z = 0,
+    centerY = false,
+    castShadow = true,
+    receiveShadow = true
+  ): THREE.Mesh {
+    const m = new THREE.Mesh(this.getTaperedGeo(topW, topD, botW, botD, height, centerY), mat);
+    m.position.set(x, y, z);
+    m.castShadow = castShadow;
+    m.receiveShadow = receiveShadow;
+    return m;
   }
 
   private trackMat<T extends THREE.Material>(m: T): T {
@@ -97,9 +226,12 @@ export class ThreeModelFactory {
       metalness?: number;
       map?: THREE.Texture;
       emissive?: string | number;
+      emissiveMap?: THREE.Texture;
       emissiveIntensity?: number;
       transparent?: boolean;
       opacity?: number;
+      alphaTest?: number;
+      side?: THREE.Side;
     } = {}
   ): THREE.MeshStandardMaterial {
     const key = [
@@ -108,9 +240,12 @@ export class ThreeModelFactory {
       opts.metalness ?? 0.05,
       opts.map?.uuid ?? 'nomap',
       opts.emissive ?? 'noem',
+      opts.emissiveMap?.uuid ?? 'noemap',
       opts.emissiveIntensity ?? 0,
       opts.transparent ? 'tr' : 'op',
       opts.opacity ?? 1,
+      opts.alphaTest ?? 0,
+      opts.side ?? THREE.FrontSide,
     ].join('_');
     const existing = this.matCache.get(key);
     if (existing) return existing;
@@ -122,9 +257,12 @@ export class ThreeModelFactory {
         metalness: opts.metalness ?? 0.05,
         map: opts.map ?? null,
         emissive: opts.emissive ?? 0x000000,
+        emissiveMap: opts.emissiveMap ?? null,
         emissiveIntensity: opts.emissiveIntensity ?? 0,
         transparent: opts.transparent ?? false,
         opacity: opts.opacity ?? 1,
+        alphaTest: opts.alphaTest ?? 0,
+        side: opts.side ?? THREE.FrontSide,
       })
     );
     this.matCache.set(key, mat);
@@ -367,19 +505,14 @@ export class ThreeModelFactory {
     root.add(bodyGroup);
     root.add(lidPivot);
 
-    // Subtle floating search glint diamond indicator
-    const glintMesh = this.box(
-      0.09,
-      0.09,
-      0.09,
-      this.getMat('#f0d078', { emissive: '#f0d078', emissiveIntensity: 0.9, roughness: 0.3 }),
-      0,
-      1.1,
-      0,
-      false,
-      false
+    // Sculpted crystal diamond glint indicator for unsearched containers
+    const glintMesh = new THREE.Mesh(
+      this.glintDiamondGeo,
+      this.getMat('#f5d578', { emissive: '#f5d578', emissiveIntensity: 1.0, roughness: 0.25, metalness: 0.3 })
     );
-    glintMesh.rotation.set(0.65, 0, 0.55);
+    glintMesh.position.set(0, 1.1, 0);
+    glintMesh.castShadow = false;
+    glintMesh.receiveShadow = false;
     glintMesh.visible = false;
     root.add(glintMesh);
 
@@ -387,58 +520,71 @@ export class ThreeModelFactory {
       const mil = kind === 'crate_military';
       const sideMat = this.getMat(0xffffff, {
         map: mil ? this.atlas.crateSideTex.military : this.atlas.crateSideTex.wood,
-        roughness: mil ? 0.72 : 0.86,
+        roughness: mil ? 0.68 : 0.86,
       });
       const topMat = this.getMat(0xffffff, {
         map: mil ? this.atlas.crateTopTex.military : this.atlas.crateTopTex.wood,
-        roughness: mil ? 0.72 : 0.86,
+        roughness: mil ? 0.68 : 0.86,
       });
-      const darkIn = this.getMat('#16191c', { roughness: 0.95 });
+      const trimMat = this.getMat(mil ? '#2d3624' : '#3a2515', { roughness: 0.85 });
+      const steelMat = this.getMat('#5a6269', { roughness: 0.36, metalness: 0.72 });
+      const darkIn = this.getMat('#15181b', { roughness: 0.95 });
 
-      this.addContactShadow(root, 0.92, 0.92);
+      this.addContactShadow(root, 0.94, 0.94);
 
-      // Hollow-topped crate walls so opening reveals loot inside
-      bodyGroup.add(this.box(0.76, 0.1, 0.76, darkIn, 0, 0.05, 0));
-      bodyGroup.add(this.box(0.76, 0.56, 0.09, sideMat, 0, 0.28, 0.335));
-      bodyGroup.add(this.box(0.76, 0.56, 0.09, sideMat, 0, 0.28, -0.335));
-      bodyGroup.add(this.box(0.09, 0.56, 0.58, sideMat, -0.335, 0.28, 0));
-      bodyGroup.add(this.box(0.09, 0.56, 0.58, sideMat, 0.335, 0.28, 0));
+      // Base skid runners + recessed crate body + corner reinforced pillars
+      bodyGroup.add(this.box(0.76, 0.05, 0.14, trimMat, 0, 0.025, -0.26));
+      bodyGroup.add(this.box(0.76, 0.05, 0.14, trimMat, 0, 0.025, 0.26));
+      bodyGroup.add(this.box(0.74, 0.08, 0.74, darkIn, 0, 0.08, 0));
+      bodyGroup.add(this.box(0.74, 0.50, 0.075, sideMat, 0, 0.30, 0.332));
+      bodyGroup.add(this.box(0.74, 0.50, 0.075, sideMat, 0, 0.30, -0.332));
+      bodyGroup.add(this.box(0.075, 0.50, 0.59, sideMat, -0.332, 0.30, 0));
+      bodyGroup.add(this.box(0.075, 0.50, 0.59, sideMat, 0.332, 0.30, 0));
+      for (const [cx, cz] of [[-0.36, -0.36], [0.36, -0.36], [-0.36, 0.36], [0.36, 0.36]] as const) {
+        bodyGroup.add(this.box(0.08, 0.52, 0.08, mil ? steelMat : trimMat, cx, 0.30, cz));
+      }
 
-      // Interior loot items
+      // Detailed interior loot visible when lid opens
       bodyGroup.add(
-        this.box(0.22, 0.16, 0.22, this.getMat(mil ? '#d4b34a' : '#789e5a', { roughness: 0.65 }), -0.11, 0.22, 0.08),
-        this.box(0.18, 0.18, 0.18, this.getMat(mil ? '#c44536' : '#c98842', { roughness: 0.6 }), 0.14, 0.23, -0.09)
+        this.taperedMesh(0.20, 0.22, 0.24, 0.25, 0.16, this.getMat(mil ? '#d4b34a' : '#739954', { roughness: 0.62 }), -0.12, 0.12, 0.08),
+        this.box(0.18, 0.14, 0.20, this.getMat(mil ? '#b83c30' : '#c98842', { roughness: 0.58 }), 0.14, 0.19, -0.09),
+        this.cylX(0.045, 0.18, this.getMat(mil ? '#e0bd5e' : '#58a0cf', { roughness: 0.35, metalness: 0.5 }), 0.06, 0.16, 0.16)
       );
 
-      // Hinged lid along back (-Z) edge
+      // Hinged beveled lid along back (-Z) edge + rear hinges + front brass clasp
       lidPivot.position.set(0, 0.56, -0.38);
-      lidPivot.add(this.box(0.78, 0.08, 0.78, topMat, 0, 0.04, 0.38));
+      lidPivot.add(this.taperedMesh(0.72, 0.72, 0.80, 0.80, 0.075, topMat, 0, 0, 0.38));
+      lidPivot.add(this.box(0.14, 0.04, 0.06, steelMat, -0.22, 0.01, 0.01, false, false));
+      lidPivot.add(this.box(0.14, 0.04, 0.06, steelMat, 0.22, 0.01, 0.01, false, false));
       lidPivot.add(
-        this.box(0.12, 0.09, 0.06, this.getMat('#e0b84c', { roughness: 0.28, metalness: 0.8 }), 0, 0.01, 0.77, false, false)
+        this.box(0.13, 0.10, 0.055, this.getMat('#e6be4c', { roughness: 0.26, metalness: 0.85 }), 0, -0.01, 0.78, false, false)
       );
-      glintMesh.position.y = 0.86;
+      glintMesh.position.y = 0.88;
     } else if (kind === 'fridge') {
-      const bodyMat = this.getMat('#dce3df', { roughness: 0.42, metalness: 0.15 });
-      const sideMat = this.getMat('#b2bdb8', { roughness: 0.48, metalness: 0.15 });
-      const doorFrontMat = this.getMat(0xffffff, { map: this.atlas.fridgeFrontTex, roughness: 0.4, metalness: 0.15 });
-      const interiorMat = this.getMat('#2c414d', { emissive: '#386278', emissiveIntensity: 0.35, roughness: 0.6 });
+      const bodyMat = this.getMat('#dce3df', { roughness: 0.38, metalness: 0.16 });
+      const sideMat = this.getMat('#b2bdb8', { roughness: 0.45, metalness: 0.16 });
+      const doorFrontMat = this.getMat(0xffffff, { map: this.atlas.fridgeFrontTex, roughness: 0.38, metalness: 0.15 });
+      const interiorMat = this.getMat('#2a4554', { emissive: '#417791', emissiveIntensity: 0.45, roughness: 0.55 });
+      const chromeMat = this.getMat('#cfd8dd', { roughness: 0.2, metalness: 0.88 });
 
-      this.addContactShadow(root, 0.82, 0.78);
+      this.addContactShadow(root, 0.84, 0.80);
 
-      // Cabinet back + sides + top/bottom
-      bodyGroup.add(this.box(0.64, 1.06, 0.12, sideMat, 0, 0.53, -0.24));
-      bodyGroup.add(this.box(0.08, 1.06, 0.52, sideMat, -0.28, 0.53, 0.02));
-      bodyGroup.add(this.box(0.08, 1.06, 0.52, sideMat, 0.28, 0.53, 0.02));
-      bodyGroup.add(this.box(0.64, 0.08, 0.58, bodyMat, 0, 1.02, 0));
-      bodyGroup.add(this.box(0.64, 0.1, 0.58, this.getMat('#2f3538', { roughness: 0.7 }), 0, 0.05, 0));
-      bodyGroup.add(this.box(0.48, 0.88, 0.06, interiorMat, 0, 0.54, -0.15, false, false));
-      // Shelves & interior items
-      bodyGroup.add(this.box(0.48, 0.04, 0.36, this.getMat('#6e8c99', { roughness: 0.4 }), 0, 0.46, 0));
-      bodyGroup.add(this.box(0.48, 0.04, 0.36, this.getMat('#6e8c99', { roughness: 0.4 }), 0, 0.74, 0));
-      bodyGroup.add(this.box(0.11, 0.18, 0.11, this.getMat('#58a6d1', { roughness: 0.25 }), -0.1, 0.57, 0.02));
-      bodyGroup.add(this.box(0.12, 0.14, 0.12, this.getMat('#d9963b', { roughness: 0.4 }), 0.12, 0.28, 0.04));
+      // Insulated cabinet shell + tapered beveled top crown + vented plinth
+      bodyGroup.add(this.box(0.64, 1.04, 0.11, sideMat, 0, 0.52, -0.24));
+      bodyGroup.add(this.box(0.075, 1.04, 0.50, sideMat, -0.282, 0.52, 0.015));
+      bodyGroup.add(this.box(0.075, 1.04, 0.50, sideMat, 0.282, 0.52, 0.015));
+      bodyGroup.add(this.taperedMesh(0.58, 0.52, 0.64, 0.58, 0.07, bodyMat, 0, 1.03, 0));
+      bodyGroup.add(this.box(0.64, 0.10, 0.58, this.getMat('#282e32', { roughness: 0.72 }), 0, 0.05, 0));
+      bodyGroup.add(this.box(0.49, 0.88, 0.05, interiorMat, 0, 0.54, -0.16, false, false));
 
-      // Swinging pixel-textured front door pivoted on right edge (+0.3, +0.27)
+      // Interior cold wire shelves + bottles & ration cans
+      bodyGroup.add(this.box(0.49, 0.035, 0.36, this.getMat('#7898a6', { roughness: 0.35 }), 0, 0.46, 0));
+      bodyGroup.add(this.box(0.49, 0.035, 0.36, this.getMat('#7898a6', { roughness: 0.35 }), 0, 0.74, 0));
+      bodyGroup.add(this.taperedMesh(0.06, 0.06, 0.10, 0.10, 0.19, this.getMat('#58a6d1', { roughness: 0.22 }), -0.11, 0.48, 0.02));
+      bodyGroup.add(this.box(0.11, 0.14, 0.11, this.getMat('#d9963b', { roughness: 0.4 }), 0.12, 0.28, 0.04));
+      bodyGroup.add(this.box(0.14, 0.09, 0.14, this.getMat('#c4493b', { roughness: 0.5 }), -0.08, 0.79, 0.02));
+
+      // Swinging sculpted insulated door pivoted on right edge (+0.3, +0.27)
       lidPivot.position.set(0.3, 0, 0.27);
       lidPivot.add(
         this.box(
@@ -451,25 +597,29 @@ export class ThreeModelFactory {
           0.02
         )
       );
-      lidPivot.add(this.box(0.04, 0.2, 0.04, this.getMat('#c9d1d6', { roughness: 0.22, metalness: 0.85 }), -0.5, 0.84, 0.065));
-      lidPivot.add(this.box(0.04, 0.24, 0.04, this.getMat('#c9d1d6', { roughness: 0.22, metalness: 0.85 }), -0.5, 0.44, 0.065));
-      glintMesh.position.y = 1.24;
+      lidPivot.add(this.box(0.036, 0.22, 0.042, chromeMat, -0.50, 0.83, 0.068));
+      lidPivot.add(this.box(0.036, 0.28, 0.042, chromeMat, -0.50, 0.43, 0.068));
+      glintMesh.position.y = 1.26;
     } else {
-      // Medical cabinet with pixel-art red cross door
-      const cabMat = this.getMat('#e4ebe8', { roughness: 0.45, metalness: 0.1 });
-      const shadeMat = this.getMat('#bcc7c2', { roughness: 0.5 });
-      const frontMat = this.getMat(0xffffff, { map: this.atlas.medCabFrontTex, roughness: 0.42, metalness: 0.1 });
+      // Medical cabinet with beveled crown & detailed stocked shelves
+      const cabMat = this.getMat('#e4ebe8', { roughness: 0.42, metalness: 0.12 });
+      const shadeMat = this.getMat('#bcc7c2', { roughness: 0.48 });
+      const frontMat = this.getMat(0xffffff, { map: this.atlas.medCabFrontTex, roughness: 0.4, metalness: 0.12 });
+      const latchMat = this.getMat('#cfd8dd', { roughness: 0.22, metalness: 0.88 });
 
-      this.addContactShadow(root, 0.72, 0.65);
+      this.addContactShadow(root, 0.74, 0.66);
 
-      bodyGroup.add(this.box(0.54, 0.92, 0.1, shadeMat, 0, 0.46, -0.18));
-      bodyGroup.add(this.box(0.07, 0.92, 0.42, shadeMat, -0.235, 0.46, 0.02));
-      bodyGroup.add(this.box(0.07, 0.92, 0.42, shadeMat, 0.235, 0.46, 0.02));
-      bodyGroup.add(this.box(0.54, 0.08, 0.46, cabMat, 0, 0.88, 0));
+      bodyGroup.add(this.box(0.54, 0.90, 0.10, shadeMat, 0, 0.45, -0.18));
+      bodyGroup.add(this.box(0.07, 0.90, 0.42, shadeMat, -0.235, 0.45, 0.02));
+      bodyGroup.add(this.box(0.07, 0.90, 0.42, shadeMat, 0.235, 0.45, 0.02));
+      bodyGroup.add(this.taperedMesh(0.48, 0.40, 0.56, 0.48, 0.07, cabMat, 0, 0.88, 0));
       bodyGroup.add(this.box(0.54, 0.08, 0.46, shadeMat, 0, 0.04, 0));
-      bodyGroup.add(this.box(0.38, 0.04, 0.3, this.getMat('#8d9994'), 0, 0.48, 0));
-      bodyGroup.add(this.box(0.12, 0.14, 0.1, this.getMat('#e6dfd3'), -0.08, 0.57, 0.02));
-      bodyGroup.add(this.box(0.09, 0.16, 0.09, this.getMat('#d9483b'), 0.1, 0.24, 0.02));
+      bodyGroup.add(this.box(0.39, 0.035, 0.30, this.getMat('#8d9994', { roughness: 0.35 }), 0, 0.48, 0));
+      bodyGroup.add(this.box(0.39, 0.035, 0.30, this.getMat('#8d9994', { roughness: 0.35 }), 0, 0.24, 0));
+      // Bandage boxes & medicine vials inside
+      bodyGroup.add(this.box(0.14, 0.13, 0.11, this.getMat('#ebe6da'), -0.08, 0.56, 0.02));
+      bodyGroup.add(this.taperedMesh(0.05, 0.05, 0.08, 0.08, 0.15, this.getMat('#d9483b', { roughness: 0.25 }), 0.11, 0.50, 0.03));
+      bodyGroup.add(this.box(0.16, 0.10, 0.12, this.getMat('#3c78a8', { roughness: 0.4 }), 0.04, 0.30, 0.02));
 
       lidPivot.position.set(0.25, 0, 0.22);
       lidPivot.add(
@@ -483,7 +633,8 @@ export class ThreeModelFactory {
           0.02
         )
       );
-      glintMesh.position.y = 1.12;
+      lidPivot.add(this.box(0.03, 0.16, 0.035, latchMat, -0.44, 0.46, 0.055));
+      glintMesh.position.y = 1.14;
     }
 
     return { root, lidPivot, bodyGroup, glintMesh };
@@ -491,15 +642,25 @@ export class ThreeModelFactory {
 
   public createLootDropGroup(primaryItem?: ItemId | null): THREE.Group {
     const g = new THREE.Group();
-    this.addContactShadow(g, 0.62, 0.48);
-    const packMat = this.getMat(0xffffff, { map: this.atlas.backpackTex, roughness: 0.88 });
-    const tarpMat = this.getMat('#9e8a58', { roughness: 0.9 });
-    const buckleMat = this.getMat('#f0c44d', { roughness: 0.25, metalness: 0.85, emissive: '#f0c44d', emissiveIntensity: 0.38 });
+    this.addContactShadow(g, 0.66, 0.52);
+    const packMat = this.getMat(0xffffff, { map: this.atlas.backpackTex, roughness: 0.86 });
+    const pocketMat = this.getMat('#54422f', { roughness: 0.9 });
+    const tarpMat = this.getMat('#768056', { roughness: 0.88 });
+    const strapMat = this.getMat('#26201a', { roughness: 0.9 });
+    const buckleMat = this.getMat('#f0c44d', { roughness: 0.25, metalness: 0.85, emissive: '#f0c44d', emissiveIntensity: 0.42 });
 
-    g.add(this.box(0.42, 0.22, 0.3, packMat, 0, 0.11, 0, false, true));
-    g.add(this.box(0.38, 0.09, 0.12, tarpMat, 0, 0.25, -0.06, false, true));
-    g.add(this.box(0.07, 0.06, 0.04, buckleMat, -0.1, 0.14, 0.15, false, false));
-    g.add(this.box(0.07, 0.06, 0.04, buckleMat, 0.1, 0.14, 0.15, false, false));
+    // Sculpted tapered ALICE field pack + front bellows pocket + top sleeping roll
+    const pack = this.taperedMesh(0.36, 0.24, 0.44, 0.32, 0.23, packMat, 0, 0.01, 0, false, false, true);
+    pack.rotation.x = -0.14;
+    g.add(pack);
+    g.add(this.taperedMesh(0.26, 0.10, 0.30, 0.12, 0.14, pocketMat, 0, 0.04, 0.16, false, false, true));
+    g.add(this.box(0.08, 0.14, 0.11, pocketMat, -0.23, 0.11, 0.02, false, true));
+    g.add(this.box(0.08, 0.14, 0.11, pocketMat, 0.23, 0.11, 0.02, false, true));
+    g.add(this.cylX(0.068, 0.40, tarpMat, 0, 0.26, -0.09, false, true));
+    g.add(this.box(0.04, 0.18, 0.025, strapMat, -0.10, 0.14, 0.21, false, false));
+    g.add(this.box(0.04, 0.18, 0.025, strapMat, 0.10, 0.14, 0.21, false, false));
+    g.add(this.box(0.055, 0.045, 0.032, buckleMat, -0.10, 0.15, 0.22, false, false));
+    g.add(this.box(0.055, 0.045, 0.032, buckleMat, 0.10, 0.15, 0.22, false, false));
 
     if (primaryItem && this.atlas.itemDropTex[primaryItem]) {
       const spriteMat = new THREE.SpriteMaterial({
@@ -510,7 +671,7 @@ export class ThreeModelFactory {
       this.materials.push(spriteMat);
       const sprite = new THREE.Sprite(spriteMat);
       sprite.position.set(0, 0.56, 0);
-      sprite.scale.set(0.46, 0.46, 1);
+      sprite.scale.set(0.48, 0.48, 1);
       g.add(sprite);
       g.userData.itemSprite = sprite;
     }
@@ -521,45 +682,116 @@ export class ThreeModelFactory {
     const g = new THREE.Group();
 
     if (kind === 'tree_pine') {
-      this.addContactShadow(g, 1.35, 1.35);
+      this.addContactShadow(g, 1.42, 1.42);
       const barkMat = this.getMat(0xffffff, { map: this.atlas.barkTex, roughness: 0.94 });
-      const leafMat = this.getMat(0xffffff, { map: this.atlas.pineTex, roughness: 0.88 });
-      const leafDark = this.getMat('#1c2d1b', { roughness: 0.94 });
+      const leafMat = this.getMat(0xffffff, { map: this.atlas.pineTex, roughness: 0.86 });
+      const leafDark = this.getMat('#1b2e1a', { roughness: 0.92 });
 
-      // Flared pixel-bark trunk
-      g.add(this.box(0.36, 0.22, 0.36, barkMat, 0, 0.11, 0));
-      g.add(this.box(0.24, 0.86, 0.24, barkMat, 0, 0.55, 0));
+      // Sculpted tapered bark trunk + flared root buttresses (all single-material for static chunk batching)
+      const trunk = new THREE.Mesh(this.pineTrunkGeo, barkMat);
+      trunk.position.set(0, 0.56, 0);
+      trunk.castShadow = true;
+      trunk.receiveShadow = true;
+      g.add(trunk);
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + 0.3;
+        const rootSpur = this.taperedMesh(0.05, 0.08, 0.10, 0.22, 0.24, barkMat, Math.cos(a) * 0.12, 0, Math.sin(a) * 0.12);
+        rootSpur.rotation.y = -a + Math.PI * 0.5;
+        g.add(rootSpur);
+      }
 
-      // Jagged layered pixel-art conifer tiers (crossed stepped clusters)
-      const addTier = (y: number, w: number, h: number) => {
-        g.add(this.box(w, h * 0.45, w * 0.72, leafDark, 0, y - h * 0.18, 0));
-        g.add(this.box(w * 0.72, h * 0.45, w, leafDark, 0, y - h * 0.18, 0));
-        g.add(this.box(w * 0.88, h * 0.78, w * 0.64, leafMat, 0, y + h * 0.1, 0));
-        g.add(this.box(w * 0.64, h * 0.78, w * 0.88, leafMat, 0, y + h * 0.1, 0));
-      };
-      addTier(0.92, 1.24, 0.36);
-      addTier(1.26, 1.0, 0.36);
-      addTier(1.58, 0.72, 0.34);
-      addTier(1.86, 0.46, 0.3);
-      g.add(this.box(0.2, 0.24, 0.2, leafMat, 0, 2.08, 0));
+      // Layered sculpted conical spruce bough tiers (inner dark skirt + textured outer cone + spire)
+      const tiers: Array<[number, number, number, number]> = [
+        [1.06, 1.38, 0.54, 0.15],
+        [1.38, 1.12, 0.50, 0.55],
+        [1.68, 0.84, 0.46, 0.95],
+        [1.94, 0.56, 0.42, 1.35],
+      ];
+      for (const [ty, diam, h, rotY] of tiers) {
+        const skirt = new THREE.Mesh(this.pineConeGeo, leafDark);
+        skirt.scale.set(diam * 1.04, h * 0.85, diam * 1.04);
+        skirt.position.set(0, ty - 0.05, 0);
+        skirt.rotation.y = rotY + 0.45;
+        skirt.castShadow = true;
+        skirt.receiveShadow = true;
+
+        const bough = new THREE.Mesh(this.pineConeGeo, leafMat);
+        bough.scale.set(diam, h, diam);
+        bough.position.set(0, ty, 0);
+        bough.rotation.y = rotY;
+        bough.castShadow = true;
+        bough.receiveShadow = true;
+        g.add(skirt, bough);
+      }
+      const spire = new THREE.Mesh(this.pineConeGeo, leafMat);
+      spire.scale.set(0.28, 0.38, 0.28);
+      spire.position.set(0, 2.20, 0);
+      spire.castShadow = true;
+      spire.receiveShadow = true;
+      g.add(spire);
       return g;
     }
 
     if (kind === 'tree_dead') {
-      this.addContactShadow(g, 0.95, 0.95);
+      this.addContactShadow(g, 1.02, 1.02);
       const barkMat = this.getMat(0xffffff, { map: this.atlas.barkTex, roughness: 0.95 });
-      const darkBark = this.getMat('#3d2a1d', { roughness: 0.95 });
-      g.add(this.box(0.34, 0.22, 0.34, darkBark, 0, 0.11, 0));
-      g.add(this.box(0.22, 1.15, 0.22, barkMat, 0, 0.65, 0));
-      const b1 = this.box(0.12, 0.65, 0.12, barkMat, -0.24, 1.28, 0.08);
-      b1.rotation.z = 0.65;
-      const b2 = this.box(0.11, 0.62, 0.11, barkMat, 0.24, 1.32, -0.06);
-      b2.rotation.z = -0.6;
-      const b3 = this.box(0.09, 0.48, 0.09, darkBark, 0.05, 1.48, 0.2);
-      b3.rotation.x = 0.58;
-      const b4 = this.box(0.08, 0.4, 0.08, darkBark, -0.34, 1.56, 0.12);
-      b4.rotation.z = 0.25;
-      g.add(b1, b2, b3, b4);
+      const darkBark = this.getMat('#3b291c', { roughness: 0.95 });
+
+      const trunk = new THREE.Mesh(this.deadTrunkGeo, barkMat);
+      trunk.position.set(0, 0.57, 0);
+      trunk.rotation.z = 0.04;
+      trunk.castShadow = true;
+      trunk.receiveShadow = true;
+      g.add(trunk);
+
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * Math.PI * 2 + 0.4;
+        const root = this.taperedMesh(0.05, 0.08, 0.11, 0.24, 0.22, darkBark, Math.cos(a) * 0.12, 0, Math.sin(a) * 0.12);
+        root.rotation.y = -a + Math.PI * 0.5;
+        g.add(root);
+      }
+
+      // Connected hierarchical forked limbs & secondary twigs anchored at trunk crown (-0.04, 1.06, 0)
+      const addLimb = (
+        px: number,
+        py: number,
+        pz: number,
+        len: number,
+        thick: number,
+        rx: number,
+        rz: number,
+        twigs: Array<{ frac: number; len: number; thick: number; rx: number; rz: number }>
+      ) => {
+        const limb = new THREE.Mesh(this.branchCylGeo, barkMat);
+        limb.scale.set(thick, len, thick);
+        limb.position.set(px, py, pz);
+        limb.rotation.set(rx, 0, rz);
+        limb.castShadow = true;
+        limb.receiveShadow = true;
+        g.add(limb);
+
+        for (const tw of twigs) {
+          const tMesh = new THREE.Mesh(this.branchCylGeo, darkBark);
+          // Attach in local limb space (divide scale back out so twig has clean proportions)
+          tMesh.scale.set(tw.thick / thick, tw.len / len, tw.thick / thick);
+          tMesh.position.set(0, tw.frac, 0);
+          tMesh.rotation.set(tw.rx, 0, tw.rz);
+          tMesh.castShadow = true;
+          tMesh.receiveShadow = true;
+          limb.add(tMesh);
+        }
+      };
+
+      addLimb(-0.04, 1.04, 0.01, 0.62, 0.98, 0.14, 0.72, [
+        { frac: 0.62, len: 0.36, thick: 0.52, rx: -0.22, rz: -0.52 },
+        { frac: 0.78, len: 0.26, thick: 0.40, rx: 0.25, rz: 0.42 },
+      ]);
+      addLimb(-0.03, 1.06, -0.01, 0.58, 0.90, -0.15, -0.66, [
+        { frac: 0.58, len: 0.34, thick: 0.48, rx: 0.24, rz: 0.48 },
+      ]);
+      addLimb(-0.02, 1.08, 0.02, 0.48, 0.74, 0.58, -0.16, [
+        { frac: 0.65, len: 0.25, thick: 0.38, rx: -0.35, rz: 0.38 },
+      ]);
       return g;
     }
 
@@ -784,42 +1016,107 @@ export class ThreeModelFactory {
     }
 
     if (kind === 'tent') {
-      this.addContactShadow(g, 1.08, 1.08);
-      const canvasMat = this.getMat(0xffffff, { map: this.atlas.tentTex, roughness: 0.92 });
+      this.addContactShadow(g, 1.14, 1.12);
+      const canvasMat = this.getMat(0xffffff, { map: this.atlas.tentTex, roughness: 0.9 });
       const darkCanvas = this.getMat('#36402a', { roughness: 0.94 });
-      const doorVoid = this.getMat('#151714', { roughness: 0.96 });
-      const stake = this.getMat(0xffffff, { map: this.atlas.woodDarkTex, roughness: 0.9 });
-      // Stepped A-frame pixel-art tent silhouette + dark entrance flap + ridge pole
-      g.add(this.box(0.88, 0.24, 0.88, canvasMat, 0, 0.12, 0));
-      g.add(this.box(0.68, 0.24, 0.86, canvasMat, 0, 0.36, 0));
-      g.add(this.box(0.46, 0.22, 0.84, canvasMat, 0, 0.59, 0));
-      g.add(this.box(0.24, 0.16, 0.82, darkCanvas, 0, 0.78, 0));
-      g.add(this.box(0.08, 0.08, 0.94, stake, 0, 0.87, 0));
-      g.add(this.box(0.32, 0.44, 0.05, doorVoid, 0, 0.22, 0.43, false, false));
+      const doorVoid = this.getMat('#141612', { roughness: 0.96 });
+      const stakeMat = this.getMat(0xffffff, { map: this.atlas.woodDarkTex, roughness: 0.88 });
+
+      // True pitched A-frame extruded tent prism + ridge pole + recessed vestibule + guy stakes (all single-material)
+      const body = new THREE.Mesh(this.tentBodyGeo, canvasMat);
+      body.castShadow = true;
+      body.receiveShadow = true;
+      g.add(body);
+
+      const ridge = this.cylX(0.032, 0.98, stakeMat, 0, 0.86, 0);
+      ridge.rotation.y = Math.PI * 0.5;
+      g.add(ridge);
+
+      // Recessed dark tent vestibule opening + rolled canvas flaps
+      g.add(this.taperedMesh(0.06, 0.06, 0.36, 0.08, 0.52, doorVoid, 0, 0, 0.425, false, false, false));
+      const flapL = this.cylX(0.045, 0.54, darkCanvas, -0.16, 0.24, 0.44);
+      flapL.rotation.y = Math.PI * 0.5;
+      flapL.rotation.x = 0.32;
+      const flapR = this.cylX(0.045, 0.54, darkCanvas, 0.16, 0.24, 0.44);
+      flapR.rotation.y = Math.PI * 0.5;
+      flapR.rotation.x = 0.32;
+      g.add(flapL, flapR);
+
+      // 4 angled corner guy stakes
+      for (const [sx, sz, rz] of [[-0.47, -0.43, -0.3], [0.47, -0.43, 0.3], [-0.47, 0.43, -0.3], [0.47, 0.43, 0.3]] as const) {
+        const st = this.box(0.045, 0.16, 0.045, stakeMat, sx, 0.07, sz);
+        st.rotation.z = rz;
+        g.add(st);
+      }
       return g;
     }
 
     if (kind === 'rock_boulder') {
-      this.addContactShadow(g, 0.94, 0.94);
-      const rockMat = this.getMat(0xffffff, { map: this.atlas.rockTex, roughness: 0.94 });
-      const darkRock = this.getMat('#44494d', { roughness: 0.96 });
-      g.add(this.box(0.76, 0.32, 0.68, darkRock, 0, 0.16, 0));
-      g.add(this.box(0.58, 0.26, 0.54, rockMat, -0.05, 0.42, 0.04));
-      g.add(this.box(0.36, 0.18, 0.34, rockMat, -0.08, 0.60, 0.02));
-      g.add(this.box(0.28, 0.22, 0.26, darkRock, 0.22, 0.22, -0.18));
+      this.addContactShadow(g, 0.98, 0.98);
+      const rockMat = this.getMat(0xffffff, { map: this.atlas.rockTex, roughness: 0.92 });
+      const darkRock = this.getMat('#454b4f', { roughness: 0.96 });
+
+      const main = new THREE.Mesh(this.boulderMainGeo, rockMat);
+      main.position.set(-0.04, 0, 0.02);
+      main.rotation.y = 0.45;
+      main.castShadow = true;
+      main.receiveShadow = true;
+
+      const side = new THREE.Mesh(this.boulderSideGeo, darkRock);
+      side.position.set(0.24, 0, -0.14);
+      side.rotation.y = 1.6;
+      side.castShadow = true;
+      side.receiveShadow = true;
+
+      const top = new THREE.Mesh(this.boulderTopGeo, rockMat);
+      top.position.set(-0.06, 0.24, -0.02);
+      top.rotation.y = 2.3;
+      top.castShadow = true;
+      top.receiveShadow = true;
+
+      const scree = new THREE.Mesh(this.boulderSideGeo, darkRock);
+      scree.scale.setScalar(0.55);
+      scree.position.set(-0.24, 0, 0.22);
+      scree.rotation.y = 0.9;
+      scree.castShadow = true;
+      scree.receiveShadow = true;
+      g.add(main, side, top, scree);
       return g;
     }
 
     if (kind === 'fallen_log') {
-      this.addContactShadow(g, 1.04, 0.62);
+      this.addContactShadow(g, 1.08, 0.64);
       const barkMat = this.getMat(0xffffff, { map: this.atlas.barkTex, roughness: 0.94 });
-      const endMat = this.getMat(0xffffff, { map: this.atlas.woodOakTex, roughness: 0.88 });
+      const endMat = this.getMat(0xffffff, { map: this.atlas.treeRingTex, roughness: 0.88 });
       const mossMat = this.getMat('#3f5932', { roughness: 0.94 });
-      g.add(this.box(0.88, 0.30, 0.32, [endMat, endMat, barkMat, barkMat, barkMat, barkMat], 0, 0.15, 0));
-      g.add(this.box(0.52, 0.06, 0.22, mossMat, -0.10, 0.31, 0.02));
-      const stub = this.box(0.18, 0.12, 0.12, barkMat, 0.24, 0.30, 0.14);
-      stub.rotation.z = -0.45;
-      g.add(stub);
+
+      // Single-material cylindrical bark trunk + separate heartwood end-cap discs (static batching safe)
+      const trunk = new THREE.Mesh(this.logCylGeo, barkMat);
+      trunk.position.set(0, 0.165, 0);
+      trunk.castShadow = true;
+      trunk.receiveShadow = true;
+
+      const capL = new THREE.Mesh(this.logCapGeo, endMat);
+      capL.scale.set(1, 0.95, 0.95);
+      capL.position.set(-0.455, 0.165, 0);
+      const capR = new THREE.Mesh(this.logCapGeo, endMat);
+      capR.scale.set(1, 1.08, 1.08);
+      capR.position.set(0.455, 0.165, 0);
+
+      // Draped moss strip + snapped branch stubs rooted inside log body
+      const moss = this.taperedMesh(0.44, 0.16, 0.56, 0.24, 0.05, mossMat, -0.08, 0.30, 0.01);
+      const stub1 = new THREE.Mesh(this.branchCylGeo, barkMat);
+      stub1.scale.set(1.2, 0.24, 1.2);
+      stub1.position.set(0.16, 0.21, 0.06);
+      stub1.rotation.set(0.38, 0, -0.58);
+      stub1.castShadow = true;
+      const stub2 = new THREE.Mesh(this.branchCylGeo, barkMat);
+      stub2.scale.set(0.95, 0.20, 0.95);
+      stub2.position.set(-0.22, 0.20, -0.05);
+      stub2.rotation.set(-0.42, 0, 0.52);
+      stub2.castShadow = true;
+
+      g.add(trunk, capL, capR, moss, stub1, stub2);
       return g;
     }
 
@@ -836,49 +1133,86 @@ export class ThreeModelFactory {
     }
 
     if (kind === 'wrecked_car') {
-      this.addContactShadow(g, 1.56, 1.04);
-      const hullMat = this.getMat(0xffffff, { map: this.atlas.wreckedCarTex, roughness: 0.78, metalness: 0.42 });
-      const charMat = this.getMat('#211f1e', { roughness: 0.94, metalness: 0.22 });
-      const rustMat = this.getMat('#6b3922', { roughness: 0.86, metalness: 0.35 });
-      const tireMat = this.getMat('#111315', { roughness: 0.92 });
-      const rimMat = this.getMat('#544842', { roughness: 0.68, metalness: 0.55 });
-      const glassMat = this.getMat('#222a30', { roughness: 0.32, metalness: 0.25 });
+      this.addContactShadow(g, 1.88, 1.12);
+      const hullBodyMat = this.getMat('#544e4a', { roughness: 0.82, metalness: 0.38 });
+      const sideDecalMat = this.getMat(0xffffff, { map: this.atlas.wreckedCarTex, roughness: 0.8, metalness: 0.35 });
+      const topDecalMat = this.getMat(0xffffff, { map: this.atlas.wreckedCarTopTex, roughness: 0.8, metalness: 0.35 });
+      const charMat = this.getMat('#1a1817', { roughness: 0.94, metalness: 0.25 });
+      const rustMat = this.getMat('#6e3b24', { roughness: 0.88, metalness: 0.32 });
+      const tireMat = this.getMat('#101214', { roughness: 0.92 });
+      const rimMat = this.getMat('#7d7068', { map: this.atlas.vehicleTex.sedan.wheel, roughness: 0.72, metalness: 0.45 });
+      const glassMat = this.getMat('#1b2329', { roughness: 0.32, metalness: 0.3 });
 
       g.rotation.y = 0.24;
-      // Main lower body shell + charred front/rear bumpers
-      g.add(this.box(1.26, 0.28, 0.72, hullMat, 0, 0.21, 0));
-      g.add(this.box(0.08, 0.11, 0.76, charMat, 0.64, 0.14, 0));
-      g.add(this.box(0.08, 0.11, 0.76, charMat, -0.64, 0.14, 0));
 
-      // Four distinct burned-out circular wheels & rusted rims
-      for (const wx of [-0.38, 0.38]) {
-        for (const wz of [-0.34, 0.34]) {
-          g.add(this.cylinderWheel(0.28, 0.12, tireMat, wx, 0.14, wz));
-          g.add(this.cylinderWheel(0.15, 0.13, rimMat, wx, 0.14, wz, false, false));
-        }
+      // Sculpted wrecked wedge supercar chassis (single-material meshes for static chunk batching)
+      const hull = new THREE.Mesh(this.wreckedHullGeo, hullBodyMat);
+      hull.position.set(0, -0.02, 0);
+      hull.rotation.z = -0.03;
+      hull.castShadow = true;
+      hull.receiveShadow = true;
+      g.add(hull);
+
+      // Proud weathered supercar side door/intake panels aligned with hull tilt (zero z-clipping)
+      for (const sz of [-0.402, 0.402]) {
+        const sidePanel = this.box(1.18, 0.17, 0.018, sideDecalMat, -0.02, 0.21, sz);
+        sidePanel.rotation.z = -0.03;
+        g.add(sidePanel);
       }
 
-      // Exposed engine bay & popped hood
-      g.add(this.box(0.24, 0.14, 0.38, charMat, 0.40, 0.33, 0));
-      const hood = this.box(0.38, 0.05, 0.64, rustMat, 0.42, 0.39, 0);
-      hood.rotation.z = 0.22;
+      // Shattered front carbon chin splitter, rear diffuser & cracked taillight housings
+      g.add(
+        this.box(0.22, 0.04, 0.84, charMat, 0.72, 0.09, 0),
+        this.box(0.18, 0.08, 0.82, charMat, -0.76, 0.13, 0),
+        this.box(0.04, 0.045, 0.22, rustMat, -0.82, 0.29, -0.25),
+        this.box(0.04, 0.045, 0.20, charMat, -0.82, 0.28, 0.25)
+      );
+
+      // Four charred low-profile supercar wheels (single-material tire + rim for static chunk batching)
+      const wheelSpecs: Array<[number, number, number, number]> = [
+        [-0.48, 0.14, -0.39, 0],
+        [-0.48, 0.14, 0.39, 0.05],
+        [0.48, 0.13, -0.39, -0.06],
+        [0.48, 0.13, 0.39, 0.26],
+      ];
+      for (const [wx, wy, wz, tiltX] of wheelSpecs) {
+        const tire = this.cylinderWheel(0.31, 0.13, tireMat, wx, wy, wz);
+        tire.rotation.x += tiltX;
+        const rim = this.cylinderWheel(0.20, 0.142, rimMat, wx, wy, wz, false, false);
+        rim.rotation.x += tiltX;
+        g.add(tire, rim);
+      }
+
+      // Crushed smoked-glass supercar canopy + dented rusted roof cap
+      const canopy = new THREE.Mesh(this.wreckedCanopyGeo, glassMat);
+      canopy.position.set(-0.02, -0.02, 0);
+      canopy.rotation.z = -0.03;
+      canopy.castShadow = true;
+      canopy.receiveShadow = true;
+      g.add(canopy);
+      const roofCap = this.box(0.38, 0.03, 0.56, rustMat, -0.03, 0.60, 0);
+      roofCap.rotation.z = -0.06;
+      g.add(roofCap);
+
+      // Charred front bay + popped twisted hood panel
+      g.add(this.box(0.24, 0.10, 0.42, charMat, 0.46, 0.27, 0));
+      const hood = this.box(0.40, 0.03, 0.66, topDecalMat, 0.46, 0.36, 0);
+      hood.rotation.z = 0.32;
+      hood.rotation.x = 0.08;
       g.add(hood);
 
-      // Crushed cabin pillars, shattered dark interior & dented roof panel
-      g.add(this.box(0.48, 0.22, 0.56, glassMat, -0.06, 0.46, 0));
-      for (const px of [-0.28, 0.16]) {
-        for (const pz of [-0.28, 0.28]) {
-          g.add(this.box(0.07, 0.28, 0.07, rustMat, px, 0.49, pz));
-        }
-      }
-      const roof = this.box(0.50, 0.06, 0.64, hullMat, -0.06, 0.63, 0);
-      roof.rotation.z = -0.05;
-      g.add(roof);
-
-      // Slightly ajar rear trunk deck
-      const trunk = this.box(0.26, 0.05, 0.64, rustMat, -0.49, 0.37, 0);
-      trunk.rotation.z = -0.14;
-      g.add(trunk);
+      // Scorched rear mid-engine deck + snapped crooked carbon GT wing
+      const rearDeck = this.box(0.38, 0.03, 0.64, topDecalMat, -0.54, 0.36, 0);
+      rearDeck.rotation.z = -0.06;
+      g.add(rearDeck);
+      const wing = this.box(0.14, 0.03, 0.80, charMat, -0.78, 0.44, 0);
+      wing.rotation.z = -0.18;
+      wing.rotation.x = 0.14;
+      g.add(
+        this.box(0.05, 0.09, 0.04, rustMat, -0.74, 0.38, -0.20),
+        this.box(0.05, 0.07, 0.04, rustMat, -0.74, 0.37, 0.20),
+        wing
+      );
       return g;
     }
 
@@ -937,29 +1271,105 @@ export class ThreeModelFactory {
       return g;
     }
 
-    // Campfire
-    this.addContactShadow(g, 0.96, 0.96);
-    const stone = this.getMat('#6c737a', { roughness: 0.94 });
-    const log = this.getMat(0xffffff, { map: this.atlas.barkTex, roughness: 0.9 });
-    const ember = this.getMat('#e86a24', { emissive: '#e86a24', emissiveIntensity: 1.5, roughness: 0.7 });
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      g.add(this.box(0.16, 0.14, 0.16, stone, Math.cos(a) * 0.34, 0.07, Math.sin(a) * 0.34));
-    }
-    g.add(this.box(0.42, 0.05, 0.42, ember, 0, 0.03, 0, false, false));
-    const l1 = this.box(0.56, 0.1, 0.1, log, 0, 0.1, 0);
-    l1.rotation.y = 0.6;
-    const l2 = this.box(0.56, 0.1, 0.1, log, 0, 0.12, 0);
-    l2.rotation.y = -0.65;
-    g.add(l1, l2);
+    // Campfire: river-stone ring, charred ember pit, split teepee logs & multi-layered animated flame
+    this.addContactShadow(g, 1.02, 1.02);
+    const stoneLight = this.getMat(0xffffff, { map: this.atlas.rockTex, roughness: 0.94 });
+    const stoneDark = this.getMat('#4f5559', { roughness: 0.96 });
+    const logMat = this.getMat(0xffffff, { map: this.atlas.barkTex, roughness: 0.9 });
+    const ashMat = this.getMat('#262220', { roughness: 0.98 });
+    const emberMat = this.getMat('#ff6e1a', { emissive: '#ff6614', emissiveIntensity: 1.85, roughness: 0.65 });
 
+    for (let i = 0; i < 9; i++) {
+      const a = (i / 9) * Math.PI * 2 + (i % 2) * 0.12;
+      const r = 0.34 + (i % 3) * 0.015;
+      const st = new THREE.Mesh(this.campStoneGeo, i % 2 === 0 ? stoneLight : stoneDark);
+      st.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+      st.rotation.y = a * 1.7;
+      st.scale.set(0.95 + (i % 2) * 0.25, 0.85 + (i % 3) * 0.18, 0.95);
+      st.castShadow = true;
+      st.receiveShadow = true;
+      g.add(st);
+    }
+
+    const ashBed = new THREE.Mesh(this.logCapGeo, ashMat);
+    ashBed.rotation.z = Math.PI * 0.5;
+    ashBed.scale.set(1.5, 2.0, 2.0);
+    ashBed.position.set(0, 0.02, 0);
+    g.add(ashBed);
+
+    // Glowing cracked coal bed
+    const coalBed = new THREE.Mesh(this.boulderTopGeo, emberMat);
+    coalBed.scale.set(0.95, 0.28, 0.95);
+    coalBed.position.set(0, 0.01, 0);
+    g.add(coalBed);
+
+    // Split firewood logs (2 crossed base logs + 3 angled teepee logs)
+    for (const [ry, py] of [[0.58, 0.08], [-0.62, 0.10]] as const) {
+      const baseLog = this.cylX(0.052, 0.54, logMat, 0, py, 0, true, true);
+      baseLog.rotation.y = ry;
+      g.add(baseLog);
+    }
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2 + 0.35;
+      const tLog = this.cylX(0.044, 0.44, logMat, Math.cos(a) * 0.11, 0.15, Math.sin(a) * 0.11, true, true);
+      tLog.rotation.y = -a;
+      tLog.rotation.z = 0.68;
+      g.add(tLog);
+    }
+
+    // Multi-layered animated flame: crossed pixel flame cards + twisting spires + white-hot core + rising embers
     const flameGroup = new THREE.Group();
-    flameGroup.position.set(0, 0.14, 0);
-    flameGroup.add(
-      this.box(0.24, 0.28, 0.24, this.getMat('#d64527', { emissive: '#d64527', emissiveIntensity: 1.4 }), 0, 0.14, 0, false, false),
-      this.box(0.18, 0.42, 0.18, this.getMat('#f79520', { emissive: '#f79520', emissiveIntensity: 1.6 }), 0.02, 0.22, 0, false, false),
-      this.box(0.1, 0.28, 0.1, this.getMat('#fff3b0', { emissive: '#fff3b0', emissiveIntensity: 1.9 }), 0, 0.16, 0, false, false)
-    );
+    flameGroup.position.set(0, 0.10, 0);
+    const flameCardMat = this.getMat(0xffffff, {
+      map: this.atlas.flameTex,
+      emissive: '#ffaa38',
+      emissiveMap: this.atlas.flameTex,
+      emissiveIntensity: 1.55,
+      alphaTest: 0.18,
+      transparent: true,
+      side: THREE.DoubleSide,
+      roughness: 0.4,
+    });
+    const outerSpireMat = this.getMat('#ff6a18', { emissive: '#ff5c12', emissiveIntensity: 1.75, roughness: 0.3 });
+    const coreSpireMat = this.getMat('#fff6bf', { emissive: '#fff2a6', emissiveIntensity: 2.35, roughness: 0.2 });
+
+    const tongues: THREE.Object3D[] = [];
+    for (let c = 0; c < 3; c++) {
+      const card = new THREE.Mesh(this.flameCardGeo, flameCardMat);
+      card.scale.set(0.56, 0.76, 1);
+      card.position.set(0, 0.31, 0);
+      card.rotation.y = (c / 3) * Math.PI;
+      flameGroup.add(card);
+      tongues.push(card);
+    }
+    const core = new THREE.Mesh(this.flameSpireGeo, coreSpireMat);
+    core.scale.set(0.18, 0.38, 0.18);
+    core.position.set(0, 0.18, 0);
+    flameGroup.add(core);
+    tongues.push(core);
+
+    for (let s = 0; s < 3; s++) {
+      const a = (s / 3) * Math.PI * 2;
+      const spire = new THREE.Mesh(this.flameSpireGeo, outerSpireMat);
+      spire.scale.set(0.15, 0.44, 0.15);
+      spire.position.set(Math.cos(a) * 0.065, 0.21, Math.sin(a) * 0.065);
+      spire.rotation.set(Math.sin(a) * 0.18, a, -Math.cos(a) * 0.18);
+      flameGroup.add(spire);
+      tongues.push(spire);
+    }
+
+    const embers: THREE.Mesh[] = [];
+    const sparkMat = this.getMat('#ffe073', { emissive: '#ffb833', emissiveIntensity: 2.2 });
+    for (let e = 0; e < 5; e++) {
+      const spark = new THREE.Mesh(this.glintDiamondGeo, sparkMat);
+      spark.scale.setScalar(0.18);
+      spark.position.set(Math.cos(e * 1.4) * 0.11, 0.2 + e * 0.09, Math.sin(e * 1.9) * 0.11);
+      flameGroup.add(spark);
+      embers.push(spark);
+    }
+    flameGroup.userData.tongues = tongues;
+    flameGroup.userData.embers = embers;
+
     g.add(flameGroup);
     g.userData.flameGroup = flameGroup;
     return g;
@@ -969,93 +1379,149 @@ export class ThreeModelFactory {
     const police = kind === 'police';
     const vTex = this.atlas.vehicleTex[kind];
     const root = new THREE.Group();
-    this.addContactShadow(root, 2.05, 1.25);
+    this.addContactShadow(root, 2.15, 1.25);
 
     const bodyGroup = new THREE.Group();
     root.add(bodyGroup);
 
-    const sideMat = this.getMat(0xffffff, { map: vTex.side, roughness: 0.42, metalness: 0.28 });
-    const roofMat = this.getMat(0xffffff, { map: vTex.roof, roughness: 0.38, metalness: 0.25 });
-    const frontMat = this.getMat(0xffffff, { map: vTex.front, roughness: 0.45, metalness: 0.32 });
-    const rearMat = this.getMat(0xffffff, { map: vTex.rear, roughness: 0.45, metalness: 0.32 });
-    const glassMat = this.getMat(0xffffff, { map: vTex.glass, roughness: 0.14, metalness: 0.25 });
-    const trim = this.getMat('#181c21', { roughness: 0.72, metalness: 0.35 });
-    const tireMat = this.getMat('#101214', { roughness: 0.9 });
-    const wheelFaceMat = this.getMat(0xffffff, { map: vTex.wheel, roughness: 0.45, metalness: 0.35 });
-    const paintMain = this.getMat(police ? '#253145' : '#bf5e46', { roughness: 0.42, metalness: 0.28 });
+    const sideMat = this.getMat(0xffffff, { map: vTex.side, roughness: 0.32, metalness: 0.42 });
+    const roofMat = this.getMat(0xffffff, { map: vTex.roof, roughness: 0.30, metalness: 0.40 });
+    const frontMat = this.getMat(0xffffff, { map: vTex.front, roughness: 0.36, metalness: 0.38 });
+    const rearMat = this.getMat(0xffffff, { map: vTex.rear, roughness: 0.38, metalness: 0.38 });
+    const glassMat = this.getMat(0xffffff, { map: vTex.glass, roughness: 0.12, metalness: 0.35 });
+    const carbonMat = this.getMat('#171a20', { roughness: 0.55, metalness: 0.45 });
+    const tireMat = this.getMat('#101214', { roughness: 0.92 });
+    const wheelFaceMat = this.getMat(0xffffff, { map: vTex.wheel, roughness: 0.42, metalness: 0.42 });
+    const paintRoof = this.getMat(police ? '#eef2f6' : '#c93628', { roughness: 0.32, metalness: 0.40 });
+    const paintMain = this.getMat(police ? '#1b263b' : '#c93628', { roughness: 0.32, metalness: 0.42 });
+    const chromeMat = this.getMat('#bfc8d1', { roughness: 0.22, metalness: 0.90 });
 
-    // Lower hull with pixel-art front grille, rear bumper/plate, side doors/badge & hood deck
+    // Sculpted wedge supercar lower chassis [side, top/bot, front, rear]
+    const hullMesh = new THREE.Mesh(this.supercarHullGeo, [sideMat, roofMat, frontMat, rearMat]);
+    hullMesh.castShadow = true;
+    hullMesh.receiveShadow = true;
+    bodyGroup.add(hullMesh);
+
+    // Carbon-fiber aerodynamic ground effects: chin splitter, side skirts & rear diffuser fins
     bodyGroup.add(
-      this.box(1.66, 0.35, 0.86, [frontMat, rearMat, roofMat, trim, sideMat, sideMat], 0, 0.34, 0),
-      this.box(1.74, 0.09, 0.9, trim, 0, 0.17, 0)
+      this.box(0.22, 0.03, 0.90, carbonMat, 0.82, 0.12, 0),
+      this.box(1.12, 0.04, 0.04, carbonMat, 0, 0.13, -0.45),
+      this.box(1.12, 0.04, 0.04, carbonMat, 0, 0.13, 0.45),
+      this.box(0.14, 0.05, 0.82, carbonMat, -0.84, 0.13, 0)
+    );
+    for (const fz of [-0.18, 0, 0.18]) {
+      bodyGroup.add(this.box(0.12, 0.07, 0.025, carbonMat, -0.88, 0.14, fz, false, false));
+    }
+
+    // Quad cylindrical chrome performance exhaust tips
+    for (const ez of [-0.23, -0.16, 0.16, 0.23]) {
+      bodyGroup.add(this.cylX(0.022, 0.11, chromeMat, -0.89, 0.17, ez, false, true));
+    }
+
+    // Sculpted rear GT wing spoiler on twin pylons + aerodynamic endplates
+    const wingBlade = this.box(0.15, 0.028, 0.90, carbonMat, -0.82, 0.51, 0);
+    wingBlade.rotation.z = -0.08;
+    bodyGroup.add(
+      wingBlade,
+      this.box(0.07, 0.11, 0.03, carbonMat, -0.80, 0.44, -0.22),
+      this.box(0.07, 0.11, 0.03, carbonMat, -0.80, 0.44, 0.22),
+      this.box(0.17, 0.08, 0.022, paintMain, -0.82, 0.51, -0.45),
+      this.box(0.17, 0.08, 0.022, paintMain, -0.82, 0.51, 0.45)
     );
 
-    // Cab & pixel-art reflected windshields/windows (isolated into cabGroup so FPS cockpit hides interior glass)
-    const cabGroup = new THREE.Group();
-    cabGroup.add(
-      this.box(0.88, 0.33, 0.76, [paintMain, paintMain, roofMat, trim, paintMain, paintMain], -0.05, 0.67, 0),
-      this.box(0.9, 0.22, 0.66, glassMat, -0.05, 0.66, 0),
-      this.box(0.68, 0.21, 0.78, glassMat, -0.05, 0.66, 0)
+    // Teardrop aero side mirrors
+    bodyGroup.add(
+      this.box(0.09, 0.045, 0.11, carbonMat, 0.30, 0.44, -0.46),
+      this.box(0.09, 0.045, 0.11, carbonMat, 0.30, 0.44, 0.46)
     );
+
+    // Mid-engine V8 valve covers tucked beneath the rear clamshell deck
+    bodyGroup.add(
+      this.box(0.28, 0.07, 0.42, carbonMat, -0.62, 0.37, 0, false, false),
+      this.box(0.24, 0.03, 0.12, paintMain, -0.62, 0.41, -0.11, false, false),
+      this.box(0.24, 0.03, 0.12, paintMain, -0.62, 0.41, 0.11, false, false)
+    );
+
+    // Sleek teardrop cockpit canopy (isolated in cabGroup so FPS cockpit view hides interior glass)
+    const cabGroup = new THREE.Group();
+    const canopyMesh = new THREE.Mesh(this.supercarCanopyGeo, [glassMat, paintRoof, glassMat, glassMat]);
+    canopyMesh.castShadow = true;
+    canopyMesh.receiveShadow = true;
+    cabGroup.add(canopyMesh);
+
+    // Painted roof cap & NACA roof air scoop
+    cabGroup.add(this.box(0.36, 0.022, 0.66, paintRoof, -0.02, 0.625, 0));
+    if (!police) {
+      cabGroup.add(this.box(0.18, 0.042, 0.16, carbonMat, -0.08, 0.648, 0));
+    }
     bodyGroup.add(cabGroup);
 
-    // Side mirrors & exhaust pipe
-    bodyGroup.add(
-      this.box(0.08, 0.08, 0.08, trim, 0.32, 0.56, -0.45),
-      this.box(0.08, 0.08, 0.08, trim, 0.32, 0.56, 0.45),
-      this.box(0.14, 0.06, 0.06, this.getMat('#6e767d', { roughness: 0.3, metalness: 0.8 }), -0.86, 0.16, 0.24)
-    );
-
-    // Trunk lid hinged near cab rear (-0.48, 0.52, 0)
+    // Hinged rear mid-engine clamshell deck (-0.43, 0.41, 0) lifts upward when searched
     const trunkPivot = new THREE.Group();
-    trunkPivot.position.set(-0.48, 0.52, 0);
-    trunkPivot.add(this.box(0.36, 0.06, 0.78, roofMat, -0.18, 0, 0));
+    trunkPivot.position.set(-0.43, 0.41, 0);
+    trunkPivot.add(
+      this.box(0.38, 0.026, 0.68, carbonMat, -0.19, 0.006, 0),
+      this.box(0.34, 0.032, 0.10, paintMain, -0.19, 0.008, -0.30),
+      this.box(0.34, 0.032, 0.10, paintMain, -0.19, 0.008, 0.30)
+    );
     bodyGroup.add(trunkPivot);
 
-    // Emissive Headlights & Taillights
-    const headMat = this.getMat('#fff0a3', { emissive: '#fff0a3', emissiveIntensity: 1.3, roughness: 0.2 });
-    bodyGroup.add(this.box(0.06, 0.1, 0.16, headMat, 0.84, 0.36, -0.28, false, false));
-    bodyGroup.add(this.box(0.06, 0.1, 0.16, headMat, 0.84, 0.36, 0.28, false, false));
+    // Emissive LED DRL headlight blades
+    const headMat = this.getMat('#fff5c2', { emissive: '#fff0a3', emissiveIntensity: 1.4, roughness: 0.18 });
+    const hlL = this.box(0.05, 0.042, 0.19, headMat, 0.87, 0.25, -0.30, false, false);
+    hlL.rotation.y = 0.20;
+    const hlR = this.box(0.05, 0.042, 0.19, headMat, 0.87, 0.25, 0.30, false, false);
+    hlR.rotation.y = -0.20;
+    bodyGroup.add(hlL, hlR);
 
-    const tailMatL = this.getMat('#eb4438', { emissive: '#eb4438', emissiveIntensity: 0.5, roughness: 0.25 });
+    // Twin rear LED taillight strips (pulsed on brake/drift)
+    const tailMatL = this.getMat('#ff3b30', { emissive: '#ff3b30', emissiveIntensity: 0.5, roughness: 0.22 });
     const tailMatR = tailMatL.clone();
     this.materials.push(tailMatR);
-    const tl = this.box(0.06, 0.1, 0.16, tailMatL, -0.84, 0.36, -0.28, false, false);
-    const tr = this.box(0.06, 0.1, 0.16, tailMatR, -0.84, 0.36, 0.28, false, false);
+    const tl = this.box(0.045, 0.048, 0.24, tailMatL, -0.89, 0.33, -0.27, false, false);
+    const tr = this.box(0.045, 0.048, 0.24, tailMatR, -0.89, 0.33, 0.27, false, false);
     bodyGroup.add(tl, tr);
 
-    // Circular tires (tread on cylinder side, hubcap faces on +Z / -Z)
+    // Wide low-profile supercar tires & 10-spoke Y-alloy wheels
     const wheelMats = [tireMat, wheelFaceMat, wheelFaceMat];
-    const makeWheel = () => this.cylinderWheel(0.36, 0.14, wheelMats, 0, 0, 0);
+    const makeWheel = () => this.cylinderWheel(0.34, 0.15, wheelMats, 0, 0, 0);
 
     const wheelFL = new THREE.Group();
-    wheelFL.position.set(0.52, 0.18, -0.44);
+    wheelFL.position.set(0.55, 0.17, -0.42);
     const wFL = makeWheel();
     wheelFL.add(wFL);
 
     const wheelFR = new THREE.Group();
-    wheelFR.position.set(0.52, 0.18, 0.44);
+    wheelFR.position.set(0.55, 0.17, 0.42);
     const wFR = makeWheel();
     wheelFR.add(wFR);
 
     const wRL = makeWheel();
-    wRL.position.set(-0.52, 0.18, -0.44);
+    wRL.position.set(-0.55, 0.17, -0.42);
     const wRR = makeWheel();
-    wRR.position.set(-0.52, 0.18, 0.44);
+    wRR.position.set(-0.55, 0.17, 0.42);
 
     bodyGroup.add(wheelFL, wheelFR, wRL, wRR);
 
     let sirenRed: THREE.Mesh | undefined;
     let sirenBlue: THREE.Mesh | undefined;
     if (police) {
-      cabGroup.add(this.box(0.14, 0.08, 0.56, trim, -0.02, 0.87, 0));
-      const redMat = this.getMat('#ff5952', { emissive: '#ff5952', emissiveIntensity: 0.25, roughness: 0.2 }).clone();
-      const blueMat = this.getMat('#5ea8ff', { emissive: '#5ea8ff', emissiveIntensity: 0.25, roughness: 0.2 }).clone();
+      // Matte-steel interceptor push-bar on front fascia
+      bodyGroup.add(
+        this.box(0.045, 0.15, 0.48, carbonMat, 0.91, 0.21, 0),
+        this.box(0.05, 0.18, 0.04, carbonMat, 0.91, 0.22, -0.15),
+        this.box(0.05, 0.18, 0.04, carbonMat, 0.91, 0.22, 0.15)
+      );
+
+      // Low-profile aerodynamic LED lightbar on cab roof
+      cabGroup.add(this.box(0.12, 0.045, 0.58, carbonMat, -0.02, 0.652, 0));
+      const redMat = this.getMat('#ff4a42', { emissive: '#ff4a42', emissiveIntensity: 0.25, roughness: 0.18 }).clone();
+      const blueMat = this.getMat('#4da3ff', { emissive: '#4da3ff', emissiveIntensity: 0.25, roughness: 0.18 }).clone();
       this.materials.push(redMat, blueMat);
-      sirenRed = this.box(0.12, 0.09, 0.22, redMat, -0.02, 0.92, -0.16, false, false);
-      sirenBlue = this.box(0.12, 0.09, 0.22, blueMat, -0.02, 0.92, 0.16, false, false);
+      sirenRed = this.box(0.11, 0.055, 0.22, redMat, -0.02, 0.665, -0.17, false, false);
+      sirenBlue = this.box(0.11, 0.055, 0.22, blueMat, -0.02, 0.665, 0.17, false, false);
       cabGroup.add(sirenRed, sirenBlue);
-      cabGroup.add(this.box(0.12, 0.08, 0.12, this.getMat('#dce2e8', { roughness: 0.3 }), -0.02, 0.92, 0, false, false));
+      cabGroup.add(this.box(0.11, 0.055, 0.12, this.getMat('#dce8f5', { roughness: 0.22 }), -0.02, 0.665, 0, false, false));
     }
 
     const glintMesh = this.box(
@@ -1063,8 +1529,8 @@ export class ThreeModelFactory {
       0.09,
       0.09,
       this.getMat('#f0d078', { emissive: '#f0d078', emissiveIntensity: 0.9 }),
-      -0.65,
-      1.12,
+      -0.62,
+      0.98,
       0,
       false,
       false
@@ -1248,19 +1714,40 @@ export class ThreeModelFactory {
       g.add(this.box(0.06, 0.01, 0.022, receiver, 0.055, -0.024, 0, false, false));
       g.add(this.box(0.01, 0.026, 0.01, steel, 0.058, -0.005, 0, false, false));
     } else {
-      const glass = this.getMat(0xffffff, { map: wTex.molotovGlass, roughness: 0.24, metalness: 0.12 });
+      const glass = this.getMat(0xffffff, { map: wTex.molotovGlass, roughness: 0.22, metalness: 0.14 });
       const cloth = this.getMat('#e6dcc8', { roughness: 0.9 });
-      const flame = this.getMat('#f59e27', { emissive: '#ffae38', emissiveIntensity: 1.7 });
-      const coreFlame = this.getMat('#fff3b0', { emissive: '#fff3b0', emissiveIntensity: 2.0 });
-      g.add(this.box(0.12, 0.18, 0.12, glass, 0.06, 0.05, 0));
-      g.add(this.box(0.065, 0.06, 0.065, glass, 0.06, 0.16, 0));
-      g.add(this.box(0.058, 0.07, 0.058, cloth, 0.06, 0.21, 0));
+      const flameCardMat = this.getMat(0xffffff, {
+        map: this.atlas.flameTex,
+        emissive: '#ffaa38',
+        emissiveMap: this.atlas.flameTex,
+        emissiveIntensity: 1.65,
+        alphaTest: 0.18,
+        transparent: true,
+        side: THREE.DoubleSide,
+      });
+      const coreFlame = this.getMat('#fff3b0', { emissive: '#fff3b0', emissiveIntensity: 2.15 });
+
+      const bottleBody = this.cylX(0.062, 0.17, glass, 0.06, 0.045, 0, true, false);
+      bottleBody.rotation.z = Math.PI * 0.5;
+      const shoulder = this.taperedMesh(0.056, 0.056, 0.115, 0.115, 0.055, glass, 0.06, 0.13, 0, false, false, false);
+      const neck = this.cylX(0.028, 0.055, glass, 0.06, 0.205, 0, false, false);
+      neck.rotation.z = Math.PI * 0.5;
+      const rag = this.taperedMesh(0.036, 0.036, 0.054, 0.054, 0.06, cloth, 0.06, 0.225, 0, false, false, false);
+      g.add(bottleBody, shoulder, neck, rag);
+
       const flameGroup = new THREE.Group();
-      flameGroup.position.set(0.06, 0.26, 0);
-      flameGroup.add(
-        this.box(0.075, 0.095, 0.075, flame, 0, 0, 0, false, false),
-        this.box(0.045, 0.065, 0.045, coreFlame, 0, 0.02, 0, false, false)
-      );
+      flameGroup.position.set(0.06, 0.285, 0);
+      for (const ry of [0, Math.PI * 0.5]) {
+        const card = new THREE.Mesh(this.flameCardGeo, flameCardMat);
+        card.scale.set(0.13, 0.16, 1);
+        card.position.set(0, 0.04, 0);
+        card.rotation.y = ry;
+        flameGroup.add(card);
+      }
+      const spire = new THREE.Mesh(this.flameSpireGeo, coreFlame);
+      spire.scale.set(0.055, 0.095, 0.055);
+      spire.position.set(0, 0.035, 0);
+      flameGroup.add(spire);
       g.add(flameGroup);
       g.userData.molotovFlame = flameGroup;
     }
@@ -1270,6 +1757,8 @@ export class ThreeModelFactory {
   public createActorRig(kind: 'player' | ZombieArchetype): ActorRig3D {
     const isPlayer = kind === 'player';
     const isBloater = kind === 'bloater';
+    const isRunner = kind === 'runner';
+    const isSpitter = kind === 'spitter';
     const hTex = this.atlas.actorHeadTex[kind];
     const tTex = this.atlas.actorTorsoTex[kind];
     const lTex = this.atlas.actorLimbTex[kind];
@@ -1352,14 +1841,14 @@ export class ThreeModelFactory {
     const flashMeshes: THREE.Mesh[] = [];
 
     const root = new THREE.Group();
-    this.addContactShadow(root, isBloater ? 0.9 : 0.68, isBloater ? 0.9 : 0.68);
+    this.addContactShadow(root, isBloater ? 0.96 : 0.68, isBloater ? 0.96 : 0.68);
 
     const bodyPivot = new THREE.Group();
     root.add(bodyPivot);
 
-    // Legs with cuffed combat boots
-    const legH = 0.32;
-    const legSpread = isBloater ? 0.16 : 0.11;
+    // Legs with sculpted tapered calves/thighs + cuffed combat boots
+    const legH = isRunner ? 0.34 : 0.32;
+    const legSpread = isBloater ? 0.18 : 0.11;
     const leftLegPivot = new THREE.Group();
     leftLegPivot.position.set(0, legH, -legSpread);
     const rightLegPivot = new THREE.Group();
@@ -1370,37 +1859,69 @@ export class ThreeModelFactory {
     flashMaterials.push(bootHiMat);
 
     const makeLeg = (pivot: THREE.Group) => {
-      const l = this.box(0.13, 0.22, 0.13, pantsTexMat, 0, -0.11, 0);
-      const cuff = this.box(0.15, 0.03, 0.14, bootHiMat, 0.01, -0.21, 0);
-      const b = this.box(0.17, 0.1, 0.14, bootMat, 0.02, -0.27, 0);
-      pivot.add(l, cuff, b);
-      flashMeshes.push(l, cuff, b);
+      if (isPlayer) {
+        const l = this.box(0.13, 0.22, 0.13, pantsTexMat, 0, -0.11, 0);
+        const cuff = this.box(0.15, 0.03, 0.14, bootHiMat, 0.01, -0.21, 0);
+        const b = this.box(0.17, 0.1, 0.14, bootMat, 0.02, -0.27, 0);
+        pivot.add(l, cuff, b);
+        flashMeshes.push(l, cuff, b);
+      } else {
+        const topW = isBloater ? 0.18 : isRunner ? 0.125 : 0.14;
+        const botW = isBloater ? 0.14 : isRunner ? 0.085 : 0.10;
+        const legMesh = this.taperedMesh(
+          topW,
+          topW,
+          botW,
+          botW,
+          legH - 0.09,
+          pantsTexMat,
+          0,
+          -(legH - 0.09),
+          0
+        );
+        const cuff = this.box(botW + 0.02, 0.028, botW + 0.02, bootHiMat, 0.01, -(legH - 0.1), 0);
+        const boot = this.taperedMesh(
+          botW + 0.01,
+          botW + 0.01,
+          botW + 0.05,
+          botW + 0.02,
+          0.09,
+          bootMat,
+          0.02,
+          -legH,
+          0
+        );
+        pivot.add(legMesh, cuff, boot);
+        flashMeshes.push(legMesh, cuff, boot);
+      }
     };
     makeLeg(leftLegPivot);
     makeLeg(rightLegPivot);
     bodyPivot.add(leftLegPivot, rightLegPivot);
 
-    // Pixel-art textured torso (+X front, -X back, sides)
+    // Torso
     const torso = new THREE.Group();
     torso.position.set(0, legH, 0);
     bodyPivot.add(torso);
 
-    const torsoW = isBloater ? 0.42 : 0.28;
-    const torsoD = isBloater ? 0.56 : 0.38;
-    const torsoH = isBloater ? 0.44 : 0.38;
-    const torsoCore = this.box(
-      torsoW,
-      torsoH,
-      torsoD,
-      [torsoFrontMat, torsoBackMat, torsoSideMat, torsoSideMat, torsoSideMat, torsoSideMat],
-      0,
-      torsoH * 0.5,
-      0
-    );
-    torso.add(torsoCore);
-    flashMeshes.push(torsoCore);
+    const torsoW = isBloater ? 0.42 : isRunner ? 0.26 : isSpitter ? 0.25 : 0.28;
+    const torsoD = isBloater ? 0.56 : isRunner ? 0.41 : isSpitter ? 0.35 : 0.38;
+    const torsoH = isBloater ? 0.45 : isRunner ? 0.38 : isSpitter ? 0.39 : 0.38;
 
+    let bloaterPustuleMat: THREE.MeshStandardMaterial | null = null;
     if (isPlayer) {
+      const torsoCore = this.box(
+        torsoW,
+        torsoH,
+        torsoD,
+        [torsoFrontMat, torsoBackMat, torsoSideMat, torsoSideMat, torsoSideMat, torsoSideMat],
+        0,
+        torsoH * 0.5,
+        0
+      );
+      torso.add(torsoCore);
+      flashMeshes.push(torsoCore);
+
       const packMat = makeActorMat(0xffffff, 0.9, 0.05, this.atlas.backpackTex);
       const tarpMat = makeActorMat('#706443', 0.9);
       const canteenMat = makeActorMat('#75828a', 0.35, 0.75);
@@ -1412,65 +1933,246 @@ export class ThreeModelFactory {
         this.box(0.11, 0.07, 0.27, tarpMat, -torsoW * 0.5 - 0.06, 0.34, 0),
         this.box(0.07, 0.1, 0.07, canteenMat, -torsoW * 0.5 - 0.08, 0.13, 0.13)
       );
-    } else if (kind === 'bloater') {
-      const pustuleMat = makeActorMat('#c8ff59', 0.4, 0, undefined, '#9ed93b', 1.1);
-      allMaterials.push(pustuleMat);
-      torso.add(
-        this.box(0.1, 0.14, 0.12, pustuleMat, torsoW * 0.48, 0.26, 0.12),
-        this.box(0.1, 0.12, 0.1, pustuleMat, -0.1, 0.2, -torsoD * 0.46)
+    } else {
+      // Sculpted V-tapered/hunched anatomical zombie torsos + pelvis bridge to hips
+      const botW = isBloater ? 0.37 : isRunner ? 0.20 : isSpitter ? 0.20 : 0.23;
+      const botD = isBloater ? 0.50 : isRunner ? 0.31 : isSpitter ? 0.28 : 0.32;
+      const pelvis = this.taperedMesh(
+        botW,
+        botD,
+        botW * 0.95,
+        Math.max(botD - 0.02, 0.26),
+        0.09,
+        torsoSideMat,
+        0,
+        -0.05,
+        0
       );
-    } else if (kind === 'spitter') {
-      const spineMat = makeActorMat('#6ef7be', 0.35, 0.1, undefined, '#5ef2b5', 1.25);
-      allMaterials.push(spineMat);
-      torso.add(
-        this.box(0.08, 0.1, 0.06, spineMat, -torsoW * 0.55, 0.3, 0),
-        this.box(0.08, 0.1, 0.06, spineMat, -torsoW * 0.55, 0.15, 0)
+      torso.add(pelvis);
+      flashMeshes.push(pelvis);
+
+      const torsoCore = this.taperedMesh(
+        torsoW,
+        torsoD,
+        botW,
+        botD,
+        torsoH,
+        [torsoFrontMat, torsoBackMat, torsoSideMat, torsoSideMat, torsoSideMat, torsoSideMat],
+        0,
+        0,
+        0
       );
+      torso.add(torsoCore);
+      flashMeshes.push(torsoCore);
+
+      if (kind === 'walker') {
+        // Asymmetric hunched shoulder/back lump
+        const hunch = this.taperedMesh(0.15, 0.22, 0.19, 0.28, 0.10, torsoBackMat, -0.05, 0.29, 0.03);
+        torso.add(hunch);
+        flashMeshes.push(hunch);
+      } else if (kind === 'runner') {
+        // Angled hunched shoulder blades for predatory forward posture
+        const shoulders = this.taperedMesh(0.24, 0.43, 0.22, 0.38, 0.09, torsoSideMat, 0.02, 0.30, 0);
+        torso.add(shoulders);
+        flashMeshes.push(shoulders);
+      } else if (kind === 'bloater') {
+        // Protruding necrotic gut dome + pixel-art textured bioluminescent pustules
+        const belly = this.taperedMesh(0.18, 0.32, 0.24, 0.40, 0.24, torsoFrontMat, 0.10, 0.03, 0);
+        torso.add(belly);
+        flashMeshes.push(belly);
+
+        // Permanently emissive textured pustules (excluded from flashMaterials so hit-flash preserves glow)
+        bloaterPustuleMat = makeActorMat(0xffffff, 0.38, 0, this.atlas.pustuleTex.lime, '#78b828', 0.85);
+        allMaterials.push(bloaterPustuleMat);
+        const pustulePositions: Array<[number, number, number, number, number, number]> = [
+          [0.19, 0.29, 0.12, 0.95, 1.05, 0.95],
+          [0.21, 0.15, -0.13, 1.08, 0.95, 1.0],
+          [0.17, 0.20, 0.03, 0.72, 0.72, 0.72],
+          [-0.17, 0.33, -0.14, 0.95, 0.95, 0.85],
+          [-0.18, 0.18, 0.13, 0.85, 0.9, 0.85],
+          [0.02, 0.40, -0.21, 0.85, 0.78, 0.85],
+        ];
+        for (const [px, py, pz, sx, sy, sz] of pustulePositions) {
+          const pMesh = new THREE.Mesh(this.pustuleGeo, bloaterPustuleMat);
+          pMesh.position.set(px, py, pz);
+          pMesh.scale.set(sx, sy, sz);
+          pMesh.castShadow = true;
+          torso.add(pMesh);
+        }
+      } else if (kind === 'spitter') {
+        // Textured bioluminescent venom glands on sternum + jagged dorsal spines
+        const spineMat = makeActorMat(0xffffff, 0.32, 0.08, this.atlas.pustuleTex.cyan, '#39cf98', 0.95);
+        allMaterials.push(spineMat);
+
+        const sacMain = new THREE.Mesh(this.pustuleGeo, spineMat);
+        sacMain.position.set(0.11, 0.25, 0);
+        sacMain.scale.set(0.92, 1.25, 1.05);
+        const sacSub = new THREE.Mesh(this.pustuleGeo, spineMat);
+        sacSub.position.set(0.12, 0.17, -0.05);
+        sacSub.scale.set(0.62, 0.74, 0.68);
+        torso.add(sacMain, sacSub);
+
+        for (let i = 0; i < 4; i++) {
+          const spine = new THREE.Mesh(this.spineConeGeo, spineMat);
+          spine.position.set(-0.13 - i * 0.008, 0.10 + i * 0.085, 0);
+          spine.rotation.z = 1.15;
+          torso.add(spine);
+        }
+      }
     }
 
-    // Pixel-art textured Head (+X front face with goggles/eyes/jaw)
+    // Head
     const headPivot = new THREE.Group();
-    headPivot.position.set(0, torsoH, 0);
+    headPivot.position.set(isSpitter ? 0.08 : isRunner ? 0.05 : isBloater ? 0.04 : 0.02, isBloater ? torsoH - 0.04 : torsoH, 0);
     torso.add(headPivot);
 
     const headSize = isBloater ? 0.32 : 0.29;
-    const headMesh = this.box(
-      headSize,
-      headSize,
-      headSize,
-      [headFrontMat, headBackMat, headTopMat, headSideMat, headSideMat, headSideMat],
-      0,
-      headSize * 0.5 + 0.02,
-      0
-    );
-    headPivot.add(headMesh);
-    flashMeshes.push(headMesh);
-
     if (isPlayer) {
+      const headMesh = this.box(
+        headSize,
+        headSize,
+        headSize,
+        [headFrontMat, headBackMat, headTopMat, headSideMat, headSideMat, headSideMat],
+        0,
+        headSize * 0.5 + 0.02,
+        0
+      );
+      headPivot.add(headMesh);
+      flashMeshes.push(headMesh);
+
       const brimMat = makeActorMat('#2d3626', 0.88);
       allMaterials.push(brimMat);
       flashMaterials.push(brimMat);
       headPivot.add(
         this.box(0.08, 0.03, headSize + 0.02, brimMat, headSize * 0.5 + 0.035, headSize - 0.075, 0)
       );
+    } else {
+      // Sculpted organic skull (domed crown narrower than cheekbones) + dedicated lower mandible jaw + neck stalk
+      const neck = this.taperedMesh(0.12, 0.12, 0.16, 0.16, 0.08, headSideMat, -0.02, -0.02, 0);
+      headPivot.add(neck);
+      flashMeshes.push(neck);
+
+      const craniumTop = isBloater ? 0.26 : isSpitter ? 0.19 : isRunner ? 0.20 : 0.22;
+      const craniumBot = isBloater ? 0.31 : isSpitter ? 0.23 : isRunner ? 0.24 : 0.26;
+      const craniumH = isBloater ? 0.25 : 0.22;
+      const cranium = this.taperedMesh(
+        craniumTop,
+        craniumTop,
+        craniumBot,
+        craniumBot,
+        craniumH,
+        [headFrontMat, headBackMat, headTopMat, headSideMat, headSideMat, headSideMat],
+        0.01,
+        0.06,
+        0
+      );
+      headPivot.add(cranium);
+      flashMeshes.push(cranium);
+
+      const crownCap = this.taperedMesh(
+        craniumTop * 0.78,
+        craniumTop * 0.78,
+        craniumTop * 0.98,
+        craniumTop * 0.98,
+        0.032,
+        headTopMat,
+        0.01,
+        0.06 + craniumH,
+        0
+      );
+      headPivot.add(crownCap);
+      flashMeshes.push(crownCap);
+
+      // Dedicated snarling lower mandible jaw (uses teeth/blood jaw texture, never full head eyes!)
+      const jawFrontMat = makeActorMat(0xffffff, 0.84, 0.05, hTex.jaw ?? hTex.side);
+      allMaterials.push(jawFrontMat);
+      flashMaterials.push(jawFrontMat);
+
+      const jaw = this.taperedMesh(
+        isBloater ? 0.21 : 0.17,
+        isBloater ? 0.22 : 0.17,
+        isBloater ? 0.17 : 0.13,
+        isBloater ? 0.18 : 0.13,
+        0.07,
+        [jawFrontMat, headBackMat, jawFrontMat, headSideMat, headSideMat, headSideMat],
+        0.038,
+        -0.002,
+        0
+      );
+      jaw.rotation.z = isSpitter || isRunner ? -0.22 : -0.12;
+      headPivot.add(jaw);
+      flashMeshes.push(jaw);
+
+      if (kind === 'walker') {
+        headPivot.rotation.x = 0.10; // Undead lurch head tilt
+      } else if (kind === 'bloater' && bloaterPustuleMat) {
+        const headPustule = new THREE.Mesh(this.pustuleGeo, bloaterPustuleMat);
+        headPustule.position.set(0.08, 0.27, -0.10);
+        headPustule.scale.set(0.85, 0.78, 0.85);
+        headPivot.add(headPustule);
+      }
     }
 
-    // Arms
+    // Arms (tucked into shoulder socket with deltoid cap & inward zombie reach)
     const leftArmPivot = new THREE.Group();
-    leftArmPivot.position.set(0, torsoH - 0.06, -(torsoD * 0.5 + 0.06));
+    leftArmPivot.position.set(0, torsoH - 0.055, isPlayer ? -(torsoD * 0.5 + 0.055) : -(torsoD * 0.5 + 0.02));
     const rightArmPivot = new THREE.Group();
-    rightArmPivot.position.set(0, torsoH - 0.06, torsoD * 0.5 + 0.06);
+    rightArmPivot.position.set(0, torsoH - 0.055, isPlayer ? torsoD * 0.5 + 0.055 : torsoD * 0.5 + 0.02);
 
-    const clawMat = makeActorMat('#a82828', 0.7);
+    const clawMat = makeActorMat(isSpitter ? '#4be3a5' : '#8c1d1d', 0.65);
     allMaterials.push(clawMat);
     flashMaterials.push(clawMat);
 
-    const makeArm = (pivot: THREE.Group, isZombie: boolean) => {
+    const makeArm = (pivot: THREE.Group, isZombie: boolean, sideSign: number) => {
       if (isZombie) {
-        const a = this.box(0.32, 0.11, 0.11, sleeveTexMat, 0.14, 0, 0);
-        const claw = this.box(0.07, 0.09, 0.09, clawMat, 0.3, 0, 0);
-        pivot.add(a, claw);
-        flashMeshes.push(a);
+        const thick = isBloater ? 0.14 : isRunner ? 0.095 : 0.105;
+        const len1 = isRunner ? 0.21 : 0.18;
+        const len2 = isRunner ? 0.22 : 0.18;
+
+        // Slight inward reach & slouch so arms read clearly in both front FPS and ISO views
+        pivot.rotation.y = sideSign * 0.16;
+        pivot.rotation.z = isBloater ? -0.20 : isRunner ? -0.06 : -0.14;
+
+        // Shoulder deltoid cap bridging torso to upper arm with zero air gap
+        const shoulderCap = this.box(thick * 1.15, thick * 1.1, thick * 1.15, sleeveTexMat, 0.01, -0.005, -sideSign * 0.015);
+        const upper = this.box(len1, thick, thick, sleeveTexMat, len1 * 0.5, 0, 0);
+        const forearmGroup = new THREE.Group();
+        forearmGroup.position.set(len1 - 0.015, 0, 0);
+        forearmGroup.rotation.z = isRunner ? -0.32 : isSpitter ? -0.26 : -0.22;
+        forearmGroup.rotation.y = sideSign * 0.12;
+        const forearm = this.taperedMesh(
+          thick * 0.94,
+          thick * 0.94,
+          thick * 0.72,
+          thick * 0.72,
+          len2,
+          sleeveTexMat,
+          len2 * 0.5,
+          0,
+          0,
+          true
+        );
+        forearm.rotation.z = Math.PI * 0.5;
+        forearm.position.set(len2 * 0.5, 0, 0);
+
+        const claw = this.taperedMesh(
+          thick * 0.68,
+          thick * 0.68,
+          0.03,
+          0.04,
+          isRunner ? 0.11 : 0.08,
+          clawMat,
+          0,
+          0,
+          0,
+          true
+        );
+        claw.rotation.z = Math.PI * 0.5;
+        claw.position.set(len2 + (isRunner ? 0.045 : 0.035), 0, 0);
+
+        forearmGroup.add(forearm, claw);
+        pivot.add(shoulderCap, upper, forearmGroup);
+        flashMeshes.push(shoulderCap, upper, forearm, claw);
       } else {
         const sleeve = this.box(0.11, 0.2, 0.11, sleeveTexMat, 0, -0.08, 0);
         const hand = this.box(0.1, 0.1, 0.1, skinMat, 0, -0.22, 0);
@@ -1478,8 +2180,8 @@ export class ThreeModelFactory {
         flashMeshes.push(sleeve, hand);
       }
     };
-    makeArm(leftArmPivot, !isPlayer);
-    makeArm(rightArmPivot, !isPlayer);
+    makeArm(leftArmPivot, !isPlayer, -1);
+    makeArm(rightArmPivot, !isPlayer, 1);
     torso.add(leftArmPivot, rightArmPivot);
 
     const rig: ActorRig3D = {
@@ -1615,6 +2317,7 @@ export class ThreeModelFactory {
     for (const g of this.geometries) g.dispose();
     for (const m of this.materials) m.dispose();
     this.geometries = [];
+    this.geoCache.clear();
     this.materials = [];
     this.matCache.clear();
   }

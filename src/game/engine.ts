@@ -268,7 +268,8 @@ export class SurvivalEngine {
   private ambientAsh: Array<{ x: number; y: number; speed: number; drift: number; size: number; alpha: number }> = [];
 
   // Camera in unscaled isometric pixel coordinates + First-Person mode state
-  private cameraMode: CameraMode = 'iso';
+  private cameraMode: CameraMode = getSettings().defaultCameraMode;
+  private lastSettingCameraMode: CameraMode = getSettings().defaultCameraMode;
   private fpsPitch = -0.05;
   private fpsCarLookOffset = 0;
   private fpsStrafeInput = 0;
@@ -316,8 +317,20 @@ export class SurvivalEngine {
   ) {
     this.canvas = canvas;
     this.threeRenderer = new ThreeIsometricRenderer(canvas);
-    this.applyGraphicsQuality(getSettings().graphicsQuality);
-    subscribeSettings((s) => this.applyGraphicsQuality(s.graphicsQuality));
+    const initialSettings = getSettings();
+    this.cameraMode = initialSettings.defaultCameraMode;
+    this.lastSettingCameraMode = initialSettings.defaultCameraMode;
+    this.applyGraphicsQuality(initialSettings.graphicsQuality);
+    subscribeSettings((s) => {
+      this.applyGraphicsQuality(s.graphicsQuality);
+      if (s.defaultCameraMode !== this.lastSettingCameraMode) {
+        this.lastSettingCameraMode = s.defaultCameraMode;
+        this.setCameraMode(s.defaultCameraMode, true);
+      }
+      if (this.phase !== 'title') {
+        this.render();
+      }
+    });
     this.onHudUpdate = onHudUpdate;
     this.onPhaseChange = onPhaseChange;
     this.onRequestOpenCook = onRequestOpenCook;
@@ -1322,17 +1335,17 @@ export class SurvivalEngine {
     soundEngine.unlock();
     this.usingVirtualAim = true;
     if (this.phase !== 'playing' || this.modalOpen || this.cameraMode !== 'fps') return;
-    const sens = getSettings().touchSensitivity;
+    const { touchSensitivity: sens, invertLookY } = getSettings();
     if (this.activeVehicleId !== null) {
       const car = this.getActiveVehicle();
-      const res = applyFirstPersonTouchLookDelta(this.fpsCarLookOffset, this.fpsPitch, dx * sens, dy * sens);
+      const res = applyFirstPersonTouchLookDelta(this.fpsCarLookOffset, this.fpsPitch, dx * sens, dy * sens, undefined, invertLookY);
       this.fpsCarLookOffset = clamp(res.yaw, -Math.PI * 0.65, Math.PI * 0.65);
       this.fpsPitch = clamp(res.pitch, -0.22, 0.28);
       if (car) {
         this.player.facingAngle = wrapAngleRad(car.angle + this.fpsCarLookOffset);
       }
     } else {
-      const res = applyFirstPersonTouchLookDelta(this.player.facingAngle, this.fpsPitch, dx * sens, dy * sens);
+      const res = applyFirstPersonTouchLookDelta(this.player.facingAngle, this.fpsPitch, dx * sens, dy * sens, undefined, invertLookY);
       this.player.facingAngle = res.yaw;
       this.fpsPitch = res.pitch;
     }
@@ -1700,17 +1713,17 @@ export class SurvivalEngine {
   };
 
   private applyFpsMouseLookDelta(dx: number, dy: number): void {
-    const sens = getSettings().touchSensitivity;
+    const { touchSensitivity: sens, invertLookY } = getSettings();
     if (this.activeVehicleId !== null) {
       const car = this.getActiveVehicle();
-      const res = applyFirstPersonLookDelta(this.fpsCarLookOffset, this.fpsPitch, dx * sens, dy * sens);
+      const res = applyFirstPersonLookDelta(this.fpsCarLookOffset, this.fpsPitch, dx * sens, dy * sens, undefined, invertLookY);
       this.fpsCarLookOffset = clamp(res.yaw, -Math.PI * 0.65, Math.PI * 0.65);
       this.fpsPitch = res.pitch;
       if (car) {
         this.player.facingAngle = wrapAngleRad(car.angle + this.fpsCarLookOffset);
       }
     } else {
-      const res = applyFirstPersonLookDelta(this.player.facingAngle, this.fpsPitch, dx * sens, dy * sens);
+      const res = applyFirstPersonLookDelta(this.player.facingAngle, this.fpsPitch, dx * sens, dy * sens, undefined, invertLookY);
       this.player.facingAngle = res.yaw;
       this.fpsPitch = res.pitch;
     }

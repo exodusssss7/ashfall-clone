@@ -109,3 +109,14 @@ test('pickBestDirectionalTarget prioritizes target in front of the player over s
   );
   assert.equal(picked?.id, 'front');
 });
+
+test('applyFirstPersonLookDelta and applyFirstPersonTouchLookDelta support invertY vertical look', () => {
+  const normal = applyFirstPersonLookDelta(0, 0, 0, -100, 0.0026, false);
+  const inverted = applyFirstPersonLookDelta(0, 0, 0, -100, 0.0026, true);
+  assert.ok(normal.pitch > 0);
+  assert.ok(inverted.pitch < 0);
+  assert.ok(Math.abs(normal.pitch + inverted.pitch) < 1e-6);
+
+  const touchInv = applyFirstPersonTouchLookDelta(0, 0, 0, 80, undefined, true);
+  assert.ok(touchInv.pitch > 0);
+});

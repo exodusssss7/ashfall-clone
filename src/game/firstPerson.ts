@@ -5,6 +5,10 @@ export const FPS_PITCH_MAX = Math.PI * 0.32;
 export const FPS_EYE_HEIGHT = 0.88;
 export const FPS_CAR_EYE_HEIGHT = 0.92;
 export const FPS_BASE_FOV = 72;
+export const FPS_FOV_MIN = 60;
+export const FPS_FOV_MAX = 105;
+export const ISO_ZOOM_MIN = 0.75;
+export const ISO_ZOOM_MAX = 1.45;
 export const FPS_TOUCH_LOOK_SENSITIVITY = 0.0046;
 
 export function wrapAngleRad(angle: number): number {
@@ -19,10 +23,12 @@ export function applyFirstPersonLookDelta(
   pitch: number,
   dx: number,
   dy: number,
-  sensitivity = 0.0026
+  sensitivity = 0.0026,
+  invertY = false
 ): { yaw: number; pitch: number } {
   const nextYaw = wrapAngleRad(yaw + dx * sensitivity);
-  const nextPitch = clamp(pitch - dy * sensitivity, FPS_PITCH_MIN, FPS_PITCH_MAX);
+  const pitchDir = invertY ? 1 : -1;
+  const nextPitch = clamp(pitch + dy * sensitivity * pitchDir, FPS_PITCH_MIN, FPS_PITCH_MAX);
   return { yaw: nextYaw, pitch: nextPitch };
 }
 
@@ -31,9 +37,10 @@ export function applyFirstPersonTouchLookDelta(
   pitch: number,
   dx: number,
   dy: number,
-  sensitivity = FPS_TOUCH_LOOK_SENSITIVITY
+  sensitivity = FPS_TOUCH_LOOK_SENSITIVITY,
+  invertY = false
 ): { yaw: number; pitch: number } {
-  return applyFirstPersonLookDelta(yaw, pitch, dx, dy, sensitivity);
+  return applyFirstPersonLookDelta(yaw, pitch, dx, dy, sensitivity, invertY);
 }
 
 export function computeFirstPersonMoveVector(
