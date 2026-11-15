@@ -1,6 +1,6 @@
 # The Alive Horde v1.5 - multitouch weapon switching, warning blinks, HUD resizing
 
-Private source checkpoint based on owner commit ad7dc0f7b4e03807dc4ac5a7a8b8b7c381c19dc5. No repository push was made.
+Private source checkpoint based on owner commit ad7dc0f7b4e03807dc4ac5a7a8b8b7c381c19dc5.
 
 ## Run and edit
 
