@@ -11,6 +11,13 @@ import {
 } from './cookingQte';
 import { AIM_DIRECTION_DEADZONE, touchAimAttack } from './touchAim';
 import { findZombieRoute, type RoutePoint } from './navigation';
+import {
+  canZombieSeePlayer,
+  evaluateCombatPressure,
+  notifyZombieOfSound,
+  pickSafeAmbientSpawnPoint,
+  shouldAllowAmbientSpawn,
+} from './zombieBrain';
 import { applyDoorCellState, getBiomeDisplayName, sampleBiomeAt } from './worldGen';
 import {
   CHUNK_SIZE,
@@ -165,6 +172,13 @@ export class SurvivalEngine {
   }
 
   private steerZombie(z: Zombie, tx: number, ty: number): { dx: number; dy: number } {
+    const directDist = dist(z.x, z.y, tx, ty);
+    if (directDist <= 1.8 && hasLineOfSight(this.worldStore, z.x, z.y, tx, ty, false)) {
+      const dx = tx - z.x;
+      const dy = ty - z.y;
+      const len = Math.hypot(dx, dy) || 1;
+      return { dx: dx / len, dy: dy / len };
+    }
     const target = `${Math.floor(tx)},${Math.floor(ty)}`;
     let route = this.zombieRoutes.get(z.id);
     if (!route || route.target !== target || route.expires < this.elapsedClock) {
@@ -243,6 +257,7 @@ export class SurvivalEngine {
   /** Edit-HUD mode freezes the world while keeping the HUD visible for dragging. */
   private hudEditMode = false;
   private spawnTimer = 2.5;
+  private recentCombatTimer = 0;
   private nextEntityId = 1;
   private hitstopTimer = 0;
   private trauma = 0;
@@ -497,7 +512,8 @@ export class SurvivalEngine {
     this.kills = 0;
     this.score = 0;
     this.scoredLootSources.clear();
-    this.spawnTimer = 3.0;
+    this.spawnTimer = 5.5;
+    this.recentCombatTimer = 0;
     this.hitstopTimer = 0;
     this.trauma = 0;
     this.pendingGameOver = false;
@@ -511,7 +527,7 @@ export class SurvivalEngine {
 
     this.streamChunksAround(effectiveSpawnX, effectiveSpawnY, 3);
 
-    // Seed initial neighborhood zombies at safe distance (>= 13 tiles away from spawn)
+    // Seed initial neighborhood zombies at safe distance (>= 14 tiles away from effective spawn)
     const initialSpots: Array<[number, number, ZombieArchetype]> = [
       [14, 28, 'walker'],
       [42, 28, 'walker'],
@@ -525,8 +541,10 @@ export class SurvivalEngine {
       [46, 28, 'walker'],
     ];
     for (const [zx, zy, arch] of initialSpots) {
-      if (!this.getCell(zx, zy).solid) {
-        this.spawnZombieAt(zx + 0.5, zy + 0.5, arch);
+      const wx = zx + 0.5;
+      const wy = zy + 0.5;
+      if (!this.getCell(zx, zy).solid && dist(wx, wy, effectiveSpawnX, effectiveSpawnY) >= 13.5) {
+        this.spawnZombieAt(wx, wy, arch);
       }
     }
 
@@ -1960,6 +1978,7 @@ export class SurvivalEngine {
     }
 
     this.restCooldownSeconds = tickRestCooldown(this.restCooldownSeconds, dt, this.sleepTransitionTimer <= 0);
+    this.recentCombatTimer = Math.max(0, this.recentCombatTimer - dt);
 
     // Periodic autosave; also saved on pause and when the app is backgrounded.
     this.autosaveTimer -= dt;
@@ -2359,9 +2378,6 @@ export class SurvivalEngine {
           const cell = this.getCell(Math.floor(p.x), Math.floor(p.y));
           const surf = footstepSurfaceForTile(cell.tile);
           if (surf) soundEngine.playFootstep(surf, wantsSprint);
-          if (wantsSprint) {
-            this.emitSound(p.x, p.y, 6.2, false);
-          }
         }
       }
     }
@@ -2567,7 +2583,6 @@ export class SurvivalEngine {
         soundEngine.playMeleeHit(hitCount > 1);
         this.hitstopTimer = 0.045;
         this.trauma = Math.min(1, this.trauma + 0.26);
-        this.emitSound(p.x, p.y, 4.2, false);
       } else {
         // Crowbar can pry open locked doors loudly in 2 hits
         const lockedDoor = this.doors.find(
@@ -3119,15 +3134,7 @@ export class SurvivalEngine {
       });
     }
     for (const z of this.zombies) {
-      if (z.state === 'dying') continue;
-      if (dist(z.x, z.y, x, y) <= radius) {
-        z.lastHeardX = x;
-        z.lastHeardY = y;
-        if (z.state === 'wander') {
-          z.state = 'alert';
-          z.stateTimer = 3.5;
-        }
-      }
+      notifyZombieOfSound(this.worldStore, z, x, y, radius);
     }
   }
 
@@ -3528,15 +3535,29 @@ export class SurvivalEngine {
     hitZ = 0.58
   ): void {
     z.hp -= amount;
-    if (z.hp > 0 && z.state !== 'dying') soundEngine.playZombieHurt(z.archetype);
+    this.recentCombatTimer = Math.max(this.recentCombatTimer, 6.0);
+    if (z.hp > 0 && z.state !== 'dying') {
+      soundEngine.playZombieHurt(z.archetype);
+      // Only the struck zombie reacts to the physical blow and looks toward the attacker
+      const dToP = dist(z.x, z.y, this.player.x, this.player.y);
+      if (dToP > 1e-4) {
+        z.facingX = (this.player.x - z.x) / dToP;
+        z.facingY = (this.player.y - z.y) / dToP;
+      }
+      z.lastHeardX = this.player.x;
+      z.lastHeardY = this.player.y;
+      if (z.state === 'wander' || z.state === 'alert') {
+        z.state = 'chase';
+        z.stateTimer = 4.0;
+      } else if (z.state === 'chase') {
+        z.stateTimer = Math.max(z.stateTimer, 4.0);
+      }
+    }
     z.hitFlash = isHeadshot ? 0.12 : 0.08;
     z.scaleX = isHeadshot ? 1.28 : 1.22;
     z.scaleY = isHeadshot ? 0.76 : 0.8;
     z.vx += kbX;
     z.vy += kbY;
-    if (z.state === 'wander' || z.state === 'alert') {
-      z.state = 'chase';
-    }
     if (isHeadshot) {
       this.hitMarkerTimer = 0.22;
       this.hitMarkerCrit = true;
@@ -3568,6 +3589,8 @@ export class SurvivalEngine {
       z.stateTimer = 0.52;
       z.hasAttackToken = false;
       this.kills += 1;
+      // Prevent a zombie death from triggering an immediate replacement spawn
+      this.spawnTimer = Math.max(this.spawnTimer, 5.0);
       const cfg = ZOMBIE_CONFIGS[z.archetype];
       this.score += cfg.scoreValue;
       this.hitstopTimer = Math.max(this.hitstopTimer, heavy ? 0.05 : 0.028);
@@ -3627,6 +3650,7 @@ export class SurvivalEngine {
   }
 
   private hurtPlayer(amount: number, canBleed: boolean): void {
+    this.recentCombatTimer = Math.max(this.recentCombatTimer, 6.0);
     const activeCar = this.getActiveVehicle();
     if (activeCar && activeCar.hp > 0) {
       activeCar.hp = Math.max(0, activeCar.hp - Math.round(amount));
@@ -3711,38 +3735,55 @@ export class SurvivalEngine {
       const dToPlayer = dist(z.x, z.y, p.x, p.y);
       if (dToPlayer > 44) {
         this.zombieRoutes.delete(z.id);
-          this.zombies.splice(i, 1);
+        this.zombies.splice(i, 1);
         continue;
       }
-      const effectiveSight = cfg.sightRange * (p.flashlightOn ? 1.15 : 1 - darkness * 0.35);
-      const canSeePlayer =
-        dToPlayer <= effectiveSight && hasLineOfSight(this.worldStore, z.x, z.y, p.x, p.y, true);
+
+      // Directional eye-cone vision check (no 360-degree omniscient sight)
+      const canSeePlayer = canZombieSeePlayer(this.worldStore, z, p, darkness);
 
       if (canSeePlayer) {
+        z.lastHeardX = p.x;
+        z.lastHeardY = p.y;
         if (z.state === 'wander' || z.state === 'alert') {
           z.state = 'chase';
+          z.stateTimer = 4.0;
           if (Math.random() < 0.5) soundEngine.playZombieGroan(z.archetype);
+        } else if (z.state === 'chase') {
+          z.stateTimer = Math.max(z.stateTimer, 4.0);
         }
       }
 
       if (z.state === 'wander') {
         const wd = dist(z.x, z.y, z.wanderTargetX, z.wanderTargetY);
-        if (wd < 0.4 || Math.random() < 0.008) {
-          z.wanderTargetX = z.x + (Math.random() - 0.5) * 7;
-          z.wanderTargetY = z.y + (Math.random() - 0.5) * 7;
-        }
         const dx = z.wanderTargetX - z.x;
         const dy = z.wanderTargetY - z.y;
         const len = Math.hypot(dx, dy) || 1;
-        this.moveActor(z, (dx / len) * z.speed * 0.35 * dt, (dy / len) * z.speed * 0.35 * dt, 0.21);
-        z.facingX = dx / len;
-        z.facingY = dy / len;
+        const stepBlocked = this.isPointSolid(z.x + (dx / len) * 0.45, z.y + (dy / len) * 0.45, 0.21);
+        if (wd < 0.45 || stepBlocked || Math.random() < 0.008) {
+          const randAng = Math.random() * Math.PI * 2;
+          const randDist = 3.0 + Math.random() * 3.5;
+          z.wanderTargetX = z.x + Math.cos(randAng) * randDist;
+          z.wanderTargetY = z.y + Math.sin(randAng) * randDist;
+        }
+        const nextDx = z.wanderTargetX - z.x;
+        const nextDy = z.wanderTargetY - z.y;
+        const nextLen = Math.hypot(nextDx, nextDy) || 1;
+        const dirX = nextDx / nextLen;
+        const dirY = nextDy / nextLen;
+        this.moveActor(z, dirX * z.speed * 0.35 * dt, dirY * z.speed * 0.35 * dt, 0.21);
+        const turnBlend = 1 - Math.exp(-dt * 8);
+        const fx = lerp(z.facingX, dirX, turnBlend);
+        const fy = lerp(z.facingY, dirY, turnBlend);
+        const fNorm = Math.hypot(fx, fy) || 1;
+        z.facingX = fx / fNorm;
+        z.facingY = fy / fNorm;
         z.walkCycle += z.speed * 0.35 * dt * 3;
       } else if (z.state === 'alert') {
         z.stateTimer -= dt;
         if (z.lastHeardX !== null && z.lastHeardY !== null) {
           const dHeard = dist(z.x, z.y, z.lastHeardX, z.lastHeardY);
-          if (dHeard > 0.5) {
+          if (dHeard > 0.55) {
             const steer = this.steerZombie(z, z.lastHeardX, z.lastHeardY);
             this.moveActor(z, steer.dx * z.speed * 0.72 * dt, steer.dy * z.speed * 0.72 * dt, 0.21);
             z.facingX = steer.dx;
@@ -3750,16 +3791,41 @@ export class SurvivalEngine {
             z.walkCycle += z.speed * 0.72 * dt * 3;
           } else {
             z.lastHeardX = null;
+            z.lastHeardY = null;
           }
         }
-        if (z.stateTimer <= 0) z.state = 'wander';
+        if (z.stateTimer <= 0) {
+          z.state = 'wander';
+          z.wanderTargetX = z.x + z.facingX * 3.5;
+          z.wanderTargetY = z.y + z.facingY * 3.5;
+        }
       } else if (z.state === 'chase') {
-        const steer = this.steerZombie(z, p.x, p.y);
-        const dx = p.x - z.x;
-        const dy = p.y - z.y;
-        const len = Math.hypot(dx, dy) || 1;
-        z.facingX = dx / len;
-        z.facingY = dy / len;
+        // Pursue live player coordinates only while in visual sight; otherwise pursue last-known position
+        const targetX = canSeePlayer ? p.x : (z.lastHeardX ?? p.x);
+        const targetY = canSeePlayer ? p.y : (z.lastHeardY ?? p.y);
+        if (!canSeePlayer) {
+          z.stateTimer -= dt;
+          const dLastKnown = dist(z.x, z.y, targetX, targetY);
+          if (dLastKnown <= 0.65 || z.stateTimer <= 0) {
+            z.state = 'alert';
+            z.stateTimer = 2.0;
+            z.lastHeardX = null;
+            z.lastHeardY = null;
+            continue;
+          }
+        }
+
+        const steer = this.steerZombie(z, targetX, targetY);
+        if (canSeePlayer) {
+          const dx = p.x - z.x;
+          const dy = p.y - z.y;
+          const len = Math.hypot(dx, dy) || 1;
+          z.facingX = dx / len;
+          z.facingY = dy / len;
+        } else {
+          z.facingX = steer.dx;
+          z.facingY = steer.dy;
+        }
 
         // Check if blocked by a player barricade or closed/barricaded door directly in path
         const nextX = z.x + steer.dx * 0.65;
@@ -3812,7 +3878,7 @@ export class SurvivalEngine {
             my /= mLen;
           }
 
-          if (dToPlayer <= cfg.attackRange) {
+          if (dToPlayer <= cfg.attackRange && canSeePlayer) {
             if (activeAttackers < 3 || z.hasAttackToken) {
               z.hasAttackToken = true;
               activeAttackers++;
@@ -3829,6 +3895,10 @@ export class SurvivalEngine {
         }
       } else if (z.state === 'windup') {
         z.stateTimer -= dt;
+        if (canSeePlayer && dToPlayer > 1e-4) {
+          z.facingX = (p.x - z.x) / dToPlayer;
+          z.facingY = (p.y - z.y) / dToPlayer;
+        }
         // Telegraph crouch
         z.scaleX = 1.16;
         z.scaleY = 0.84;
@@ -3847,7 +3917,13 @@ export class SurvivalEngine {
       } else if (z.state === 'recover') {
         z.stateTimer -= dt;
         if (z.stateTimer <= 0) {
-          z.state = 'chase';
+          if (canSeePlayer || z.lastHeardX !== null) {
+            z.state = 'chase';
+            z.stateTimer = 4.0;
+          } else {
+            z.state = 'alert';
+            z.stateTimer = 2.0;
+          }
         }
       }
     }
@@ -3930,34 +4006,73 @@ export class SurvivalEngine {
     const { phaseLabel } = getDaylightInfo(this.timeMinutes);
     const isNight = phaseLabel === 'NIGHTFALL' || phaseLabel === 'DUSK';
     const maxZombies = Math.min(34, 10 + this.day * 3 + (isNight ? 8 : 0));
+    const baseCooldown = isNight ? Math.max(2.4, 4.8 - this.day * 0.28) : 7.5;
+
+    const canSpawnNow = shouldAllowAmbientSpawn(
+      this.zombies,
+      this.player.x,
+      this.player.y,
+      maxZombies,
+      this.recentCombatTimer,
+      isNight
+    );
+    if (!canSpawnNow) {
+      // Never let spawnTimer sit at <= 0 while capped or in close combat so a kill never triggers an instant spawn
+      this.spawnTimer = Math.max(this.spawnTimer, 2.5);
+      return;
+    }
 
     this.spawnTimer -= dt;
-    if (this.spawnTimer <= 0 && this.zombies.length < maxZombies) {
-      this.spawnTimer = isNight ? Math.max(1.8, 4.2 - this.day * 0.3) : 6.5;
-
-      // Pick spawn point on outer ring (11-16 tiles from player) anywhere in infinite world
-      for (let attempt = 0; attempt < 10; attempt++) {
-        const ang = Math.random() * Math.PI * 2;
-        const rad = 11 + Math.random() * 5;
-        const sx = this.player.x + Math.cos(ang) * rad;
-        const sy = this.player.y + Math.sin(ang) * rad;
-        const cell = this.getCell(Math.floor(sx), Math.floor(sy));
-        if (cell.tile !== 'water' && !this.isPointSolid(sx, sy, 0.3)) {
+    if (this.spawnTimer <= 0) {
+      this.spawnTimer = baseCooldown;
+      const pressure = evaluateCombatPressure(
+        this.zombies,
+        this.player.x,
+        this.player.y,
+        this.recentCombatTimer
+      );
+      const candidate = pickSafeAmbientSpawnPoint(this.worldStore, {
+        playerX: this.player.x,
+        playerY: this.player.y,
+        playerFacingAngle: this.player.facingAngle,
+        inCombat: pressure.inCombat,
+        existingZombies: this.zombies,
+        vehicles: this.vehicles,
+      });
+      if (candidate) {
+        const cell = this.getCell(Math.floor(candidate.x), Math.floor(candidate.y));
+        if (cell.tile !== 'water') {
           const r = Math.random();
           let arch: ZombieArchetype = 'walker';
           if (r < (isNight ? 0.28 : 0.12)) arch = 'runner';
           else if (r < (isNight ? 0.44 : 0.22)) arch = 'spitter';
           else if (r < (isNight ? 0.54 : 0.28)) arch = 'bloater';
-          this.spawnZombieAt(sx, sy, arch);
-          break;
+          this.spawnZombieAt(candidate.x, candidate.y, arch, candidate);
         }
       }
     }
   }
 
-  private spawnZombieAt(x: number, y: number, archetype: ZombieArchetype): void {
+  private spawnZombieAt(
+    x: number,
+    y: number,
+    archetype: ZombieArchetype,
+    initialPose?: { facingX: number; facingY: number; wanderTargetX: number; wanderTargetY: number }
+  ): void {
     const cfg = ZOMBIE_CONFIGS[archetype];
     const hpScale = 1 + (this.day - 1) * 0.12;
+    let facingX = initialPose?.facingX;
+    let facingY = initialPose?.facingY;
+    let wanderTargetX = initialPose?.wanderTargetX;
+    let wanderTargetY = initialPose?.wanderTargetY;
+    if (facingX === undefined || facingY === undefined || wanderTargetX === undefined || wanderTargetY === undefined) {
+      // Orient initial gaze tangentially or away from player so newly spawned zombies do not stare directly at the player
+      const awayAngle = Math.atan2(y - this.player.y, x - this.player.x) + (Math.random() - 0.5) * Math.PI * 0.8;
+      facingX = Math.cos(awayAngle);
+      facingY = Math.sin(awayAngle);
+      wanderTargetX = x + facingX * 3.5;
+      wanderTargetY = y + facingY * 3.5;
+    }
     this.zombies.push({
       id: this.nextEntityId++,
       archetype,
@@ -3965,15 +4080,15 @@ export class SurvivalEngine {
       y,
       vx: 0,
       vy: 0,
-      facingX: 1,
-      facingY: 0,
+      facingX,
+      facingY,
       hp: cfg.hp * hpScale,
       maxHp: cfg.hp * hpScale,
       speed: cfg.speed,
       state: 'wander',
       stateTimer: 0,
-      wanderTargetX: x,
-      wanderTargetY: y,
+      wanderTargetX,
+      wanderTargetY,
       lastHeardX: null,
       lastHeardY: null,
       walkCycle: Math.random() * 4,
@@ -4073,9 +4188,17 @@ export class SurvivalEngine {
       this.emitHud();
     }
 
+    const pressure = evaluateCombatPressure(
+      this.zombies,
+      this.player.x,
+      this.player.y,
+      this.recentCombatTimer
+    );
+
     for (const lm of this.worldStore.landmarks.values()) {
       const d = dist(this.player.x, this.player.y, lm.gx + 0.5, lm.gy + 0.5);
-      if (!lm.hotspotSpawned && d <= 23) {
+      // Pre-populate landmark packs while landmark is still at a safe distance and never on top of an active fight
+      if (!lm.hotspotSpawned && d <= 34 && d >= 16 && !pressure.inCombat) {
         lm.hotspotSpawned = true;
         const count = lm.hotspotPacks.length;
         for (let i = 0; i < count; i++) {
@@ -4086,8 +4209,7 @@ export class SurvivalEngine {
             const rad = 2.6 + (attempt % 5) * 1.95;
             const zx = lm.gx + 0.5 + Math.cos(ang) * rad;
             const zy = lm.gy + 0.5 + Math.sin(ang) * rad;
-            const minPlayerDist = attempt >= 6 ? 4.5 : 7.0;
-            if (dist(zx, zy, this.player.x, this.player.y) < minPlayerDist) continue;
+            if (dist(zx, zy, this.player.x, this.player.y) < 16.0) continue;
             if (!this.isPointSolid(zx, zy, 0.25)) {
               this.spawnZombieAt(zx, zy, arch);
               break;
