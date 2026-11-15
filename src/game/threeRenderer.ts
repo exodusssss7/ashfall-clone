@@ -326,7 +326,7 @@ export class ThreeIsometricRenderer {
 
     this.scene = new THREE.Scene();
     this.scene.background = this.atmoState.isoFogColor.clone();
-    this.fogExp = new THREE.FogExp2(this.atmoState.isoFogColor.getHex(), 0.014);
+    this.fogExp = new THREE.FogExp2(this.atmoState.isoFogColor.getHex(), 0.009);
     this.scene.fog = this.fogExp;
 
     // Mandatory Studio Environment Reflection for metals/glass
@@ -1099,7 +1099,7 @@ export class ThreeIsometricRenderer {
       }
       this.fpsCamera.updateMatrixWorld();
       this.activeCamera = this.fpsCamera;
-      this.fogExp.density = 0.0115;
+      this.fogExp.density = 0.0085;
     } else {
       const targetIsoZoom = state.phase === 'title' ? 1 : settings.isoZoom;
       if (Math.abs(this.currentIsoZoom - targetIsoZoom) > 0.001) {
@@ -1122,7 +1122,7 @@ export class ThreeIsometricRenderer {
       this.camera.lookAt(targetX, 0, targetZ);
       this.camera.updateMatrixWorld();
       this.activeCamera = this.camera;
-      this.fogExp.density = 0.014;
+      this.fogExp.density = 0.009;
     }
 
     // Stream 3D chunks around camera
@@ -1245,7 +1245,7 @@ export class ThreeIsometricRenderer {
     if (this.scene.fog) {
       this.scene.fog.color.copy(fogCol);
       if (this.scene.fog instanceof THREE.FogExp2) {
-        this.scene.fog.density = (isFps ? 0.0115 : 0.014) * atmo.fogDensityScale;
+        this.scene.fog.density = (isFps ? 0.0085 : 0.009) * atmo.fogDensityScale;
       }
     }
 

@@ -4355,42 +4355,45 @@ export class SurvivalEngine {
         const cell = this.getCell(gx, gy);
         if (!cell.explored) continue;
         if (cell.tile === 'water') {
-          mctx.fillStyle = '#264f63';
+          mctx.fillStyle = '#265c78';
         } else if (cell.tile === 'pier') {
-          mctx.fillStyle = '#a67449';
+          mctx.fillStyle = '#ab784b';
         } else if (cell.prop === 'door') {
           mctx.fillStyle = '#c98842';
         } else if (cell.solid) {
-          if (cell.prop === 'wall_interior') mctx.fillStyle = '#a69e8e';
-          else if (cell.prop.startsWith('wall')) mctx.fillStyle = '#875548';
-          else if (cell.prop === 'tree_pine' || cell.prop === 'tree_dead') mctx.fillStyle = '#2c3d29';
-          else if (cell.prop === 'wrecked_car') mctx.fillStyle = '#8c563a';
-          else if (cell.prop === 'rock_boulder') mctx.fillStyle = '#666b6e';
-          else if (cell.prop === 'sandbag_wall') mctx.fillStyle = '#7a6e54';
-          else if (cell.prop === 'tent') mctx.fillStyle = '#697d4d';
+          if (cell.prop === 'wall_interior') mctx.fillStyle = '#cfc6b0';
+          else if (cell.prop === 'wall_wood') mctx.fillStyle = '#8f5932';
+          else if (cell.prop.startsWith('wall')) mctx.fillStyle = '#a34a36';
+          else if (cell.prop === 'tree_pine' || cell.prop === 'tree_dead') mctx.fillStyle = '#2f5e2c';
+          else if (cell.prop === 'wrecked_car') mctx.fillStyle = '#994823';
+          else if (cell.prop === 'rock_boulder') mctx.fillStyle = '#6c7275';
+          else if (cell.prop === 'sandbag_wall') mctx.fillStyle = '#85775b';
+          else if (cell.prop === 'tent') mctx.fillStyle = '#69854a';
           else mctx.fillStyle = '#755b42';
         } else if (cell.tile === 'road' || cell.tile === 'crosswalk') {
-          mctx.fillStyle = '#383d42';
+          mctx.fillStyle = '#252a33';
         } else if (cell.tile === 'asphalt_cracked') {
-          mctx.fillStyle = '#2d3136';
+          mctx.fillStyle = '#2b3038';
+        } else if (cell.tile === 'sidewalk') {
+          mctx.fillStyle = '#a8997e';
         } else if (cell.tile === 'gravel') {
-          mctx.fillStyle = '#55595c';
+          mctx.fillStyle = '#787268';
         } else if (cell.tile === 'sand') {
-          mctx.fillStyle = '#9c875e';
+          mctx.fillStyle = '#c4ac74';
         } else if (cell.tile === 'mud') {
-          mctx.fillStyle = '#33261b';
+          mctx.fillStyle = '#473628';
         } else if (cell.tile === 'forest_floor') {
-          mctx.fillStyle = '#1d2b19';
+          mctx.fillStyle = '#264020';
         } else if (cell.tile === 'floor_rug') {
-          mctx.fillStyle = '#75382e';
+          mctx.fillStyle = '#8a3d31';
         } else if (cell.tile === 'floor_bath') {
-          mctx.fillStyle = '#5f7e82';
+          mctx.fillStyle = '#6b9196';
         } else if (cell.tile === 'floor_porch') {
-          mctx.fillStyle = '#6b4d34';
+          mctx.fillStyle = '#7d5939';
         } else if (cell.tile === 'floor' || cell.tile === 'tile_clinic' || cell.tile === 'tile_diner') {
-          mctx.fillStyle = '#5c4a3d';
+          mctx.fillStyle = '#735a47';
         } else {
-          mctx.fillStyle = '#24301f';
+          mctx.fillStyle = '#38632e';
         }
         mctx.fillRect(Math.floor(rx * scale), Math.floor(ry * scale), Math.ceil(scale), Math.ceil(scale));
       }
@@ -4421,7 +4424,7 @@ export class SurvivalEngine {
       if (gx < originGX || gy < originGY || gx >= originGX + radarTiles || gy >= originGY + radarTiles) continue;
       if (!this.getCell(gx, gy).explored) continue;
       const pos = toRadar(v.x, v.y);
-      mctx.fillStyle = v.kind === 'police' ? '#4fa8ff' : '#c7d2d9';
+      mctx.fillStyle = v.kind === 'police' ? '#4da3ff' : '#e8483f';
       mctx.fillRect(pos.px - 1, pos.py - 1, 3, 3);
     }
 

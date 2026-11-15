@@ -65,16 +65,16 @@ function buildCrossedGrassTuftGeometry(): THREE.BufferGeometry {
 }
 
 const GRASS_TINTS = [
-  new THREE.Color('#4d6b34'),
-  new THREE.Color('#5a7a3e'),
-  new THREE.Color('#435c2d'),
-  new THREE.Color('#6b8242'),
+  new THREE.Color('#4f8a38'),
+  new THREE.Color('#5fa143'),
+  new THREE.Color('#3f732d'),
+  new THREE.Color('#75ab46'),
 ];
 
 const FOREST_TINTS = [
-  new THREE.Color('#344a27'),
-  new THREE.Color('#3e5730'),
-  new THREE.Color('#4f5c35'),
+  new THREE.Color('#37662d'),
+  new THREE.Color('#457a36'),
+  new THREE.Color('#5c7d3b'),
 ];
 
 export class ThreeGrassSystem {

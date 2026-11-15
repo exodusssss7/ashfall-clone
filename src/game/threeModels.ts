@@ -75,6 +75,7 @@ export class ThreeModelFactory {
   private geoCache = new Map<string, THREE.BufferGeometry>();
   private materials: THREE.Material[] = [];
   private matCache = new Map<string, THREE.MeshStandardMaterial>();
+  private physMatCache = new Map<string, THREE.MeshPhysicalMaterial>();
   private unitBox: THREE.BoxGeometry;
   private unitCylX: THREE.CylinderGeometry;
   private unitWheelGeo: THREE.CylinderGeometry;
@@ -269,6 +270,45 @@ export class ThreeModelFactory {
     return mat;
   }
 
+  public getPhysicalMat(
+    color: string | number,
+    opts: {
+      roughness?: number;
+      metalness?: number;
+      clearcoat?: number;
+      clearcoatRoughness?: number;
+      envMapIntensity?: number;
+      map?: THREE.Texture;
+    } = {}
+  ): THREE.MeshPhysicalMaterial {
+    const key = [
+      'phys',
+      color,
+      opts.roughness ?? 0.26,
+      opts.metalness ?? 0.46,
+      opts.clearcoat ?? 1.0,
+      opts.clearcoatRoughness ?? 0.08,
+      opts.envMapIntensity ?? 1.25,
+      opts.map?.uuid ?? 'nomap',
+    ].join('_');
+    const existing = this.physMatCache.get(key);
+    if (existing) return existing;
+
+    const mat = this.trackMat(
+      new THREE.MeshPhysicalMaterial({
+        color,
+        roughness: opts.roughness ?? 0.26,
+        metalness: opts.metalness ?? 0.46,
+        clearcoat: opts.clearcoat ?? 1.0,
+        clearcoatRoughness: opts.clearcoatRoughness ?? 0.08,
+        envMapIntensity: opts.envMapIntensity ?? 1.25,
+        map: opts.map ?? null,
+      })
+    );
+    this.physMatCache.set(key, mat);
+    return mat;
+  }
+
   private box(
     w: number,
     h: number,
@@ -377,7 +417,7 @@ export class ThreeModelFactory {
     g.add(core);
 
     // Subtle coping cap ledge
-    const ledgeColor = kind === 'wall_brick' ? '#635c58' : kind === 'wall_wood' ? '#59402c' : '#857d6d';
+    const ledgeColor = kind === 'wall_brick' ? '#9c8d76' : kind === 'wall_wood' ? '#7d4d29' : '#b8ab96';
     const ledge = this.box(
       1.02,
       0.06,
@@ -392,9 +432,9 @@ export class ThreeModelFactory {
     g.add(ledge);
 
     if (hasWindow && kind !== 'wall_interior') {
-      const plankMat = this.getMat('#7a593c', { roughness: 0.88, transparent: tr, opacity: op });
-      const glassMat = this.getMat('#10151a', { roughness: 0.2, metalness: 0.2, transparent: tr, opacity: op });
-      const sill = this.box(1.05, 0.06, 1.05, this.getMat('#2b2119', { roughness: 0.9, transparent: tr, opacity: op }), 0, 0.35, 0, false, true);
+      const plankMat = this.getMat('#996a42', { roughness: 0.86, transparent: tr, opacity: op });
+      const glassMat = this.getMat('#182836', { roughness: 0.18, metalness: 0.25, transparent: tr, opacity: op });
+      const sill = this.box(1.05, 0.06, 1.05, this.getMat('#453222', { roughness: 0.88, transparent: tr, opacity: op }), 0, 0.35, 0, false, true);
       const pane = this.box(1.02, 0.42, 1.02, glassMat, 0, 0.58, 0, false, false);
       const plank1 = this.box(1.05, 0.08, 1.05, plankMat, 0, 0.49, 0, false, true);
       const plank2 = this.box(1.05, 0.08, 1.05, plankMat, 0, 0.67, 0, false, true);
@@ -441,8 +481,8 @@ export class ThreeModelFactory {
       root.rotation.y = Math.PI * 0.5;
     }
 
-    const frameMat = this.getMat('#453020', { roughness: 0.88 });
-    const thresholdMat = this.getMat('#2c251f', { roughness: 0.94 });
+    const frameMat = this.getMat('#5c3c24', { roughness: 0.86 });
+    const thresholdMat = this.getMat('#453528', { roughness: 0.94 });
 
     // Threshold + side jambs + lintel (clean 1.00m headroom for FPS eye-level traversal)
     root.add(this.box(0.98, 0.03, 0.24, thresholdMat, 0, 0.015, 0, false, true));
@@ -683,9 +723,9 @@ export class ThreeModelFactory {
 
     if (kind === 'tree_pine') {
       this.addContactShadow(g, 1.42, 1.42);
-      const barkMat = this.getMat(0xffffff, { map: this.atlas.barkTex, roughness: 0.94 });
-      const leafMat = this.getMat(0xffffff, { map: this.atlas.pineTex, roughness: 0.86 });
-      const leafDark = this.getMat('#1b2e1a', { roughness: 0.92 });
+      const barkMat = this.getMat(0xffffff, { map: this.atlas.barkTex, roughness: 0.92 });
+      const leafMat = this.getMat(0xffffff, { map: this.atlas.pineTex, roughness: 0.84 });
+      const leafDark = this.getMat('#20421e', { roughness: 0.9 });
 
       // Sculpted tapered bark trunk + flared root buttresses (all single-material for static chunk batching)
       const trunk = new THREE.Mesh(this.pineTrunkGeo, barkMat);
@@ -734,8 +774,8 @@ export class ThreeModelFactory {
 
     if (kind === 'tree_dead') {
       this.addContactShadow(g, 1.02, 1.02);
-      const barkMat = this.getMat(0xffffff, { map: this.atlas.barkTex, roughness: 0.95 });
-      const darkBark = this.getMat('#3b291c', { roughness: 0.95 });
+      const barkMat = this.getMat(0xffffff, { map: this.atlas.barkTex, roughness: 0.94 });
+      const darkBark = this.getMat('#4a301d', { roughness: 0.94 });
 
       const trunk = new THREE.Mesh(this.deadTrunkGeo, barkMat);
       trunk.position.set(0, 0.57, 0);
@@ -846,7 +886,7 @@ export class ThreeModelFactory {
     if (kind === 'concrete_barrier') {
       this.addContactShadow(g, 1.05, 0.56);
       const mat = this.getMat(0xffffff, { map: this.atlas.barrierTex, roughness: 0.92 });
-      const base = this.getMat('#595f63', { roughness: 0.94 });
+      const base = this.getMat('#877f70', { roughness: 0.94 });
       g.add(this.box(0.94, 0.18, 0.44, base, 0, 0.09, 0));
       g.add(this.box(0.94, 0.34, 0.28, mat, 0, 0.35, 0));
       return g;
@@ -1134,14 +1174,14 @@ export class ThreeModelFactory {
 
     if (kind === 'wrecked_car') {
       this.addContactShadow(g, 1.88, 1.12);
-      const hullBodyMat = this.getMat('#544e4a', { roughness: 0.82, metalness: 0.38 });
-      const sideDecalMat = this.getMat(0xffffff, { map: this.atlas.wreckedCarTex, roughness: 0.8, metalness: 0.35 });
-      const topDecalMat = this.getMat(0xffffff, { map: this.atlas.wreckedCarTopTex, roughness: 0.8, metalness: 0.35 });
-      const charMat = this.getMat('#1a1817', { roughness: 0.94, metalness: 0.25 });
-      const rustMat = this.getMat('#6e3b24', { roughness: 0.88, metalness: 0.32 });
+      const hullBodyMat = this.getMat('#755c47', { roughness: 0.78, metalness: 0.38 });
+      const sideDecalMat = this.getMat(0xffffff, { map: this.atlas.wreckedCarTex, roughness: 0.78, metalness: 0.35 });
+      const topDecalMat = this.getMat(0xffffff, { map: this.atlas.wreckedCarTopTex, roughness: 0.78, metalness: 0.35 });
+      const charMat = this.getMat('#211d1b', { roughness: 0.94, metalness: 0.25 });
+      const rustMat = this.getMat('#994823', { roughness: 0.86, metalness: 0.32 });
       const tireMat = this.getMat('#101214', { roughness: 0.92 });
-      const rimMat = this.getMat('#7d7068', { map: this.atlas.vehicleTex.sedan.wheel, roughness: 0.72, metalness: 0.45 });
-      const glassMat = this.getMat('#1b2329', { roughness: 0.32, metalness: 0.3 });
+      const rimMat = this.getMat('#9e8470', { map: this.atlas.vehicleTex.sedan.wheel, roughness: 0.7, metalness: 0.45 });
+      const glassMat = this.getMat('#1f2c36', { roughness: 0.28, metalness: 0.3 });
 
       g.rotation.y = 0.24;
 
@@ -1384,17 +1424,17 @@ export class ThreeModelFactory {
     const bodyGroup = new THREE.Group();
     root.add(bodyGroup);
 
-    const sideMat = this.getMat(0xffffff, { map: vTex.side, roughness: 0.32, metalness: 0.42 });
-    const roofMat = this.getMat(0xffffff, { map: vTex.roof, roughness: 0.30, metalness: 0.40 });
-    const frontMat = this.getMat(0xffffff, { map: vTex.front, roughness: 0.36, metalness: 0.38 });
-    const rearMat = this.getMat(0xffffff, { map: vTex.rear, roughness: 0.38, metalness: 0.38 });
-    const glassMat = this.getMat(0xffffff, { map: vTex.glass, roughness: 0.12, metalness: 0.35 });
+    const sideMat = this.getPhysicalMat(0xffffff, { map: vTex.side, roughness: 0.24, metalness: 0.48, clearcoat: 1.0, clearcoatRoughness: 0.08, envMapIntensity: 1.25 });
+    const roofMat = this.getPhysicalMat(0xffffff, { map: vTex.roof, roughness: 0.22, metalness: 0.46, clearcoat: 1.0, clearcoatRoughness: 0.08, envMapIntensity: 1.25 });
+    const frontMat = this.getPhysicalMat(0xffffff, { map: vTex.front, roughness: 0.28, metalness: 0.42, clearcoat: 0.9, clearcoatRoughness: 0.1, envMapIntensity: 1.2 });
+    const rearMat = this.getPhysicalMat(0xffffff, { map: vTex.rear, roughness: 0.30, metalness: 0.42, clearcoat: 0.9, clearcoatRoughness: 0.1, envMapIntensity: 1.2 });
+    const glassMat = this.getPhysicalMat(0xffffff, { map: vTex.glass, roughness: 0.08, metalness: 0.35, clearcoat: 1.0, clearcoatRoughness: 0.04, envMapIntensity: 1.35 });
     const carbonMat = this.getMat('#171a20', { roughness: 0.55, metalness: 0.45 });
     const tireMat = this.getMat('#101214', { roughness: 0.92 });
-    const wheelFaceMat = this.getMat(0xffffff, { map: vTex.wheel, roughness: 0.42, metalness: 0.42 });
-    const paintRoof = this.getMat(police ? '#eef2f6' : '#c93628', { roughness: 0.32, metalness: 0.40 });
-    const paintMain = this.getMat(police ? '#1b263b' : '#c93628', { roughness: 0.32, metalness: 0.42 });
-    const chromeMat = this.getMat('#bfc8d1', { roughness: 0.22, metalness: 0.90 });
+    const wheelFaceMat = this.getMat(0xffffff, { map: vTex.wheel, roughness: 0.36, metalness: 0.52 });
+    const paintRoof = this.getPhysicalMat(police ? '#f4f8fc' : '#d92b24', { roughness: 0.24, metalness: 0.46, clearcoat: 1.0, clearcoatRoughness: 0.08, envMapIntensity: 1.25 });
+    const paintMain = this.getPhysicalMat(police ? '#1e3c72' : '#d92b24', { roughness: 0.24, metalness: 0.48, clearcoat: 1.0, clearcoatRoughness: 0.08, envMapIntensity: 1.25 });
+    const chromeMat = this.getMat('#cfd8e0', { roughness: 0.18, metalness: 0.92 });
 
     // Sculpted wedge supercar lower chassis [side, top/bot, front, rear]
     const hullMesh = new THREE.Mesh(this.supercarHullGeo, [sideMat, roofMat, frontMat, rearMat]);

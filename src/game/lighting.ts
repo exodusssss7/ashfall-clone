@@ -31,57 +31,57 @@ export interface AtmosphereLightingState {
   exposure: number;
 }
 
-const ISO_DAY = new THREE.Color('#1a2024');
-const ISO_DAWN = new THREE.Color('#251e2b');
-const ISO_DUSK = new THREE.Color('#1d1924');
+const ISO_DAY = new THREE.Color('#141d29');
+const ISO_DAWN = new THREE.Color('#282030');
+const ISO_DUSK = new THREE.Color('#1f1a26');
 const ISO_NIGHT = new THREE.Color('#090d16');
 
-const FPS_DAY = new THREE.Color('#6f838b');
-const FPS_DAWN = new THREE.Color('#be8a7b');
-const FPS_DUSK = new THREE.Color('#915c49');
+const FPS_DAY = new THREE.Color('#7ca3bf');
+const FPS_DAWN = new THREE.Color('#c79180');
+const FPS_DUSK = new THREE.Color('#9c634d');
 const FPS_NIGHT = new THREE.Color('#0c1321');
 
-const SUN_DAY = new THREE.Color('#fff2d9');
+const SUN_DAY = new THREE.Color('#ffefd2');
 const SUN_DAWN = new THREE.Color('#ffb775');
 const SUN_DUSK = new THREE.Color('#ff9d5c');
 const SUN_NIGHT = new THREE.Color('#6c8ec4');
 
-const RIM_DAY = new THREE.Color('#9ec0db');
+const RIM_DAY = new THREE.Color('#8ec2f0');
 const RIM_DAWN = new THREE.Color('#80a4e8');
 const RIM_DUSK = new THREE.Color('#7a6db5');
 const RIM_NIGHT = new THREE.Color('#344d7d');
 
-const HEMI_SKY_DAY = new THREE.Color('#9ec0db');
+const HEMI_SKY_DAY = new THREE.Color('#9cd0f5');
 const HEMI_SKY_DAWN = new THREE.Color('#849ed1');
 const HEMI_SKY_DUSK = new THREE.Color('#8d6d8c');
 const HEMI_SKY_NIGHT = new THREE.Color('#1c2a4a');
 
-const HEMI_GND_DAY = new THREE.Color('#3b3328');
-const HEMI_GND_DAWN = new THREE.Color('#5e4238');
-const HEMI_GND_DUSK = new THREE.Color('#4a2f2a');
+const HEMI_GND_DAY = new THREE.Color('#524231');
+const HEMI_GND_DAWN = new THREE.Color('#66463a');
+const HEMI_GND_DUSK = new THREE.Color('#52332c');
 const HEMI_GND_NIGHT = new THREE.Color('#0c1018');
 
-const ZENITH_DAY = new THREE.Color('#3a6ea5');
+const ZENITH_DAY = new THREE.Color('#2b6cb0');
 const ZENITH_DAWN = new THREE.Color('#3b558f');
 const ZENITH_DUSK = new THREE.Color('#3b325c');
 const ZENITH_NIGHT = new THREE.Color('#070c1a');
 
-const MID_DAY = new THREE.Color('#6f9ec4');
+const MID_DAY = new THREE.Color('#5da3d6');
 const MID_DAWN = new THREE.Color('#a482a3');
 const MID_DUSK = new THREE.Color('#8e5c62');
 const MID_NIGHT = new THREE.Color('#0d1629');
 
-const HORIZ_DAY = new THREE.Color('#b6cad4');
+const HORIZ_DAY = new THREE.Color('#bfe0ed');
 const HORIZ_DAWN = new THREE.Color('#f4b482');
 const HORIZ_DUSK = new THREE.Color('#d97d4f');
 const HORIZ_NIGHT = new THREE.Color('#142038');
 
-const CLOUD_DAY_TOP = new THREE.Color('#f5f7f5');
+const CLOUD_DAY_TOP = new THREE.Color('#fcfcf7');
 const CLOUD_DAWN_TOP = new THREE.Color('#ffe4bf');
 const CLOUD_DUSK_TOP = new THREE.Color('#f2aa7e');
 const CLOUD_NIGHT_TOP = new THREE.Color('#273552');
 
-const CLOUD_DAY_BOT = new THREE.Color('#bccad4');
+const CLOUD_DAY_BOT = new THREE.Color('#b8cddc');
 const CLOUD_DAWN_BOT = new THREE.Color('#937d99');
 const CLOUD_DUSK_BOT = new THREE.Color('#875b6b');
 const CLOUD_NIGHT_BOT = new THREE.Color('#161f33');
@@ -99,12 +99,12 @@ export function createAtmosphereLightingState(): AtmosphereLightingState {
     sunLightOffset: new THREE.Vector3(-16, 26, -12),
     rimLightOffset: new THREE.Vector3(16, 14, 12),
     sunColor: SUN_DAY.clone(),
-    sunIntensity: 1.65,
+    sunIntensity: 1.85,
     rimColor: RIM_DAY.clone(),
-    rimIntensity: 0.22,
+    rimIntensity: 0.26,
     hemiSkyColor: HEMI_SKY_DAY.clone(),
     hemiGroundColor: HEMI_GND_DAY.clone(),
-    hemiIntensity: 0.85,
+    hemiIntensity: 0.78,
     isoFogColor: ISO_DAY.clone(),
     fpsFogColor: FPS_DAY.clone(),
     skyZenith: ZENITH_DAY.clone(),
@@ -113,7 +113,7 @@ export function createAtmosphereLightingState(): AtmosphereLightingState {
     cloudTop: CLOUD_DAY_TOP.clone(),
     cloudBottom: CLOUD_DAY_BOT.clone(),
     envIntensity: 1,
-    exposure: 1.08,
+    exposure: 1.12,
   };
 }
 
@@ -181,7 +181,7 @@ export function computeAtmosphereLighting(
   } else if (duskT > 0) {
     out.sunColor.lerp(SUN_DUSK, duskT * 0.88);
   }
-  out.sunIntensity = 1.65 * (1 - nightT * 0.9) + dawnT * 0.28 + duskT * 0.14;
+  out.sunIntensity = 1.85 * (1 - nightT * 0.9) + dawnT * 0.28 + duskT * 0.14;
 
   // Hemisphere sky/ground bounce
   out.hemiSkyColor.copy(HEMI_SKY_DAY).lerp(HEMI_SKY_NIGHT, nightT);
@@ -193,7 +193,7 @@ export function computeAtmosphereLighting(
     out.hemiSkyColor.lerp(HEMI_SKY_DUSK, duskT * 0.85);
     out.hemiGroundColor.lerp(HEMI_GND_DUSK, duskT * 0.85);
   }
-  out.hemiIntensity = 0.85 * (1 - nightT * 0.82) + dawnT * 0.14;
+  out.hemiIntensity = 0.78 * (1 - nightT * 0.82) + dawnT * 0.14;
 
   // Cool opposite rim light separates silhouettes and highlights metallic edges at dawn & twilight
   out.rimColor.copy(RIM_DAY).lerp(RIM_NIGHT, nightT);
@@ -202,11 +202,11 @@ export function computeAtmosphereLighting(
   } else if (duskT > 0) {
     out.rimColor.lerp(RIM_DUSK, duskT * 0.9);
   }
-  out.rimIntensity = 0.22 * (1 - nightT * 0.3) + dawnT * 0.34 + duskT * 0.22;
+  out.rimIntensity = 0.26 * (1 - nightT * 0.3) + dawnT * 0.34 + duskT * 0.22;
 
   // The studio reflection map is a constant light source: fade it so unlit terrain really goes dark at night.
   out.envIntensity = 1 - nightT * 0.9;
-  out.exposure = 1.08 - nightT * 0.12;
+  out.exposure = 1.12 - nightT * 0.14;
 
   // Sky dome gradient & clouds
   out.skyZenith.copy(ZENITH_DAY).lerp(ZENITH_NIGHT, nightT);

@@ -46,154 +46,154 @@ export function buildSquareTileCanvas(kind: TileKind, variant: number): HTMLCanv
       let col = '#2e3b26';
 
       if (kind === 'grass') {
-        if (r2 < 0.18) col = '#3c4d30';
-        else if (r2 < 0.52) col = '#2f3e26';
-        else col = '#25311e';
-        if (r < 0.14) col = '#445737';
-        else if (r > 0.88) col = '#1e2818';
+        if (r2 < 0.2) col = '#4f7d3a';
+        else if (r2 < 0.56) col = '#3c662e';
+        else col = '#2d4f22';
+        if (r < 0.14) col = '#5a8c43';
+        else if (r > 0.88) col = '#233d1a';
         // Crisp 2-3px grass blade tufts & dry clover
-        const blade = hash(x, y - 1, 7) > 0.92 && y > 1;
-        if (blade) col = r > 0.5 ? '#5b7347' : '#4a613a';
-        if (variant === 3 && r < 0.025) col = '#7a874f';
+        const blade = hash(x, y - 1, 7) > 0.91 && y > 1;
+        if (blade) col = r > 0.5 ? '#74ab52' : '#619446';
+        if (variant === 3 && r < 0.028) col = '#9bb056';
       } else if (kind === 'dirt') {
-        if (r2 < 0.22) col = '#574536';
-        else if (r2 < 0.65) col = '#47382b';
-        else col = '#372b21';
-        if (r < 0.1) col = '#665240';
-        else if (r > 0.91) col = '#2a2018';
-        if ((x * 5 + y * 9 + variant * 7) % 23 === 0 && r > 0.5) col = '#6b5e4f'; // pebble
+        if (r2 < 0.22) col = '#69503b';
+        else if (r2 < 0.65) col = '#543f2d';
+        else col = '#402f21';
+        if (r < 0.1) col = '#7a5d45';
+        else if (r > 0.91) col = '#2e2117';
+        if ((x * 5 + y * 9 + variant * 7) % 23 === 0 && r > 0.5) col = '#87725c'; // pebble
       } else if (kind === 'road' || kind === 'crosswalk') {
-        if (r < 0.1) col = '#333840';
-        else if (r < 0.52) col = '#262a30';
-        else if (r < 0.88) col = '#202429';
-        else col = '#181b1f';
+        if (r < 0.12) col = '#2d333d';
+        else if (r < 0.54) col = '#21262e';
+        else if (r < 0.88) col = '#1b1f26';
+        else col = '#14171c';
         if (kind === 'road') {
           // Aged center dashed/double paint & oil stain
           if (variant === 0 && y >= 14 && y <= 17 && x >= 5 && x <= 26) {
-            col = r < 0.16 ? '#61552c' : y === 14 ? '#9e8b48' : '#857338';
+            col = r < 0.14 ? '#8f7228' : y === 14 ? '#e6bc4e' : '#cfa43a';
           }
           if (variant === 2) {
             const dx = x - 15.5;
             const dy = y - 15.5;
-            if (dx * dx + dy * dy < 32 && r < 0.72) col = '#131619';
+            if (dx * dx + dy * dy < 32 && r < 0.72) col = '#101317';
           }
         } else {
           const bar = (x + 2) % 10;
           if (bar >= 2 && bar <= 5 && y >= 4 && y <= 27) {
-            col = r < 0.16 ? '#5d6266' : r > 0.86 ? '#b0b5b8' : '#94999c';
+            col = r < 0.14 ? '#8c8a82' : r > 0.84 ? '#ebe6da' : '#d1ccc0';
           }
         }
       } else if (kind === 'sidewalk') {
         const isBorder = x === 0 || y === 0 || x === size - 1 || y === size - 1;
         const slabJoint = x === 16 || y === 16;
-        if (isBorder) col = x === 0 || y === 0 ? '#666d73' : '#2f3338';
-        else if (slabJoint) col = '#272b30';
-        else if (x === 17 || y === 17) col = '#5a6066';
-        else if (r < 0.22) col = '#52585e';
-        else if (r < 0.78) col = '#464b50';
-        else col = '#3c4045';
-        if (variant === 2 && (slabJoint || Math.abs(x - y) <= 0.7) && r > 0.72) col = '#465c36';
+        if (isBorder) col = x === 0 || y === 0 ? '#cfc0a5' : '#695e4c';
+        else if (slabJoint) col = '#594f40';
+        else if (x === 17 || y === 17) col = '#bfb095';
+        else if (r < 0.24) col = '#b3a388';
+        else if (r < 0.78) col = '#a19278';
+        else col = '#8c7e66';
+        if (variant === 2 && (slabJoint || Math.abs(x - y) <= 0.7) && r > 0.7) col = '#55753d';
       } else if (kind === 'floor') {
         const plankRow = Math.floor(y / 8);
         const plankSeamY = y % 8 === 0;
         const buttJoint = (x + plankRow * 13 + variant * 5) % 24 === 0;
         const grain = hash(Math.floor(x / 3), y, 11);
-        if (plankSeamY || buttJoint) col = '#291f17';
-        else if (y % 8 === 1) col = '#695443';
-        else if (grain < 0.24) col = '#5e4c3d';
-        else if (grain < 0.72) col = '#4d3d31';
-        else col = '#3f3126';
-        if ((y % 8 === 2 || y % 8 === 6) && (x + plankRow * 13 + variant * 5) % 24 === 2) col = '#221912'; // nail head
+        if (plankSeamY || buttJoint) col = '#2b1e14';
+        else if (y % 8 === 1) col = '#826247';
+        else if (grain < 0.24) col = '#73563e';
+        else if (grain < 0.72) col = '#5e4532';
+        else col = '#4c3727';
+        if ((y % 8 === 2 || y % 8 === 6) && (x + plankRow * 13 + variant * 5) % 24 === 2) col = '#221810'; // nail head
       } else if (kind === 'floor_rug') {
         const outer = x <= 1 || y <= 1 || x >= size - 2 || y >= size - 2;
         const innerBand = x === 4 || y === 4 || x === size - 5 || y === size - 5;
         const diamond = Math.abs(((x % 8) - 3.5)) + Math.abs(((y % 8) - 3.5)) <= 2.5;
         if (outer) {
-          col = (x + y) % 2 === 0 ? '#b08c52' : '#734232';
+          col = (x + y) % 2 === 0 ? '#c49b56' : '#854632';
         } else if (innerBand) {
-          col = '#c4a262';
+          col = '#d9b56c';
         } else if (diamond) {
-          col = r < 0.25 ? '#a35243' : '#8a3c31';
+          col = r < 0.25 ? '#b35746' : '#963f33';
         } else {
-          col = r < 0.22 ? '#78342a' : '#612720';
+          col = r < 0.22 ? '#87382c' : '#6e2a21';
         }
       } else if (kind === 'floor_bath') {
         const u = Math.floor(x / 8);
         const v = Math.floor(y / 8);
         const grout = x % 8 === 0 || y % 8 === 0;
         const hi = x % 8 === 1 || y % 8 === 1;
-        if (grout) col = '#384648';
-        else if (hi) col = (u + v) % 2 === 0 ? '#9ab7b9' : '#7a979b';
-        else col = (u + v) % 2 === 0 ? (r < 0.2 ? '#759194' : '#86a4a6') : r < 0.2 ? '#5d777a' : '#6a868a';
+        if (grout) col = '#3c4e52';
+        else if (hi) col = (u + v) % 2 === 0 ? '#a8cccf' : '#82a7ad';
+        else col = (u + v) % 2 === 0 ? (r < 0.2 ? '#82a3a6' : '#95b8ba') : r < 0.2 ? '#64858a' : '#719499';
       } else if (kind === 'floor_porch') {
         const isEdge = x === 0 || y === 0 || x === size - 1 || y === size - 1;
         const seam = x % 8 === 0;
-        if (isEdge) col = '#342419';
-        else if (seam) col = '#261a11';
-        else if (x % 8 === 1) col = '#825d3f';
-        else col = r < 0.3 ? '#755338' : r < 0.75 ? '#61442d' : '#4f3623';
+        if (isEdge) col = '#3b2719';
+        else if (seam) col = '#2b1c11';
+        else if (x % 8 === 1) col = '#9c6e46';
+        else col = r < 0.3 ? '#8a603c' : r < 0.75 ? '#734f31' : '#5e3f26';
       } else if (kind === 'tile_clinic') {
         const u = Math.floor(x / 8);
         const v = Math.floor(y / 8);
         const grout = x % 8 === 0 || y % 8 === 0;
-        if (grout) col = '#4a5451';
-        else if (x % 8 === 1 || y % 8 === 1) col = '#97a6a1';
-        else col = (u + v) % 2 === 0 ? (r < 0.18 ? '#7b8783' : '#8b9994') : r < 0.2 ? '#6e7a76' : '#7c8a85';
-        if (variant === 3 && Math.hypot(x - 19, y - 14) < 5 && r > 0.32) col = '#5e2320';
+        if (grout) col = '#53615d';
+        else if (x % 8 === 1 || y % 8 === 1) col = '#adc2ba';
+        else col = (u + v) % 2 === 0 ? (r < 0.18 ? '#8ea19a' : '#a0b5ad') : r < 0.2 ? '#7c8f88' : '#8da199';
+        if (variant === 3 && Math.hypot(x - 19, y - 14) < 5 && r > 0.32) col = '#702622';
       } else if (kind === 'tile_diner') {
         const u = Math.floor(x / 8);
         const v = Math.floor(y / 8);
         const even = (u + v) % 2 === 0;
         const grout = x % 8 === 0 || y % 8 === 0;
-        if (grout) col = '#1c1e21';
-        else col = even ? (r < 0.2 ? '#8f8a80' : '#a6a095') : r < 0.2 ? '#292c30' : '#35393e';
+        if (grout) col = '#1b1e21';
+        else col = even ? (r < 0.2 ? '#b5aa99' : '#ccc2b0') : r < 0.2 ? '#292e36' : '#363d47';
       } else if (kind === 'water') {
         const wave = ((x + y * 2 + variant * 3) % 11 === 0 || (x - y + variant * 5 + 64) % 15 === 0) && r < 0.45;
-        col = wave ? '#396578' : r < 0.22 ? '#254554' : r > 0.85 ? '#162b36' : '#1b3440';
+        col = wave ? '#4c8ca3' : r < 0.22 ? '#2a5f75' : r > 0.85 ? '#183c4d' : '#1f4a5c';
       } else if (kind === 'pier') {
         const plankSeam = x % 6 === 0;
         const rail = y <= 1 || y >= size - 2;
-        if (rail) col = y === 0 || y === size - 1 ? '#2b1d12' : '#473120';
-        else if (plankSeam) col = '#261a11';
-        else if (x % 6 === 1) col = '#916742';
-        else col = r < 0.28 ? '#825b39' : r < 0.76 ? '#6b492e' : '#573a23';
+        if (rail) col = y === 0 || y === size - 1 ? '#2e1e12' : '#543823';
+        else if (plankSeam) col = '#2b1d12';
+        else if (x % 6 === 1) col = '#a8764a';
+        else col = r < 0.28 ? '#94673f' : r < 0.76 ? '#7a5332' : '#634125';
       } else if (kind === 'forest_floor') {
-        if (r2 < 0.2) col = '#2a3820';
-        else if (r2 < 0.55) col = '#36291d';
-        else col = '#261e15';
-        if (r < 0.14) col = '#403123';
-        else if (r > 0.9) col = '#1a150f';
-        if (((x * 3 + y * 7 + variant) % 17 === 0) && r > 0.45) col = '#634d33'; // pine needles
-        if (variant === 2 && r2 < 0.22 && r < 0.25) col = '#445e34'; // moss carpet
+        if (r2 < 0.2) col = '#375429';
+        else if (r2 < 0.55) col = '#473221';
+        else col = '#332417';
+        if (r < 0.14) col = '#543c28';
+        else if (r > 0.9) col = '#211810';
+        if (((x * 3 + y * 7 + variant) % 17 === 0) && r > 0.42) col = '#7a5837'; // pine needles
+        if (variant === 2 && r2 < 0.26 && r < 0.28) col = '#578240'; // moss carpet
       } else if (kind === 'gravel') {
         const cell = hash(Math.floor(x / 2), Math.floor(y / 2), 9);
-        if (cell < 0.18) col = '#75797d';
-        else if (cell < 0.52) col = '#5c6063';
-        else if (cell < 0.82) col = '#484b4e';
-        else col = '#34373a';
-        if (x % 2 === 0 && y % 2 === 0 && cell > 0.7) col = '#8c9094';
+        if (cell < 0.18) col = '#948e82';
+        else if (cell < 0.52) col = '#787268';
+        else if (cell < 0.82) col = '#5e5951';
+        else col = '#45413b';
+        if (x % 2 === 0 && y % 2 === 0 && cell > 0.7) col = '#b0aa9c';
       } else if (kind === 'mud') {
-        if (r2 < 0.22) col = '#3b2c21';
-        else if (r2 < 0.62) col = '#2d2017';
-        else col = '#211811';
+        if (r2 < 0.22) col = '#453224';
+        else if (r2 < 0.62) col = '#36261a';
+        else col = '#261a11';
         if (variant === 1 && Math.hypot(x - 15, y - 16) < 7 && r < 0.65) {
-          col = r < 0.2 ? '#3e545e' : '#2a3b42';
+          col = r < 0.2 ? '#4d7080' : '#354f5c';
         }
       } else if (kind === 'sand') {
         const ripple = Math.sin((x + y * 0.4) * 0.45 + variant) > 0.55;
-        if (ripple && r > 0.35) col = '#ad976d';
-        else if (r < 0.2) col = '#9c865e';
-        else if (r < 0.75) col = '#87724e';
-        else col = '#6e5c3e';
-        if (r > 0.95) col = '#c2ad82';
+        if (ripple && r > 0.35) col = '#c4a976';
+        else if (r < 0.2) col = '#b39866';
+        else if (r < 0.75) col = '#9c8254';
+        else col = '#806942';
+        if (r > 0.95) col = '#d9bf8c';
       } else if (kind === 'asphalt_cracked') {
         const crack =
           Math.abs(x - y - (variant - 1) * 5) <= 0.8 ||
           (x >= 9 && x <= 25 && Math.abs(y - 18 + Math.sin(x * 0.6) * 2) <= 0.7);
-        if (crack) col = r > 0.74 ? '#414d30' : '#0f1114';
-        else if (r < 0.14) col = '#33373d';
-        else if (r < 0.58) col = '#25292e';
-        else col = '#1d2024';
+        if (crack) col = r > 0.72 ? '#526b39' : '#0f1216';
+        else if (r < 0.14) col = '#2d333c';
+        else if (r < 0.58) col = '#20252c';
+        else col = '#181b21';
       }
 
       ctx.fillStyle = col;
@@ -213,39 +213,39 @@ function buildWallSideTexture(
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      let col = '#66362c';
+      let col = '#8f3c2b';
       if (hasWindow && y >= 4 && y <= 11 && x >= 3 && x <= 12) {
         const isFrame = y === 4 || y === 11 || x === 3 || x === 12;
         const isPlank = y === 6 || y === 9;
-        if (isFrame) col = '#261d17';
-        else if (isPlank) col = '#7a593c';
-        else col = '#101316';
+        if (isFrame) col = '#332216';
+        else if (isPlank) col = '#996a42';
+        else col = '#182836';
       } else if (kind === 'wall_brick') {
-        if (y <= 1) col = '#756e6a';
-        else if (y >= 16) col = '#4a4543';
+        if (y <= 1) col = '#b8a88e';
+        else if (y >= 16) col = '#665b4c';
         else {
           const course = Math.floor(y / 3);
           const isMortarH = y % 3 === 0;
           const isMortarV = (x + (course % 2) * 3) % 6 === 0;
-          if (isMortarH || isMortarV) col = '#3e3634';
+          if (isMortarH || isMortarV) col = '#5c4b42';
           else {
             const shade = (x * 7 + course * 13) % 5;
-            col = shade === 0 ? '#965545' : shade < 3 ? '#7d4437' : '#66362c';
+            col = shade === 0 ? '#bd563e' : shade < 3 ? '#a14430' : '#853525';
           }
-          if (y > 13 && (x + y) % 3 === 0) col = '#3a4a2e';
+          if (y > 13 && (x + y) % 3 === 0) col = '#4a6b35';
         }
       } else if (kind === 'wall_wood') {
         const plankEdge = x % 4 === 0;
         const crossBrace = Math.abs(y - x * 1.1) < 1.3;
-        if (y <= 1 || y >= 16 || x === 0 || x === w - 1) col = '#4f3825';
-        else if (plankEdge) col = '#241a13';
-        else if (crossBrace) col = '#856142';
-        else col = (x + y * 2) % 5 === 0 ? '#5e432d' : '#755439';
+        if (y <= 1 || y >= 16 || x === 0 || x === w - 1) col = '#6b4224';
+        else if (plankEdge) col = '#2e1c10';
+        else if (crossBrace) col = '#b37644';
+        else col = (x + y * 2) % 5 === 0 ? '#7d4e2b' : '#996136';
       } else {
-        if (y <= 1) col = '#b5aa94';
-        else if (y === 8) col = '#6e5038';
-        else if (y >= 9) col = x % 4 === 0 ? '#3b291c' : '#7a593e';
-        else col = (x + y) % 5 === 0 ? '#9e9c8e' : '#aba99b';
+        if (y <= 1) col = '#dfd6bf';
+        else if (y === 8) col = '#855836';
+        else if (y >= 9) col = x % 4 === 0 ? '#422a19' : '#91633e';
+        else col = (x + y) % 5 === 0 ? '#bfb6a1' : '#cfc6b0';
       }
       ctx.fillStyle = col;
       ctx.fillRect(x, y, 1, 1);
@@ -259,13 +259,13 @@ function buildWallCapTexture(kind: 'wall_brick' | 'wall_wood' | 'wall_interior')
   for (let y = 0; y < 16; y++) {
     for (let x = 0; x < 16; x++) {
       const edge = x === 0 || y === 0 || x === 15 || y === 15;
-      let col = '#5e5652';
+      let col = '#9c8d76';
       if (kind === 'wall_brick') {
-        col = edge ? '#4f4a48' : (x + y) % 4 === 0 ? '#6e6560' : '#5e5652';
+        col = edge ? '#756857' : (x + y) % 4 === 0 ? '#b5a58c' : '#9c8d76';
       } else if (kind === 'wall_wood') {
-        col = edge ? '#402f22' : (x + y) % 2 === 0 ? '#6b4e37' : '#59402c';
+        col = edge ? '#52331d' : (x + y) % 2 === 0 ? '#8c5a34' : '#734727';
       } else {
-        col = edge ? '#59493b' : (x + y) % 3 === 0 ? '#8c8375' : '#7a7266';
+        col = edge ? '#75624e' : (x + y) % 3 === 0 ? '#bdb19b' : '#a89c86';
       }
       ctx.fillStyle = col;
       ctx.fillRect(x, y, 1, 1);
@@ -380,9 +380,9 @@ function buildBarrierTexture(): THREE.CanvasTexture {
   for (let y = 0; y < 8; y++) {
     for (let x = 0; x < 16; x++) {
       const hazard = (x + y) % 6 < 2 && y <= 3;
-      let col = y >= 5 ? '#595f63' : '#7f868a';
-      if (hazard) col = '#e3a63b';
-      if (x === 0 || x === 15 || y === 0 || y === 7) col = '#272a2e';
+      let col = y >= 5 ? '#877f70' : '#ada493';
+      if (hazard) col = '#eba834';
+      if (x === 0 || x === 15 || y === 0 || y === 7) col = '#3d372f';
       ctx.fillStyle = col;
       ctx.fillRect(x, y, 1, 1);
     }
@@ -394,10 +394,10 @@ function buildDoorTexture(locked: boolean): THREE.CanvasTexture {
   const [c, ctx] = makePixelCanvas(12, 18);
   for (let y = 0; y < 18; y++) {
     for (let x = 0; x < 12; x++) {
-      let col = x % 3 === 0 ? '#593b25' : '#7a5437';
-      if (x === 0 || x === 11 || y === 0 || y === 17) col = '#1b140f';
-      else if (locked && y >= 7 && y <= 10 && x >= 4 && x <= 7) col = y === 8 ? '#f0c44d' : '#b88b28';
-      else if (y >= 8 && y <= 9 && x === 9) col = '#e8c458';
+      let col = x % 3 === 0 ? '#6e4527' : '#96623b';
+      if (x === 0 || x === 11 || y === 0 || y === 17) col = '#21160f';
+      else if (locked && y >= 7 && y <= 10 && x >= 4 && x <= 7) col = y === 8 ? '#f5cb52' : '#c49129';
+      else if (y >= 8 && y <= 9 && x === 9) col = '#f2cc5c';
       ctx.fillStyle = col;
       ctx.fillRect(x, y, 1, 1);
     }
@@ -414,16 +414,16 @@ function buildPineFoliageTexture(): THREE.CanvasTexture {
       const rimTooth = (x + Math.floor(y * 0.4)) % 8 < 2 || (x % 6 === 0 && y > 30);
       const boughShadow = (y >= 37 && ((x % 6 === 0) || (x % 6 === 1))) || (y === 47);
       const needleCluster = ((x + y * 2) % 7 <= 1) && n > 0.35;
-      const sunlit = y < 28 && n > 0.58 && !rimTooth;
-      let col = '#273f25';
-      if (boughShadow) col = '#132014';
-      else if (rimTooth) col = '#1b2c1a';
-      else if (sunlit) col = n > 0.82 ? '#6a9456' : '#4f7543';
-      else if (needleCluster) col = '#406338';
-      else if (n < 0.25) col = '#1d2f1c';
-      else if (n < 0.7) col = '#324e2f';
-      else col = '#3d5e37';
-      if ((x * 7 + y * 13) % 53 === 0 && y > 10) col = '#3d2c1e';
+      const sunlit = y < 28 && n > 0.54 && !rimTooth;
+      let col = '#2e5c2b';
+      if (boughShadow) col = '#173317';
+      else if (rimTooth) col = '#1f421f';
+      else if (sunlit) col = n > 0.8 ? '#7dbf58' : '#5da143';
+      else if (needleCluster) col = '#47823a';
+      else if (n < 0.25) col = '#244722';
+      else if (n < 0.7) col = '#386b33';
+      else col = '#447a38';
+      if ((x * 7 + y * 13) % 53 === 0 && y > 10) col = '#543922';
       ctx.fillStyle = col;
       ctx.fillRect(x, y, 1, 1);
     }
@@ -441,14 +441,14 @@ function buildTreeRingTexture(): THREE.CanvasTexture {
       const n = pxHash(x, y, 67);
       const ang = Math.atan2(dy, dx);
       const radialCrack = (Math.abs(ang - 0.55) < 0.08 && r > 3 && r < 14) || (Math.abs(ang + 2.1) < 0.07 && r > 4 && r < 12);
-      let col = '#b88c5c';
-      if (r >= 13.8) col = '#3b281a'; // outer dark bark rim
-      else if (radialCrack) col = '#3d2818';
-      else if (r < 3.2) col = '#6b492e'; // dark heartwood pith
+      let col = '#c79763';
+      if (r >= 13.8) col = '#452b19'; // outer dark bark rim
+      else if (radialCrack) col = '#472c18';
+      else if (r < 3.2) col = '#784e2d'; // dark heartwood pith
       else {
         const ring = Math.floor(r + (n - 0.5) * 0.65) % 2 === 0;
-        if (r > 11.2) col = ring ? '#a87d4f' : '#c79c6b';
-        else col = ring ? '#7d5636' : '#ad8254';
+        if (r > 11.2) col = ring ? '#b58654' : '#d6a874';
+        else col = ring ? '#8a5d38' : '#ba8b59';
       }
       ctx.fillStyle = col;
       ctx.fillRect(x, y, 1, 1);
@@ -465,14 +465,14 @@ function buildBarkTexture(): THREE.CanvasTexture {
       const furrow = x % 5 === 0 || (x % 5 === 1 && n < 0.45);
       const ridge = x % 5 === 3;
       const knot = Math.hypot(x - 16, y - 28) < 3.4 || Math.hypot(x - 8, y - 48) < 2.6;
-      let col = '#4f3726';
-      if (knot) col = '#261a12';
-      else if (furrow) col = '#2b1d14';
-      else if (ridge) col = n > 0.35 ? '#705139' : '#61442f';
-      else if (n > 0.8) col = '#634732';
-      else if (n < 0.16) col = '#38271b';
-      if (y > 50 && n > 0.76) col = '#3e5430'; // moss at root base
-      if (y < 40 && (x * 11 + y * 17) % 53 === 0) col = '#6b7556'; // lichen fleck
+      let col = '#6b452a';
+      if (knot) col = '#332014';
+      else if (furrow) col = '#3a2416';
+      else if (ridge) col = n > 0.35 ? '#8f5e3c' : '#7d5233';
+      else if (n > 0.8) col = '#7d5234';
+      else if (n < 0.16) col = '#4d311d';
+      if (y > 50 && n > 0.74) col = '#4d7839'; // moss at root base
+      if (y < 40 && (x * 11 + y * 17) % 53 === 0) col = '#84945e'; // lichen fleck
       ctx.fillStyle = col;
       ctx.fillRect(x, y, 1, 1);
     }
@@ -1167,12 +1167,12 @@ function buildVehicleTextures(police: boolean): {
   glass: THREE.CanvasTexture;
   wheel: THREE.CanvasTexture;
 } {
-  const main = police ? '#1b263b' : '#c93628';
-  const hi = police ? '#314569' : '#f05a46';
-  const mid = police ? '#22304a' : '#a8291d';
-  const dark = police ? '#111826' : '#63150e';
+  const main = police ? '#1e3c72' : '#d92b24';
+  const hi = police ? '#3b66b5' : '#ff564a';
+  const mid = police ? '#162d57' : '#b31e18';
+  const dark = police ? '#0c1a36' : '#6b100d';
   const carbon = '#181c22';
-  const carbonHi = '#282e36';
+  const carbonHi = '#2d3540';
   const trim = '#0e1115';
 
   // Side hull (128x32) mapped u=0 (REAR -X) -> u=1 (FRONT +X), v=1 (TOP) -> v=0 (BOTTOM)
@@ -1189,7 +1189,7 @@ function buildVehicleTextures(police: boolean): {
   for (let x = 0; x < 128; x += 2) {
     drawPixelRect(sctx, x, 26 + (x % 4 === 0 ? 0 : 1), 1, 2, carbonHi);
   }
-  drawPixelRect(sctx, 0, 25, 128, 1, police ? '#5ea8ff' : '#f05a46'); // thin aero accent pinstripe
+  drawPixelRect(sctx, 0, 25, 128, 1, police ? '#6eb8ff' : '#ff6357'); // thin aero accent pinstripe
 
   // Rear & front wheel-arch dark fender liners (centered around x=26 rear, x=100 front)
   drawPixelDisc(sctx, 26, 27, 13, trim);
@@ -1215,22 +1215,22 @@ function buildVehicleTextures(police: boolean): {
     // Sleek Arctic White interceptor door panel + angled pursuit stripe + gold badge + "07"
     for (let y = 4; y < 25; y++) {
       const skew = Math.floor((y - 4) * 0.45);
-      drawPixelRect(sctx, 54 + skew, y, 36 - skew, 1, '#eef2f6');
+      drawPixelRect(sctx, 54 + skew, y, 36 - skew, 1, '#f4f8fc');
     }
-    drawPixelRect(sctx, 56, 20, 32, 2, '#2d5ea8'); // blue pursuit accent line
+    drawPixelRect(sctx, 56, 20, 32, 2, '#2d72d9'); // crisp sapphire pursuit accent line
     // Gold Interceptor Shield Emblem
     drawPixelRect(sctx, 68, 8, 8, 9, '#d4af55');
     drawPixelRect(sctx, 69, 9, 6, 7, '#ffe082');
-    drawPixelRect(sctx, 71, 11, 2, 3, '#1b263b');
+    drawPixelRect(sctx, 71, 11, 2, 3, '#1e3c72');
     // Unit "07" pixel stencil
-    drawPixelRect(sctx, 58, 10, 4, 7, '#1b263b');
-    drawPixelRect(sctx, 59, 11, 2, 5, '#eef2f6');
-    drawPixelRect(sctx, 63, 10, 4, 2, '#1b263b');
-    drawPixelRect(sctx, 65, 12, 2, 5, '#1b263b');
+    drawPixelRect(sctx, 58, 10, 4, 7, '#1e3c72');
+    drawPixelRect(sctx, 59, 11, 2, 5, '#f4f8fc');
+    drawPixelRect(sctx, 63, 10, 4, 2, '#1e3c72');
+    drawPixelRect(sctx, 65, 12, 2, 5, '#1e3c72');
   } else {
-    // Subtle gunmetal GT side stripe & supercar vent badge
-    drawPixelRect(sctx, 55, 20, 30, 2, '#dce2e8');
-    drawPixelRect(sctx, 78, 8, 4, 3, '#d4af55');
+    // Crisp pearl-silver GT side stripe & supercar vent badge
+    drawPixelRect(sctx, 55, 20, 30, 2, '#eef3f7');
+    drawPixelRect(sctx, 78, 8, 4, 3, '#f0c44d');
   }
 
   // Hood / Roof / Rear Engine Deck top texture (128x64, x=0 rear -> x=127 front)
@@ -1241,29 +1241,29 @@ function buildVehicleTextures(police: boolean): {
 
   if (police) {
     // Crisp white interceptor roof & hood stripes
-    drawPixelRect(rctx, 44, 6, 40, 52, '#eef2f6');
-    drawPixelRect(rctx, 46, 8, 36, 48, '#dde4ec');
+    drawPixelRect(rctx, 44, 6, 40, 52, '#f4f8fc');
+    drawPixelRect(rctx, 46, 8, 36, 48, '#e3ebf2');
     // Roof unit number "07"
-    drawPixelRect(rctx, 56, 20, 7, 16, '#1b263b');
-    drawPixelRect(rctx, 58, 23, 3, 10, '#eef2f6');
-    drawPixelRect(rctx, 66, 20, 7, 4, '#1b263b');
-    drawPixelRect(rctx, 70, 24, 3, 12, '#1b263b');
+    drawPixelRect(rctx, 56, 20, 7, 16, '#1e3c72');
+    drawPixelRect(rctx, 58, 23, 3, 10, '#f4f8fc');
+    drawPixelRect(rctx, 66, 20, 7, 4, '#1e3c72');
+    drawPixelRect(rctx, 70, 24, 3, 12, '#1e3c72');
     // Front hood twin white pursuit stripes
-    drawPixelRect(rctx, 88, 22, 38, 6, '#eef2f6');
-    drawPixelRect(rctx, 88, 36, 38, 6, '#eef2f6');
+    drawPixelRect(rctx, 88, 22, 38, 6, '#f4f8fc');
+    drawPixelRect(rctx, 88, 36, 38, 6, '#f4f8fc');
   } else {
-    // Twin gunmetal-silver racing stripes with dark pinstripe borders
+    // Twin pearl-silver racing stripes with dark pinstripe borders
     drawPixelRect(rctx, 4, 21, 122, 8, '#1b1f24');
-    drawPixelRect(rctx, 4, 22, 122, 6, '#dce2e8');
+    drawPixelRect(rctx, 4, 22, 122, 6, '#eef3f7');
     drawPixelRect(rctx, 4, 35, 122, 8, '#1b1f24');
-    drawPixelRect(rctx, 4, 36, 122, 6, '#dce2e8');
+    drawPixelRect(rctx, 4, 36, 122, 6, '#eef3f7');
   }
 
   // Rear mid-engine smoked glass & twin V8 valve covers (x=6..40)
   drawPixelRect(rctx, 6, 12, 34, 40, '#13171d');
   drawPixelRect(rctx, 8, 14, 30, 36, '#1f2833');
-  drawPixelRect(rctx, 12, 17, 22, 10, police ? '#3b4f6e' : '#b82e23');
-  drawPixelRect(rctx, 12, 37, 22, 10, police ? '#3b4f6e' : '#b82e23');
+  drawPixelRect(rctx, 12, 17, 22, 10, police ? '#3b66b5' : '#cc2920');
+  drawPixelRect(rctx, 12, 37, 22, 10, police ? '#3b66b5' : '#cc2920');
   for (let lx = 10; lx <= 34; lx += 6) {
     drawPixelRect(rctx, lx, 14, 2, 36, '#14181f'); // engine louver slats
   }
@@ -1915,32 +1915,32 @@ function buildRoadSignTexture(): THREE.CanvasTexture {
 
 function buildWreckedCarTexture(): THREE.CanvasTexture {
   const [c, ctx] = makePixelCanvas(128, 32);
-  drawZombieDither(ctx, 0, 0, 128, 32, '#544e4a', '#6b635e', '#383431', 307);
-  drawPixelRect(ctx, 0, 0, 128, 3, '#736a63');
-  drawPixelRect(ctx, 0, 12, 128, 2, '#3d3734');
-  // Rust & burn streaks across doors, side intake & fenders
-  drawZombieDither(ctx, 8, 8, 28, 16, '#6e3b24', '#854a2e', '#452213', 311);
-  drawZombieDither(ctx, 76, 4, 34, 20, '#262220', '#383230', '#141211', 313);
-  drawPixelRect(ctx, 38, 10, 16, 13, '#141312'); // charred side intake
-  drawPixelRect(ctx, 56, 5, 1, 20, '#171413');
-  drawPixelRect(ctx, 84, 5, 1, 20, '#171413');
-  drawPixelRect(ctx, 0, 25, 128, 7, '#191716'); // scorched carbon rocker
-  drawPixelDisc(ctx, 26, 27, 13, '#0f0e0d');
-  drawPixelDisc(ctx, 100, 27, 13, '#0f0e0d');
+  drawZombieDither(ctx, 0, 0, 128, 32, '#755c47', '#8f7258', '#523f30', 307);
+  drawPixelRect(ctx, 0, 0, 128, 3, '#9c7e62');
+  drawPixelRect(ctx, 0, 12, 128, 2, '#4a3829');
+  // Oxidized rust-orange patina & burn streaks across doors, side intake & fenders
+  drawZombieDither(ctx, 8, 8, 30, 16, '#994823', '#bd5c2e', '#612910', 311);
+  drawZombieDither(ctx, 76, 4, 34, 20, '#362c27', '#4a3c35', '#1c1714', 313);
+  drawPixelRect(ctx, 38, 10, 16, 13, '#171514'); // charred side intake
+  drawPixelRect(ctx, 56, 5, 1, 20, '#1a1614');
+  drawPixelRect(ctx, 84, 5, 1, 20, '#1a1614');
+  drawPixelRect(ctx, 0, 25, 128, 7, '#1c1917'); // scorched carbon rocker
+  drawPixelDisc(ctx, 26, 27, 13, '#11100f');
+  drawPixelDisc(ctx, 100, 27, 13, '#11100f');
   return toNearestTexture(c);
 }
 
 function buildWreckedCarTopTexture(): THREE.CanvasTexture {
   const [c, ctx] = makePixelCanvas(128, 64);
-  drawZombieDither(ctx, 0, 0, 128, 64, '#544e4a', '#6b635e', '#383431', 317);
-  // Faded scorched stripes & rust patches
-  drawPixelRect(ctx, 4, 22, 120, 6, '#363331');
-  drawPixelRect(ctx, 4, 36, 120, 6, '#363331');
-  drawZombieDither(ctx, 84, 10, 34, 44, '#24201e', '#6e3b24', '#141211', 331);
+  drawZombieDither(ctx, 0, 0, 128, 64, '#755c47', '#8f7258', '#523f30', 317);
+  // Faded ochre racing stripes & burnt-copper rust patches
+  drawPixelRect(ctx, 4, 22, 120, 6, '#a69681');
+  drawPixelRect(ctx, 4, 36, 120, 6, '#a69681');
+  drawZombieDither(ctx, 84, 10, 34, 44, '#362a23', '#994823', '#1c1714', 331);
   // Charred mid-engine louver bay
-  drawPixelRect(ctx, 6, 12, 34, 40, '#141312');
-  drawPixelRect(ctx, 12, 18, 22, 10, '#5c2d1b');
-  drawPixelRect(ctx, 12, 36, 22, 10, '#5c2d1b');
+  drawPixelRect(ctx, 6, 12, 34, 40, '#171514');
+  drawPixelRect(ctx, 12, 18, 22, 10, '#853d1e');
+  drawPixelRect(ctx, 12, 36, 22, 10, '#853d1e');
   return toNearestTexture(c);
 }
 
