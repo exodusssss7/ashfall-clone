@@ -13,7 +13,7 @@ const SAMPLE_NAMES = [
   'drink', 'bottleOpen', 'liquid', 'repair0', 'repair1', 'splash', 'handleSmallLeather', 'beltHandle1', 'metalPot1',
   'groan1', 'groan2', 'groan3', 'groan4', 'pistol0', 'pistol1', 'shotgun0', 'shotgun1',
   'reload', 'rack', 'day', 'night', 'breathing', 'heartbeat',
-  'lmg0', 'lmg1', 'zombiedie0', 'zombiedie1', 'carhit0', 'carhit1', 'zhurt0', 'zhurt1', 'zhurt2',
+  'lmg0', 'lmg1', 'zombiedie0', 'zombiedie1', 'carhit0', 'carhit1', 'zhurt0', 'zhurt1', 'zhurt2', 'zmoan0', 'zmoan1', 'zmoan2',
 ];
 
 /** Recorded foley/weapon banks, with quiet continuous day/night soundscapes.
@@ -322,7 +322,8 @@ class SurvivalSoundEngine {
     if (!this.ctx || this.ctx.currentTime - this.lastGroanTime < 2.2) return;
     this.lastGroanTime = this.ctx.currentTime;
     const rates = { walker: 0.94, runner: 1.13, spitter: 1.04, bloater: 0.7 };
-    this.sample(`groan${1 + Math.floor(Math.random() * 4)}`, 0.19, rates[archetype]);
+    // User-selected EmoPreben moans (option B); hurt and death banks stay separate.
+    this.sample(this.choose('zmoan', 3), 0.28, rates[archetype]);
   }
   playBuildHammer(): void { this.sample(this.choose('wood', 2), 0.43); }
   playLootPickup(): void { this.sample('handleSmallLeather', 0.28); }

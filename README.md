@@ -1,3 +1,20 @@
+# The Alive Horde v1.6
+
+Validation for v1.6: 108 automated tests pass (103 existing plus 5 new zombie
+voice tests), TypeScript and production build pass. All three selected assets
+decode in Chrome, and the selected voice bank triggers through the real Web
+Audio path. Signed APK content is browser-smoke-tested, not Android-device-tested.
+
+v1.6 adds the selected EmoPreben zombie moans (option B) to existing alert/attack
+voice cues, with three non-repeating variants and the existing global cooldown.
+Hurt/death sounds, visuals and game balance remain unchanged from live base
+1804f16.
+
+Audio provenance is in public/audio/CREDITS.txt. The Mixkit heartbeat remains
+APK-only and is intentionally excluded from this source package.
+Install dependencies with npm ci --legacy-peer-deps for the current upstream
+Vite/esbuild peer-version mismatch; this sound update does not change packages.
+
 # The Alive Horde v1.5 - multitouch weapon switching, warning blinks, HUD resizing
 
 Private source checkpoint based on owner commit ad7dc0f7b4e03807dc4ac5a7a8b8b7c381c19dc5.
@@ -52,11 +69,11 @@ All other audio credits remain in `public/audio/CREDITS.txt`.
 
 ## Android
 
-Package `com.exodus.ashfall`, versionCode 15, versionName 1.5.0, Android 8.0+, both landscape orientations. The separately supplied signed APK retains the original signing certificate.
+Package `com.exodus.ashfall`, versionCode 16, versionName 1.6.0, Android 8.0+, both landscape orientations. The separately supplied signed APK retains the original signing certificate.
 
 Install Java and Android SDK API 35/build-tools 35.0.0. Set `ANDROID_HOME` and run `sh android/build.sh` after installing dependencies. This creates an unsigned APK; the original private signing key is required for in-place updates. Keys, passwords and account tokens are not included.
 
-## Verification and limits
+## Historical v1.5 verification and limits
 
 95 automated tests, TypeScript and production build passed. Browser checks on the production build: two-finger weapon switching while the move stick is held, while FIRE is held, and while FPS aim/fire is held with a drag (shotgun and pistol; exactly one activation per tap); dry-weapon red pulse states; low-health and low-thirst red blink states verified red through the whole pulse; individual button resize, group resize, move drag, viewport clamping and persistence in Edit HUD; HUD screenshots at 900x420 landscape, all visually inspected. Signed with the original certificate for in-place updates; saves preserved. Not installed or performance-tested on an Android phone.
 

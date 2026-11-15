@@ -136,3 +136,17 @@ License: https://mixkit.co/license/modal/sfxFree/
 Mixkit Sound Effects Free License. Permitted in completed video games;
 redistribution with source files is prohibited. Audio excluded from source ZIP/repo.
 Edited: audition normalization, trailing silence trimmed, short tail fade.
+
+
+v1.6 zombie voices, user-selected option B:
+EmoPreben (Lasse Buhrmann), Zombie Moans 01 (2020), CC0 1.0.
+https://opengameart.org/content/zombie-moans-01-by-emopreben
+https://creativecommons.org/publicdomain/zero/1.0/
+Source archive: zombiemoans_-_wav.zip, ZombieMoan1/2/3 WAV recordings.
+Mapped in order to zmoan0/1/2.mp3. Mono 32kHz/96kbps MP3, loudness
+adjustment and short endpoint fades. No generated voices. Small existing
+per-archetype rate differences retained; consecutive repeats avoided.
+Plays on existing zombie alert/attack vocal cues, globally rate-limited to
+once per 2.2 seconds. Existing hurt and death recordings are unchanged.
+CC0 allows commercial game use and redistribution in source.
+No creator endorsement is implied.
