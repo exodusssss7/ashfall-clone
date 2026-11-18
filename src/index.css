@@ -1129,16 +1129,16 @@ html[data-skin="a"] .journal-title-card .menu-continue-btn span { color: #fff1cd
 
 /* Bag chip: standalone backpack/crafting button detached from the hotbar slots (user request:
    bag must sit left of the item slots, not framed as one of them). */
-.hotbar-wrap { display:flex; align-items:flex-end; gap:10px; max-width:calc(100vw - 24px); }
-.hotbar-wrap .equipment-bar { flex:1; min-width:0; overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
+.hotbar-wrap { display:flex; align-items:flex-end; gap:8px; max-width:calc(100vw - 24px); }
+.hotbar-wrap .equipment-bar { flex:0 0 auto; max-width:100%; overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
 .hotbar-wrap .equipment-bar::-webkit-scrollbar { display:none; }
-html[data-skin="a"] .game-hud[data-touch="true"] .hotbar-wrap .equipment-bar { touch-action:pan-x; }
-html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar>button { flex:0 0 46px!important; min-width:46px!important; width:46px!important; }
+html[data-skin="a"] .game-hud[data-touch="true"] .hotbar-wrap .equipment-bar { touch-action:pan-x; width:100%; }
+html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar>button { flex:0 0 50px!important; min-width:50px!important; width:50px!important; }
 @media(max-width:960px) and (orientation:landscape){
-  html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar>button { flex:0 0 42px!important; min-width:42px!important; width:42px!important; }
+  html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar>button { flex:0 0 48px!important; min-width:48px!important; width:48px!important; }
 }
 @media(max-width:600px) and (orientation:portrait){
-  html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar>button { flex:0 0 44px!important; min-width:44px!important; width:44px!important; }
+  html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar>button { flex:0 0 48px!important; min-width:48px!important; width:48px!important; }
 }
 .bag-btn { position:relative; flex:0 0 auto; display:flex; flex-direction:column; justify-content:center; align-items:center; min-width:64px; height:80px; padding:4px 7px; background:#071011b8; border:1px solid #68736680; border-bottom:3px solid #39433d; border-radius:10px; color:#f0ece1; }
 .bag-btn .equipment-icon { width:37px; height:34px; margin:-1px 0 -2px; }
@@ -1182,3 +1182,455 @@ html[data-skin="a"] .vitals-panel .health-track > div.vital-critical {
   z-index: 36;
   pointer-events: none;
 }
+
+/* ============================================================
+   v1.6: Expandable 2-Row Hotbar + Drag-and-Drop Inventory Dock
+   ============================================================ */
+.hotbar-rows {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.hotbar-row-2 {
+  animation: hotbarRowReveal 140ms ease-out;
+}
+@keyframes hotbarRowReveal {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hotbar-row-2 { animation: none; }
+}
+
+/* Desktop & touch slot dimensions + keybind badge legibility without clipping */
+html[data-skin="a"] .equipment-bar > button {
+  width: 62px;
+  min-width: 62px;
+  height: 64px;
+}
+html[data-skin="a"] .equipment-bar > button > div:first-child {
+  left: 4px;
+  right: 4px;
+  bottom: 3px;
+  justify-content: space-between !important;
+  align-items: center;
+  width: calc(100% - 8px);
+}
+html[data-skin="a"] .equipment-bar > button > div:first-child > span:first-child {
+  display: inline !important;
+  font-size: 9px !important;
+  color: #bba57f !important;
+  opacity: 0.92;
+}
+html[data-skin="a"] .equipment-bar > button > div:first-child > span:last-child {
+  font-size: 9.5px !important;
+}
+html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar > button > div:first-child {
+  left: 3px;
+  right: 3px;
+  width: calc(100% - 6px);
+}
+html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar > button > div:first-child > span:first-child {
+  font-size: 8px !important;
+}
+html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar > button > div:first-child > span:last-child {
+  font-size: 9px !important;
+}
+html[data-skin="a"] .equipment-bar > button.hud-slot-active > div:first-child > span:first-child {
+  color: #f5d88a !important;
+}
+.hotbar-tool-mark {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0.78;
+  pointer-events: none;
+  z-index: 2;
+}
+html[data-skin="a"] .equipment-bar > button.hotbar-slot-empty {
+  opacity: 0.56;
+  background: linear-gradient(145deg, #16110cb8, #0f0b08a6) !important;
+}
+html[data-skin="a"] .equipment-bar > button.hotbar-slot-dimmed:not(.hotbar-slot-empty) {
+  opacity: 0.62;
+}
+.hotbar-empty-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 16px var(--font-mono);
+  color: #6b563c;
+}
+html[data-skin="a"] .equipment-bar > button.hotbar-slot-dragging {
+  opacity: 0.38 !important;
+  transform: scale(0.95);
+}
+html[data-skin="a"] .equipment-bar > button.hotbar-drop-target {
+  box-shadow: inset 0 0 0 2px #f5c542, 0 0 12px #f5c54288 !important;
+  background: linear-gradient(145deg, #4b3a17ee, #241a0ce8) !important;
+}
+
+/* Bronze Cut-Corner Expand Handle ([Tab] + Row 2 count) */
+.hotbar-expand-btn {
+  --cut: 7px;
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 46px;
+  height: 62px;
+  padding: 4px 3px;
+  color: #e8dcc3;
+  background: linear-gradient(145deg, #241c13e6, #14100be8);
+  border-color: transparent;
+  cursor: pointer;
+  clip-path: polygon(var(--cut) 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, var(--cut) 100%, 0 calc(100% - var(--cut)), 0 var(--cut));
+  box-shadow: inset 0 0 0 2px #0d0906, 0 3px 6px #0009;
+}
+.hotbar-expand-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  background: linear-gradient(135deg, #d9b47c, #7a5c3e 32%, #241708 55%, #6b4f33 85%, #c8a165);
+  clip-path: polygon(evenodd, 7px 0, calc(100% - 7px) 0, 100% 7px, 100% calc(100% - 7px), calc(100% - 7px) 100%, 7px 100%, 0 calc(100% - 7px), 0 7px, 7px 0, 8px 3px, 3px 8px, 3px calc(100% - 8px), 8px calc(100% - 3px), calc(100% - 8px) calc(100% - 3px), calc(100% - 3px) calc(100% - 8px), calc(100% - 3px) 8px, calc(100% - 8px) 3px, 8px 3px);
+}
+.hotbar-expand-btn.is-expanded {
+  background: linear-gradient(135deg, #57451a, #241a0e 85%);
+  color: #ffe9a8;
+}
+.hotbar-expand-btn.is-expanded::after {
+  background: linear-gradient(135deg, #f3d78e, #a87529 45%, #ddb45d 85%, #ebca7f);
+}
+.hotbar-expand-key {
+  font: 700 8px/1 var(--font-mono);
+  color: #bda87f;
+  letter-spacing: 0.03em;
+}
+.hotbar-expand-count {
+  font: 700 9px/1 var(--font-mono);
+  color: #f5c542;
+}
+
+/* Bag & Expand button height alignment with Primary Row */
+html[data-skin="a"] .bag-btn {
+  height: 78px;
+}
+html[data-skin="a"] .hotbar-expand-btn {
+  height: 78px;
+}
+
+/* Touch mode adjustments for 2-row hotbar */
+.game-hud[data-touch="true"] .hotbar-expand-btn {
+  width: 36px;
+  height: 67px;
+  padding: 2px;
+}
+.game-hud[data-touch="true"] .hotbar-expand-key {
+  display: none;
+}
+@media (max-width: 800px) and (orientation: landscape) {
+  .game-hud[data-touch="true"] .hotbar-expand-btn {
+    width: 32px;
+    height: 67px;
+  }
+  html[data-skin="a"] .game-hud[data-touch="true"] .equipped-readout:has(+ .hotbar-wrap[data-expanded="true"]) {
+    bottom: 158px !important;
+  }
+  body:has(.hotbar-wrap[data-expanded="true"]) .touch-controls .context-action-stack {
+    bottom: 188px !important;
+  }
+}
+@media (min-width: 801px) and (orientation: landscape) {
+  html[data-skin="a"] .game-hud[data-touch="true"] .equipped-readout:has(+ .hotbar-wrap[data-expanded="true"]) {
+    bottom: 182px !important;
+  }
+  body:has(.hotbar-wrap[data-expanded="true"]) .touch-controls .context-action-stack {
+    bottom: 212px !important;
+  }
+}
+@media (max-width: 600px) and (orientation: portrait) {
+  .game-hud[data-touch="true"] .hotbar-expand-btn {
+    width: 34px;
+    height: 68px;
+  }
+  html[data-skin="a"] .game-hud[data-touch="true"] .equipped-readout:has(+ .hotbar-wrap[data-expanded="true"]) {
+    bottom: 158px !important;
+  }
+  body:has(.hotbar-wrap[data-expanded="true"]) .touch-controls .context-action-stack {
+    bottom: 196px !important;
+  }
+}
+
+/* Floating Drag Ghost */
+.hotbar-drag-ghost-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: linear-gradient(145deg, #332714f2, #17120df5);
+  border: 2px solid #f5c542;
+  box-shadow: 0 8px 24px #000c, inset 0 0 0 1px #4a3418;
+  color: #f5e7bd;
+  clip-path: polygon(6px 0, calc(100% - 6px) 0, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0 calc(100% - 6px), 0 6px);
+}
+.hotbar-drag-ghost-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.hotbar-drag-ghost-text strong {
+  font: 700 11px/1.1 var(--font-body);
+  color: #ffe9a8;
+}
+.hotbar-drag-ghost-text span {
+  font: 700 9px/1 var(--font-mono);
+  color: #d9b47c;
+  letter-spacing: 0.03em;
+}
+
+/* ============================================================
+   Field Pack: Larger Workbench + Interactive 2-Row Hotbar Dock
+   ============================================================ */
+html[data-skin="a"] .pack-dialog {
+  height: min(700px, 94dvh);
+}
+.pack-center-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.pack-center-col > .pack-storage {
+  flex: 1;
+  min-height: 0;
+}
+.pack-slot-hotkey {
+  position: absolute;
+  left: 4px;
+  top: 3px;
+  font: 700 8px/1 var(--font-mono);
+  padding: 1px 3px;
+  background: #17120de6;
+  border: 1px solid #8a6a42;
+  color: #f5c542;
+}
+.pack-slot-grip {
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  width: 11px;
+  height: 11px;
+  color: #a08b62;
+  opacity: 0.65;
+}
+.pack-bind-btn {
+  width: 100%;
+  min-height: 36px;
+  padding: 5px 8px;
+  border: 1px solid #6b4f33;
+  background: #241a10;
+  color: #d9cdb2;
+  font: 700 10px var(--font-mono);
+  cursor: pointer;
+}
+.pack-bind-btn:hover {
+  border-color: #d9b47c;
+  color: #fff2db;
+}
+.pack-bind-btn.is-armed {
+  background: #4e3b17;
+  border-color: #f5c542;
+  color: #ffe9a8;
+}
+
+/* Dock container pinned at bottom of Field Pack center column */
+.pack-hotbar-dock {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 12px 10px;
+  border-top: 2px solid #5a4630;
+  background: linear-gradient(180deg, #1b140d, #120d08);
+}
+.pack-dock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pack-dock-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.pack-dock-title strong {
+  font: 700 12px var(--font-pixel);
+  color: #eed9a0;
+  letter-spacing: 0.08em;
+}
+.pack-dock-title span {
+  font: 9px var(--font-mono);
+  color: #a08b62;
+}
+.pack-dock-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.pack-dock-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 7px;
+  border: 1px solid #6b4f33;
+  background: #241b11;
+  color: #d9cdb2;
+  font: 700 9px var(--font-mono);
+  cursor: pointer;
+}
+.pack-dock-btn:hover {
+  border-color: #d9b47c;
+  color: #ffe9a8;
+}
+.pack-dock-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pack-dock-row-tag {
+  flex: 0 0 22px;
+  font: 700 9px var(--font-mono);
+  color: #a08b62;
+  text-align: center;
+}
+.pack-dock-slots {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 5px;
+  min-width: 0;
+}
+.pack-dock-slot-wrap {
+  position: relative;
+  min-width: 0;
+}
+.pack-dock-slot {
+  width: 100%;
+  height: 52px;
+  padding: 4px 3px 3px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid #6b4f33;
+  background: linear-gradient(145deg, #271d12, #17110a);
+  color: #e8dcc3;
+  cursor: grab;
+}
+.pack-dock-slot.is-empty {
+  background: #120d08;
+  border-color: #3d2e1e;
+  border-style: dashed;
+  cursor: default;
+}
+.pack-dock-slot.is-active {
+  border-color: #f5c542;
+  background: linear-gradient(135deg, #54401c, #271e0d);
+}
+.pack-dock-slot-wrap.is-drop-target .pack-dock-slot {
+  border-color: #ffe9a8;
+  background: linear-gradient(135deg, #624a1b, #2c210b);
+  box-shadow: 0 0 10px #f5c54266;
+}
+.pack-dock-slot-wrap.is-bind-armed .pack-dock-slot {
+  border-color: #d9b47c;
+  box-shadow: inset 0 0 0 1px #f5c54255;
+}
+.pack-dock-slot-wrap.is-dragging {
+  opacity: 0.4;
+}
+.pack-dock-key {
+  align-self: flex-start;
+  font: 700 8px/1 var(--font-mono);
+  color: #b39d73;
+}
+.pack-dock-slot > .item-icon {
+  width: 24px;
+  height: 24px;
+}
+.pack-dock-name {
+  font: 700 8px/1 var(--font-mono);
+  color: #f0e4c0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pack-dock-empty {
+  font: 700 8px/1 var(--font-mono);
+  color: #6b563c;
+  margin-bottom: 8px;
+}
+.pack-dock-clear {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  font: 700 11px/1 var(--font-mono);
+  color: #c8ab72;
+  background: #17120de0;
+  border: 1px solid #5a4630;
+  cursor: pointer;
+}
+.pack-dock-clear:hover {
+  color: #ff8e80;
+  border-color: #d95a4e;
+}
+
+@media (max-height: 460px) and (orientation: landscape) {
+  .pack-hotbar-dock {
+    padding: 5px 8px 6px;
+    gap: 3px;
+  }
+  .pack-dock-title span {
+    display: none;
+  }
+  .pack-dock-slot {
+    height: 38px;
+    padding: 2px;
+  }
+  .pack-dock-slot > .item-icon {
+    width: 18px;
+    height: 18px;
+  }
+  .pack-dock-name {
+    font-size: 7px;
+  }
+}
+@media (orientation: portrait) {
+  .pack-dock-title span {
+    display: none;
+  }
+  .pack-dock-slot {
+    height: 44px;
+  }
+  .pack-dock-slot > .item-icon {
+    width: 20px;
+    height: 20px;
+  }
+}
+

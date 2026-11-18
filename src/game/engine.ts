@@ -9,6 +9,23 @@ import {
   resolveCookingOutcomeForGrade,
   type CookingGrade,
 } from './cookingQte';
+import {
+  HOTBAR_TOOLS,
+  assignHotbarSlot as assignHotbarSlotState,
+  clearHotbarSlot as clearHotbarSlotState,
+  cloneHotbarState,
+  describeHotbarEntry,
+  getSlotIndexForKeyCode,
+  loadPersistedHotbarState,
+  resetHotbarState,
+  sanitizeHotbarState,
+  savePersistedHotbarState,
+  swapHotbarSlots as swapHotbarSlotsState,
+  toggleHotbarExpanded as toggleHotbarExpandedState,
+  type HotbarEntry,
+  type HotbarState,
+} from './hotbarSystem';
+import { computeAudioListenerPose } from './spatialAudio';
 import { AIM_DIRECTION_DEADZONE, touchAimAttack } from './touchAim';
 import { findZombieRoute, type RoutePoint } from './navigation';
 import {
@@ -289,6 +306,7 @@ export class SurvivalEngine {
   private ambientAsh: Array<{ x: number; y: number; speed: number; drift: number; size: number; alpha: number }> = [];
 
   // Camera in unscaled isometric pixel coordinates + First-Person mode state
+  private hotbar: HotbarState = loadPersistedHotbarState();
   private cameraMode: CameraMode = getSettings().defaultCameraMode;
   private lastSettingCameraMode: CameraMode = getSettings().defaultCameraMode;
   private fpsPitch = -0.05;
@@ -614,6 +632,7 @@ export class SurvivalEngine {
     this.setPhase('playing');
     this.clearInputs();
     this.autosaveTimer = AUTOSAVE_INTERVAL_SECONDS;
+    this.syncAudioListener();
     this.saveNow();
     this.emitHud();
     this.render();
@@ -819,6 +838,7 @@ export class SurvivalEngine {
       doors: this.doors,
       zombies: this.zombies,
       explored: encodeExploredChunks(this.worldStore.chunks),
+      hotbar: cloneHotbarState(this.hotbar),
     };
     storeRunSnapshot(save);
     this.saveAvailable = true;
@@ -855,6 +875,10 @@ export class SurvivalEngine {
     p.thirst = clamp(p.thirst, 0, 100);
     this.player = p;
     this.inventory = { ...createInitialInventory(), ...save.inventory };
+    if (save.hotbar) {
+      this.hotbar = sanitizeHotbarState(save.hotbar);
+      savePersistedHotbarState(this.hotbar);
+    }
 
     this.containers = save.containers.map((c) => ({ ...c, items: { ...c.items } }));
     this.structures = save.structures.map((s) => ({ ...s }));
@@ -958,6 +982,7 @@ export class SurvivalEngine {
       }
     }
     this.updateMouseWorld();
+    this.syncAudioListener();
     this.emitHud();
     this.render();
   }
@@ -1038,6 +1063,102 @@ export class SurvivalEngine {
     this.addFloatingText(this.player.x, this.player.y, 1.3, res.message, '#8be08b');
     this.emitHud();
     return true;
+  }
+
+  toggleHotbarExpanded(expanded?: boolean): void {
+    const next = toggleHotbarExpandedState(this.hotbar, expanded);
+    if (next === this.hotbar) return;
+    this.hotbar = next;
+    savePersistedHotbarState(this.hotbar);
+    soundEngine.unlock();
+    soundEngine.playUiClick();
+    this.emitHud();
+  }
+
+  assignHotbarSlot(slotIndex: number, entry: HotbarEntry): void {
+    const next = assignHotbarSlotState(this.hotbar, slotIndex, entry);
+    if (next === this.hotbar) return;
+    this.hotbar = next;
+    savePersistedHotbarState(this.hotbar);
+    soundEngine.unlock();
+    soundEngine.playUiClick();
+    const meta = describeHotbarEntry(entry);
+    this.showBanner(`Assigned ${meta.name}`, 1.3);
+    this.emitHud();
+  }
+
+  swapHotbarSlots(fromIndex: number, toIndex: number): void {
+    const next = swapHotbarSlotsState(this.hotbar, fromIndex, toIndex);
+    if (next === this.hotbar) return;
+    this.hotbar = next;
+    savePersistedHotbarState(this.hotbar);
+    soundEngine.unlock();
+    soundEngine.playUiClick();
+    this.emitHud();
+  }
+
+  clearHotbarSlot(slotIndex: number): void {
+    const next = clearHotbarSlotState(this.hotbar, slotIndex);
+    if (next === this.hotbar) return;
+    this.hotbar = next;
+    savePersistedHotbarState(this.hotbar);
+    soundEngine.unlock();
+    soundEngine.playUiClick();
+    this.emitHud();
+  }
+
+  resetHotbar(): void {
+    this.hotbar = resetHotbarState(true, this.hotbar.expanded);
+    savePersistedHotbarState(this.hotbar);
+    soundEngine.unlock();
+    soundEngine.playUiClick();
+    this.showBanner('Hotbar reset to default survival kit', 1.6);
+    this.emitHud();
+  }
+
+  activateHotbarSlot(slotIndex: number): void {
+    if (this.phase !== 'playing') return;
+    const entry = this.hotbar.slots[slotIndex];
+    if (!entry) return;
+    if (entry.kind === 'weapon') {
+      if (this.activeVehicleId !== null) return;
+      this.selectWeapon(entry.id);
+      return;
+    }
+    if (entry.kind === 'consumable') {
+      this.useConsumable(entry.id);
+      return;
+    }
+    if (entry.id === 'flashlight') {
+      this.triggerFlashlight();
+      return;
+    }
+    if (this.activeVehicleId !== null) return;
+    if (entry.id === 'build_hammer') {
+      this.toggleBuildMode();
+      return;
+    }
+    const toolMeta = HOTBAR_TOOLS[entry.id];
+    if (toolMeta) {
+      this.toggleBuildMode(entry.id);
+    }
+  }
+
+  private syncAudioListener(): void {
+    const pose = computeAudioListenerPose({
+      cameraMode: this.cameraMode,
+      playerX: this.player.x,
+      playerY: this.player.y,
+      facingAngle: this.player.facingAngle,
+      fpsPitch: this.fpsPitch,
+      inVehicle: this.activeVehicleId !== null,
+    });
+    soundEngine.updateListenerPose(pose);
+  }
+
+  getSpatialAudioDebugInfo() {
+    this.syncAudioListener();
+    return soundEngine.getSpatialDebugInfo();
   }
 
   isNearCookingHeat(): boolean {
@@ -1697,10 +1818,18 @@ export class SurvivalEngine {
 
     if (this.phase !== 'playing' || this.modalOpen) return;
 
+    if (code === 'Tab') {
+      e.preventDefault();
+      this.toggleHotbarExpanded();
+      return;
+    }
+
     if (!this.keysHeld.has(code)) {
       this.justPressed.add(code);
     }
     this.keysHeld.add(code);
+
+    const hotbarSlotIdx = getSlotIndexForKeyCode(code, e.shiftKey);
 
     // Hotbar weapon, consumable, door, cooking, camera & vehicle switches
     if (code === 'KeyZ') {
@@ -1716,30 +1845,13 @@ export class SurvivalEngine {
       this.triggerQuickCook();
     } else if (code === 'KeyV' && this.activeVehicleId === null) {
       this.triggerBarricadeDoor();
-    } else if (code === 'Digit1' && this.activeVehicleId === null) {
-      this.selectWeapon('crowbar');
-    } else if (code === 'Digit8' && this.activeVehicleId === null) {
-      this.selectWeapon('machete');
-    } else if (code === 'Digit9' && this.activeVehicleId === null) {
-      this.selectWeapon('barbed_bat');
-    } else if (code === 'Digit0' && this.activeVehicleId === null) {
-      this.selectWeapon('axe');
-    } else if (code === 'Minus' && this.activeVehicleId === null) {
-      this.selectWeapon('sledgehammer');
-    } else if (code === 'Digit2' && this.activeVehicleId === null) {
-      this.selectWeapon('pistol');
-    } else if (code === 'Digit3' && this.activeVehicleId === null) {
-      this.selectWeapon('shotgun');
-    } else if (code === 'Digit4' && this.activeVehicleId === null) {
-      this.selectWeapon('molotov');
-    } else if (code === 'Digit5' && this.activeVehicleId === null) {
-      this.selectWeapon('lmg');
+    } else if (hotbarSlotIdx !== null) {
+      const slotEntry = this.hotbar.slots[hotbarSlotIdx];
+      if (this.activeVehicleId === null || slotEntry?.kind === 'consumable' || (slotEntry?.kind === 'tool' && slotEntry.id === 'flashlight')) {
+        this.activateHotbarSlot(hotbarSlotIdx);
+      }
     } else if (code === 'KeyH') {
       this.useConsumable('bandage');
-    } else if (code === 'Digit6') {
-      this.useConsumable(pickBestFoodConsumable(this.inventory) ?? 'food');
-    } else if (code === 'Digit7') {
-      this.useConsumable('water');
     } else if (code === 'KeyF') {
       this.triggerFlashlight();
     } else if (code === 'KeyB' && this.activeVehicleId === null) {
@@ -1920,6 +2032,7 @@ export class SurvivalEngine {
   }
 
   private update(dt: number): void {
+    this.syncAudioListener();
     soundEngine.updateHeartbeat(this.player.hp, this.phase === 'playing' && !this.modalOpen && !this.pendingGameOver && !document.hidden, dt);
     soundEngine.updateAmbience(this.phase === 'playing', this.timeMinutes);
     if (this.phase !== 'playing' || this.modalOpen || this.pendingGameOver || document.hidden) soundEngine.updateSprintBreathing(false, false, 0);
@@ -2037,6 +2150,7 @@ export class SurvivalEngine {
       soundEngine.updateEngineSound(false, 0, false);
       this.updatePlayer(dt);
     }
+    this.syncAudioListener();
     soundEngine.updateSprintBreathing(this.activeVehicleId === null && this.isSprinting, this.phase === 'playing' && !this.modalOpen && !this.pendingGameOver && !document.hidden && this.player.hp > 0 && this.activeVehicleId === null, dt);
     this.updateDoors(dt);
     this.updateContainers(dt);
@@ -2226,7 +2340,7 @@ export class SurvivalEngine {
           next.speed *= 0.88;
           next.hp = Math.max(0, next.hp - (z.archetype === 'bloater' ? 7 : 2));
           next.hitFlash = 0.08;
-          soundEngine.playCarZombieImpact();
+          soundEngine.playCarZombieImpact({ x: z.x, y: z.y });
           this.trauma = Math.min(1, this.trauma + (ram.heavy ? 0.35 : 0.18));
         }
       }
@@ -2445,13 +2559,14 @@ export class SurvivalEngine {
     }
 
     // Survival needs update
-    const nearCampfire = this.structures.some(
+    const nearestCampfire = this.structures.find(
       (s) => s.kind === 'campfire' && dist(s.gx + 0.5, s.gy + 0.5, p.x, p.y) <= 4.2
     );
+    const nearCampfire = Boolean(nearestCampfire);
     this.player = tickSurvivalNeeds(p, dt, wantsSprint, nearCampfire);
 
-    // Subtle campfire crackle & low-HP heartbeat Foley
-    if (nearCampfire) {
+    // Subtle campfire crackle & low-HP heartbeat Foley (non-spatial so ambience stays steady while walking)
+    if (nearestCampfire) {
       this.crackleTimer -= dt;
       if (this.crackleTimer <= 0) {
         this.crackleTimer = 0.25 + Math.random() * 0.65;
@@ -2764,7 +2879,7 @@ export class SurvivalEngine {
       p.scaleX = 0.92;
       p.scaleY = 1.08;
       this.muzzleFlashTimer = 0.075;
-      soundEngine.playGunshot('pistol');
+      soundEngine.playGunshot('pistol', { x: p.x, y: p.y });
       this.trauma = Math.min(1, this.trauma + 0.24);
       this.emitSound(p.x, p.y, spec.noiseRadius, true);
       this.fireProjectiles('bullet', p.x, p.y, p.facingAngle, 1, spec.spreadRad, spec.damage, BULLET_SPEED);
@@ -2796,7 +2911,7 @@ export class SurvivalEngine {
       p.scaleX = 0.84;
       p.scaleY = 1.16;
       this.muzzleFlashTimer = 0.095;
-      soundEngine.playGunshot('shotgun');
+      soundEngine.playGunshot('shotgun', { x: p.x, y: p.y });
       this.trauma = Math.min(1, this.trauma + 0.55);
       this.hitstopTimer = 0.032;
       this.emitSound(p.x, p.y, spec.noiseRadius, true);
@@ -2823,7 +2938,7 @@ export class SurvivalEngine {
       p.scaleX = 0.95;
       p.scaleY = 1.05;
       this.muzzleFlashTimer = 0.05;
-      soundEngine.playGunshot('lmg');
+      soundEngine.playGunshot('lmg', { x: p.x, y: p.y });
       this.trauma = Math.min(1, this.trauma + 0.1);
       this.emitSound(p.x, p.y, spec.noiseRadius, true);
       this.fireProjectiles('bullet', p.x, p.y, p.facingAngle, 1, spec.spreadRad, spec.damage, BULLET_SPEED);
@@ -3680,7 +3795,7 @@ export class SurvivalEngine {
     z.hp -= amount;
     this.recentCombatTimer = Math.max(this.recentCombatTimer, 6.0);
     if (z.hp > 0 && z.state !== 'dying') {
-      soundEngine.playZombieHurt(z.archetype);
+      soundEngine.playZombieHurt(z.archetype, { x: z.x, y: z.y });
       // Only the struck zombie reacts to the physical blow and looks toward the attacker
       const dToP = dist(z.x, z.y, this.player.x, this.player.y);
       if (dToP > 1e-4) {
@@ -3751,7 +3866,7 @@ export class SurvivalEngine {
       if (z.archetype === 'bloater') {
         soundEngine.playMolotovShatter();
       } else {
-        soundEngine.playZombieDeath(z.archetype);
+        soundEngine.playZombieDeath(z.archetype, { x: z.x, y: z.y });
       }
       if (z.archetype === 'bloater') {
         this.trauma = Math.min(1, this.trauma + 0.55);
@@ -3892,7 +4007,7 @@ export class SurvivalEngine {
         if (z.state === 'wander' || z.state === 'alert') {
           z.state = 'chase';
           z.stateTimer = 4.0;
-          if (Math.random() < 0.5) soundEngine.playZombieGroan(z.archetype);
+          if (Math.random() < 0.5) soundEngine.playZombieGroan(z.archetype, { x: z.x, y: z.y });
         } else if (z.state === 'chase') {
           z.stateTimer = Math.max(z.stateTimer, 4.0);
         }
@@ -4001,7 +4116,7 @@ export class SurvivalEngine {
               activeAttackers++;
               z.state = 'windup';
               z.stateTimer = cfg.windupTime;
-              soundEngine.playZombieGroan('spitter');
+              soundEngine.playZombieGroan('spitter', { x: z.x, y: z.y });
               continue;
             }
             mx = -z.facingY;
@@ -4030,7 +4145,7 @@ export class SurvivalEngine {
               z.stateTimer = cfg.windupTime;
               z.scaleX = 1.15;
               z.scaleY = 0.85;
-              soundEngine.playZombieGroan(z.archetype);
+              soundEngine.playZombieGroan(z.archetype, { x: z.x, y: z.y });
             }
           } else {
             this.moveActor(z, mx * z.speed * dt, my * z.speed * dt, 0.21);
@@ -4128,7 +4243,7 @@ export class SurvivalEngine {
     }
 
     if (z.archetype === 'spitter') {
-      soundEngine.playSpitHiss();
+      soundEngine.playSpitHiss({ x: z.x, y: z.y });
       // Launch arcing acid glob
       const travel = clamp(dist(z.x, z.y, p.x, p.y) / 7.5, 0.35, 0.9);
       this.projectiles.push({
@@ -4976,6 +5091,7 @@ export class SurvivalEngine {
         })),
       activeLootContainer: this.activeLootContainer,
       pickupNotifications: this.pickupNotifications,
+      hotbar: cloneHotbarState(this.hotbar),
     });
   }
 }

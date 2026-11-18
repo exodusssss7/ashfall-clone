@@ -471,6 +471,7 @@ export interface HudSnapshot {
   reloadProgress: number;
   buildMode: StructureKind | null;
   inventory: Inventory;
+  hotbar?: import('./hotbarSystem').HotbarState;
   day: number;
   timeMinutes: number; // 0..1440
   timeLabel: string;

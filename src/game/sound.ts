@@ -2,6 +2,14 @@ import { tickSprintBreathing, type SprintBreathingState } from './sprintBreathin
 import type { FootstepSurface } from './footstepSurfaces';
 import type { ImpactMaterial, ZombieArchetype } from './types';
 import { ambienceMix } from './audioMix';
+import {
+  SPATIAL_MAX_DISTANCE,
+  SPATIAL_REF_DISTANCE,
+  SPATIAL_ROLLOFF_FACTOR,
+  worldToAudioPosition,
+  type AudioListenerPose,
+  type SpatialPosition,
+} from './spatialAudio';
 
 const SAMPLE_NAMES = [
   'concrete0', 'concrete1', 'concrete2', 'concrete3', 'grass0', 'grass1', 'grass2', 'grass3',
@@ -16,7 +24,7 @@ const SAMPLE_NAMES = [
   'lmg0', 'lmg1', 'zombiedie0', 'zombiedie1', 'carhit0', 'carhit1', 'zhurt0', 'zhurt1', 'zhurt2', 'zmoan0', 'zmoan1', 'zmoan2',
 ];
 
-/** Recorded foley/weapon banks, with quiet continuous day/night soundscapes.
+/** Recorded foley/weapon banks, with quiet continuous day/night soundscapes and 3D HRTF spatialization.
  * No arcade reward tones. Small variations prevent repeated footsteps sounding identical.
  * Source licences and edits are documented in public/audio/CREDITS.txt.
  */
@@ -37,6 +45,9 @@ class SurvivalSoundEngine {
   private lastHurtTime = -10;
   private lastVariants = new Map<string, number>();
   private voices = new Set<AudioBufferSourceNode>();
+  private activePanners = new Set<PannerNode>();
+  private listenerPose: AudioListenerPose | null = null;
+  private lastListenerSyncTime = -1;
   private noise: AudioBuffer | null = null;
   private engineOsc: OscillatorNode | null = null;
   private engineSubOsc: OscillatorNode | null = null;
@@ -45,6 +56,116 @@ class SurvivalSoundEngine {
 
   private sprintBreathing: SprintBreathingState = { sprintSeconds: 0, wasSprinting: false };
   private breathingVoice: AudioBufferSourceNode | null = null;
+
+  updateListenerPose(pose: AudioListenerPose): void {
+    const prev = this.listenerPose;
+    if (
+      prev &&
+      Math.abs(prev.x - pose.x) < 0.002 &&
+      Math.abs(prev.y - pose.y) < 0.002 &&
+      Math.abs(prev.z - pose.z) < 0.002 &&
+      Math.abs(prev.forwardX - pose.forwardX) < 0.002 &&
+      Math.abs(prev.forwardY - pose.forwardY) < 0.002 &&
+      Math.abs(prev.forwardZ - pose.forwardZ) < 0.002 &&
+      Math.abs(prev.upX - pose.upX) < 0.002 &&
+      Math.abs(prev.upY - pose.upY) < 0.002 &&
+      Math.abs(prev.upZ - pose.upZ) < 0.002
+    ) {
+      return;
+    }
+    this.listenerPose = { ...pose };
+    this.applyListenerPoseToCtx();
+  }
+
+  private applyListenerPoseToCtx(): void {
+    if (!this.ctx || !this.listenerPose) return;
+    const listener = this.ctx.listener;
+    const p = this.listenerPose;
+    const now = this.ctx.currentTime;
+    if (listener.positionX) {
+      // Only interpolate with setTargetAtTime when AudioContext is running and at least one
+      // spatial panner is active; otherwise update directly to avoid AudioParam queue buildup.
+      if (this.ctx.state === 'running' && this.activePanners.size > 0 && now > this.lastListenerSyncTime) {
+        this.lastListenerSyncTime = now;
+        listener.positionX.setTargetAtTime(p.x, now, 0.016);
+        listener.positionY.setTargetAtTime(p.y, now, 0.016);
+        listener.positionZ.setTargetAtTime(p.z, now, 0.016);
+        listener.forwardX.setTargetAtTime(p.forwardX, now, 0.016);
+        listener.forwardY.setTargetAtTime(p.forwardY, now, 0.016);
+        listener.forwardZ.setTargetAtTime(p.forwardZ, now, 0.016);
+        listener.upX.setTargetAtTime(p.upX, now, 0.016);
+        listener.upY.setTargetAtTime(p.upY, now, 0.016);
+        listener.upZ.setTargetAtTime(p.upZ, now, 0.016);
+      } else {
+        listener.positionX.value = p.x;
+        listener.positionY.value = p.y;
+        listener.positionZ.value = p.z;
+        listener.forwardX.value = p.forwardX;
+        listener.forwardY.value = p.forwardY;
+        listener.forwardZ.value = p.forwardZ;
+        listener.upX.value = p.upX;
+        listener.upY.value = p.upY;
+        listener.upZ.value = p.upZ;
+      }
+    } else {
+      listener.setPosition?.(p.x, p.y, p.z);
+      listener.setOrientation?.(p.forwardX, p.forwardY, p.forwardZ, p.upX, p.upY, p.upZ);
+    }
+  }
+
+  getSpatialDebugInfo(): {
+    panningModel: 'HRTF';
+    listener: AudioListenerPose | null;
+    activePanners: number;
+    ctxState: string;
+    spatialCategories: readonly ['zombie', 'gunshot'];
+    ambienceBypassCompressor: boolean;
+  } {
+    return {
+      panningModel: 'HRTF',
+      listener: this.listenerPose ? { ...this.listenerPose } : null,
+      activePanners: this.activePanners.size,
+      ctxState: this.ctx?.state ?? 'uninitialized',
+      spatialCategories: ['zombie', 'gunshot'],
+      ambienceBypassCompressor: true,
+    };
+  }
+
+  private createSpatialPanner(
+    pos: SpatialPosition,
+    defaultHeight = 1.0,
+    refDistance = SPATIAL_REF_DISTANCE,
+    rolloffFactor = SPATIAL_ROLLOFF_FACTOR
+  ): PannerNode | null {
+    if (!this.ctx || !this.dryGain) return null;
+    const panner = this.ctx.createPanner();
+    panner.panningModel = 'HRTF';
+    panner.distanceModel = 'inverse';
+    panner.refDistance = refDistance;
+    panner.maxDistance = SPATIAL_MAX_DISTANCE;
+    panner.rolloffFactor = rolloffFactor;
+    panner.coneInnerAngle = 360;
+    panner.coneOuterAngle = 360;
+    panner.coneOuterGain = 0;
+
+    const coords = worldToAudioPosition(pos, defaultHeight);
+    if (panner.positionX) {
+      panner.positionX.value = coords.x;
+      panner.positionY.value = coords.y;
+      panner.positionZ.value = coords.z;
+    } else {
+      panner.setPosition?.(coords.x, coords.y, coords.z);
+    }
+    panner.connect(this.dryGain);
+    this.activePanners.add(panner);
+    return panner;
+  }
+
+  private releasePanner(panner: PannerNode | null): void {
+    if (!panner) return;
+    this.activePanners.delete(panner);
+    try { panner.disconnect(); } catch { /* already disconnected */ }
+  }
 
   updateSprintBreathing(sprinting: boolean, active: boolean, dt: number): void {
     const result = tickSprintBreathing(this.sprintBreathing, sprinting, active, dt);
@@ -128,6 +249,7 @@ class SurvivalSoundEngine {
       this.noise = this.ctx.createBuffer(1, this.ctx.sampleRate * 2, this.ctx.sampleRate);
       const data = this.noise.getChannelData(0);
       for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      this.applyListenerPoseToCtx();
       document.addEventListener('visibilitychange', this.onVisibilityChange);
     }
     if (!document.hidden && this.ctx.state === 'suspended') void this.ctx.resume();
@@ -165,8 +287,9 @@ class SurvivalSoundEngine {
     await Promise.all([worker(), worker(), worker(), worker()]);
   }
 
-  private route(node: AudioNode, _wetAmount = 0): void {
-    if (this.dryGain) node.connect(this.dryGain);
+  private route(node: AudioNode, panner?: PannerNode | null): void {
+    if (panner) node.connect(panner);
+    else if (this.dryGain) node.connect(this.dryGain);
   }
 
   private choose(bank: string, count: number): string {
@@ -177,7 +300,16 @@ class SurvivalSoundEngine {
     return `${bank}${next}`;
   }
 
-  private sample(name: string, volume = 0.3, rate = 1, delay = 0): void {
+  private sample(
+    name: string,
+    volume = 0.3,
+    rate = 1,
+    delay = 0,
+    spatial?: SpatialPosition,
+    defaultHeight = 1.0,
+    refDistance = SPATIAL_REF_DISTANCE,
+    rolloffFactor = SPATIAL_ROLLOFF_FACTOR
+  ): void {
     if (!this.ctx || !this.dryGain || this.muted || document.hidden || this.ctx.state !== 'running') return;
     const buffer = this.buffers.get(name);
     if (!buffer || this.voices.size >= 28) return;
@@ -186,10 +318,18 @@ class SurvivalSoundEngine {
     source.playbackRate.value = rate * (0.98 + Math.random() * 0.04);
     const gain = this.ctx.createGain();
     gain.gain.value = volume;
+    const panner = spatial
+      ? this.createSpatialPanner(spatial, defaultHeight, refDistance, rolloffFactor)
+      : null;
     source.connect(gain);
-    gain.connect(this.dryGain);
+    this.route(gain, panner);
     this.voices.add(source);
-    source.onended = () => { this.voices.delete(source); source.disconnect(); gain.disconnect(); };
+    source.onended = () => {
+      this.voices.delete(source);
+      source.disconnect();
+      gain.disconnect();
+      this.releasePanner(panner);
+    };
     source.start(this.ctx.currentTime + delay);
   }
 
@@ -198,10 +338,15 @@ class SurvivalSoundEngine {
     this.updateSprintBreathing(false, false, 0);
     for (const source of this.voices) { try { source.stop(); } catch { /* already ended */ } }
     this.voices.clear();
+    for (const panner of this.activePanners) {
+      try { panner.disconnect(); } catch { /* ignore */ }
+    }
+    this.activePanners.clear();
+    this.lastListenerSyncTime = -1;
   }
 
   private ensureAmbience(): void {
-    if (!this.ctx || !this.dryGain) return;
+    if (!this.ctx || !this.masterGain) return;
     for (const name of ['day', 'night']) {
       const buffer = this.buffers.get(name);
       if (!buffer || this.ambience.has(name)) continue;
@@ -211,7 +356,8 @@ class SurvivalSoundEngine {
       const gain = this.ctx.createGain();
       gain.gain.value = 0;
       source.connect(gain);
-      gain.connect(this.dryGain);
+      // Connect ambience directly to masterGain so SFX compressor dynamics never duck or flicker it.
+      gain.connect(this.masterGain);
       source.start();
       this.ambience.set(name, { source, gain });
       this.lastAmbienceTarget = '';
@@ -258,31 +404,38 @@ class SurvivalSoundEngine {
     const level = { concrete: 0.17, grass: 0.17, dirt: 0.17, planks: 0.19, carpet: 0.12, tile: 0.16 }[surface];
     this.sample(this.choose(surface, 4), level * (sprinting ? 1.28 : 1), sprinting ? 1.07 : 1);
   }
-  playMeleeSwing(rate = 0.9, gain = 0.42): void { this.sample(this.choose('swing', 3), gain, rate); }
-  playDodge(): void { this.sample('cloth2', 0.22, 0.85); this.sample('cloth3', 0.14, 1.05, 0.06); }
-  playMeleeHit(heavy = false, rate?: number): void { this.sample(this.choose('punch', 2), heavy ? 0.54 : 0.4, rate ?? (heavy ? 0.88 : 1)); }
-  playGunshot(kind: 'pistol' | 'shotgun' | 'lmg'): void {
+  playMeleeSwing(rate = 0.9, gain = 0.42): void {
+    this.sample(this.choose('swing', 3), gain, rate);
+  }
+  playDodge(): void {
+    this.sample('cloth2', 0.22, 0.85);
+    this.sample('cloth3', 0.14, 1.05, 0.06);
+  }
+  playMeleeHit(heavy = false, rate?: number): void {
+    this.sample(this.choose('punch', 2), heavy ? 0.54 : 0.4, rate ?? (heavy ? 0.88 : 1));
+  }
+  playGunshot(kind: 'pistol' | 'shotgun' | 'lmg', pos?: SpatialPosition): void {
     // LMG fires ~11 rounds/s, so each shot sits lower than the handguns to keep the mix clean.
     const level = kind === 'pistol' ? 0.75 : kind === 'shotgun' ? 0.85 : 0.5;
-    this.sample(this.choose(kind, 2), level, kind === 'lmg' ? 1.02 : 1);
+    this.sample(this.choose(kind, 2), level, kind === 'lmg' ? 1.02 : 1, 0, pos, 1.3, 4.0, 0.95);
   }
   /** Wet impact when a zombie goes down for good. A low groan tail sells the collapse. */
-  playZombieDeath(archetype: ZombieArchetype): void {
-    this.sample(this.choose('zombiedie', 2), 0.5);
+  playZombieDeath(archetype: ZombieArchetype, pos?: SpatialPosition): void {
+    this.sample(this.choose('zombiedie', 2), 0.5, 1, 0, pos, 0.85, 2.8, 1.1);
     const rates = { walker: 0.62, runner: 0.78, spitter: 0.7, bloater: 0.5 };
-    this.sample(`groan${1 + Math.floor(Math.random() * 4)}`, 0.15, rates[archetype], 0.05);
+    this.sample(`groan${1 + Math.floor(Math.random() * 4)}`, 0.15, rates[archetype], 0.05, pos, 0.85, 2.8, 1.1);
   }
   /** Short pained reaction on every non-lethal hit, throttled so automatic fire cannot spam it. */
-  playZombieHurt(archetype: ZombieArchetype): void {
+  playZombieHurt(archetype: ZombieArchetype, pos?: SpatialPosition): void {
     if (!this.ctx || this.ctx.currentTime - this.lastZombieHurtTime < 0.16) return;
     this.lastZombieHurtTime = this.ctx.currentTime;
     const rates = { walker: 0.95, runner: 1.14, spitter: 1.05, bloater: 0.74 };
-    this.sample(this.choose('zhurt', 3), 0.3, rates[archetype]);
+    this.sample(this.choose('zhurt', 3), 0.3, rates[archetype], 0, pos, 1.05, 2.6, 1.15);
   }
   /** Fleshy slam when the car runs through a zombie, with a hint of bodywork under it. */
-  playCarZombieImpact(): void {
-    this.sample(this.choose('carhit', 2), 0.6);
-    this.sample(this.choose('metal', 2), 0.2, 0.78, 0.02);
+  playCarZombieImpact(pos?: SpatialPosition): void {
+    this.sample(this.choose('carhit', 2), 0.6, 1, 0, pos, 0.7, 3.0, 1.05);
+    this.sample(this.choose('metal', 2), 0.2, 0.78, 0.02, pos, 0.7, 3.0, 1.05);
   }
   playBulletImpact(kind: ImpactMaterial | 'flesh' | 'headshot'): void {
     if (kind === 'headshot') {
@@ -318,12 +471,12 @@ class SurvivalSoundEngine {
   playReload(): void { this.sample('reload', 0.29); this.sample('metalLatch', 0.22, 1, 0.16); }
   playReloadComplete(): void { this.sample('rack', 0.32); }
   playMolotovShatter(): void { this.sample(this.choose('glass', 2), 0.62); this.texture(2200, 0.65, 0.14); }
-  playZombieGroan(archetype: ZombieArchetype): void {
-    if (!this.ctx || this.ctx.currentTime - this.lastGroanTime < 2.2) return;
+  playZombieGroan(archetype: ZombieArchetype, pos?: SpatialPosition): void {
+    if (!this.ctx || this.ctx.currentTime - this.lastGroanTime < 1.55) return;
     this.lastGroanTime = this.ctx.currentTime;
     const rates = { walker: 0.94, runner: 1.13, spitter: 1.04, bloater: 0.7 };
     // User-selected EmoPreben moans (option B); hurt and death banks stay separate.
-    this.sample(this.choose('zmoan', 3), 0.28, rates[archetype]);
+    this.sample(this.choose('zmoan', 3), 0.3, rates[archetype], 0, pos, 1.25, 2.6, 1.15);
   }
   playBuildHammer(): void { this.sample(this.choose('wood', 2), 0.43); }
   playLootPickup(): void { this.sample('handleSmallLeather', 0.28); }
@@ -336,7 +489,9 @@ class SurvivalSoundEngine {
     }
   }
   playCampfireCrackle(): void { this.texture(3300, 0.035, 0.045); }
-  playSpitHiss(): void { this.texture(2200, 0.27, 0.19); }
+  playSpitHiss(pos?: SpatialPosition): void {
+    this.texture(2200, 0.27, 0.19, 0, pos, 1.25);
+  }
   playPlayerHurt(): void {
     // One short human reaction per actual damage event, not every invulnerable contact.
     if (!this.ctx || this.ctx.currentTime - this.lastHurtTime < 0.65) return;
@@ -388,7 +543,14 @@ class SurvivalSoundEngine {
   }
 
   /** Non-tonal filtered textures for liquids, flame, breath and tires. No pitch pings. */
-  private texture(frequency: number, duration: number, volume: number, delay = 0): void {
+  private texture(
+    frequency: number,
+    duration: number,
+    volume: number,
+    delay = 0,
+    spatial?: SpatialPosition,
+    defaultHeight = 0.8
+  ): void {
     if (!this.ctx || !this.noise || this.muted || document.hidden || this.ctx.state !== 'running') return;
     const now = this.ctx.currentTime + delay;
     const source = this.ctx.createBufferSource();
@@ -401,13 +563,17 @@ class SurvivalSoundEngine {
     gain.gain.setValueAtTime(0.0001, now);
     gain.gain.linearRampToValueAtTime(volume, now + Math.min(0.015, duration / 4));
     gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-    source.connect(filter); filter.connect(gain); this.route(gain);
-    source.onended = () => { source.disconnect(); filter.disconnect(); gain.disconnect(); };
+    const panner = spatial ? this.createSpatialPanner(spatial, defaultHeight) : null;
+    source.connect(filter); filter.connect(gain); this.route(gain, panner);
+    source.onended = () => {
+      source.disconnect();
+      filter.disconnect();
+      gain.disconnect();
+      this.releasePanner(panner);
+    };
     source.start(now, Math.random() * 0.5, duration);
   }
-  private splash(volume: number, delay = 0): void {
-    this.sample('splash', volume, 1, delay);
-  }
+  private splash(volume: number, delay = 0): void { this.sample('splash', volume, 1, delay); }
   private heartbeatVoice: AudioBufferSourceNode | null = null;
   private heartbeatCountdown = 0;
 
@@ -461,7 +627,10 @@ class SurvivalSoundEngine {
       g.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
       osc.connect(bp);
       bp.connect(g);
-      this.route(g, 0.42);
+      this.route(g);
+      osc.onended = () => {
+        osc.disconnect(); bp.disconnect(); g.disconnect();
+      };
       osc.start(now);
       osc.stop(now + 0.28);
     } else {
@@ -480,7 +649,10 @@ class SurvivalSoundEngine {
         g.gain.exponentialRampToValueAtTime(0.001, now + 0.27);
         osc.connect(lp);
         lp.connect(g);
-        this.route(g, 0.35);
+        this.route(g);
+        osc.onended = () => {
+          osc.disconnect(); lp.disconnect(); g.disconnect();
+        };
         osc.start(now);
         osc.stop(now + 0.28);
       }
@@ -518,7 +690,7 @@ class SurvivalSoundEngine {
       this.engineOsc.connect(this.engineFilter);
       this.engineSubOsc.connect(this.engineFilter);
       this.engineFilter.connect(this.engineGain);
-      this.route(this.engineGain, 0.06);
+      this.route(this.engineGain);
 
       this.engineOsc.start(now);
       this.engineSubOsc.start(now);

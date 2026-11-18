@@ -45,6 +45,7 @@ export interface RunSnapshot {
   restCooldownSeconds: number;
   player: PlayerState;
   inventory: Inventory;
+  hotbar?: import('./hotbarSystem').HotbarState;
   activeVehicleId: number | null;
   nextVehicleId: number;
   nextEntityId: number;

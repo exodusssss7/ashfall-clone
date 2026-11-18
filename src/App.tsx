@@ -11,6 +11,7 @@ import { StartScreen } from './components/StartScreen';
 import { TouchControls } from './components/TouchControls';
 import { TouchLookPad } from './components/TouchLookPad';
 import { SurvivalEngine } from './game/engine';
+import { createDefaultHotbarState } from './game/hotbarSystem';
 import { subscribeProfile } from './game/profile';
 import { resetHudLayout } from './game/hudLayout';
 import { soundEngine } from './game/sound';
@@ -64,6 +65,7 @@ const INITIAL_HUD: HudSnapshot = {
   discoveredLandmarks: [],
   activeLootContainer: null,
   pickupNotifications: [],
+  hotbar: createDefaultHotbarState(),
 };
 
 function detectTouchCapability(): boolean {
@@ -316,7 +318,6 @@ export default function App() {
           touchEnabled={touchEnabled}
           editing={hudEdit}
           minimapRef={minimapRef}
-          onSelectWeapon={(w) => engineRef.current?.selectWeapon(w)}
           onToggleBuild={(k) => engineRef.current?.toggleBuildMode(k)}
           onUseConsumable={(item) => engineRef.current?.useConsumable(item)}
           onToggleCraft={() => {
@@ -361,6 +362,10 @@ export default function App() {
             soundEngine.playUiClick();
             setHudEdit(true);
           }}
+          onActivateHotbarSlot={(slotIndex) => engineRef.current?.activateHotbarSlot(slotIndex)}
+          onToggleHotbarExpanded={(expanded) => engineRef.current?.toggleHotbarExpanded(expanded)}
+          onSwapHotbarSlots={(from, to) => engineRef.current?.swapHotbarSlots(from, to)}
+          onClearHotbarSlot={(slotIndex) => engineRef.current?.clearHotbarSlot(slotIndex)}
         />
       )}
 
@@ -417,8 +422,22 @@ export default function App() {
             soundEngine.playUiClick();
             setCraftOpen(false);
           }}
-          onCraft={(recipeId) => {if(engineRef.current?.craftRecipe(recipeId))setCraftOpen(false);}}
-          onUseConsumable={(item) => {if(engineRef.current?.useConsumable(item))setCraftOpen(false);}}
+          onCraft={(recipeId) => {
+            if (engineRef.current?.craftRecipe(recipeId)) setCraftOpen(false);
+          }}
+          onUseConsumable={(item) => {
+            if (engineRef.current?.useConsumable(item)) setCraftOpen(false);
+          }}
+          onSelectWeapon={(w) => engineRef.current?.selectWeapon(w)}
+          onToggleBuild={(k) => engineRef.current?.toggleBuildMode(k)}
+          onToggleFlashlight={() => engineRef.current?.triggerFlashlight()}
+          onAssignHotbarSlot={(slotIndex, entry) =>
+            engineRef.current?.assignHotbarSlot(slotIndex, entry)
+          }
+          onSwapHotbarSlots={(from, to) => engineRef.current?.swapHotbarSlots(from, to)}
+          onClearHotbarSlot={(slotIndex) => engineRef.current?.clearHotbarSlot(slotIndex)}
+          onToggleHotbarExpanded={(expanded) => engineRef.current?.toggleHotbarExpanded(expanded)}
+          onResetHotbar={() => engineRef.current?.resetHotbar()}
         />
       )}
 

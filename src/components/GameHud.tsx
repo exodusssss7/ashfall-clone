@@ -1,12 +1,21 @@
 import { getActionCues, actionCueProps, canCookAnything } from '../game/actionAlerts';
-import type { ActionCue } from '../game/actionAlerts';
+import {
+  countRowAssignedSlots,
+  findAssignedSlotIndex,
+  getSlotKeyLabel,
+  type HotbarEntry,
+  type HotbarSlotValue,
+} from '../game/hotbarSystem';
 import { ItemIcon } from './ItemIcon';
+import { HotbarDragGhost, ToolCornerMark, getHotbarSlotMeta } from './HotbarSlotView';
 import { useHudDrag } from './useHudDrag';
 import { applyButtonScales } from '../game/hudLayout';
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Backpack,
   Car,
+  ChevronDown,
+  ChevronUp,
   Eye,
   Flame,
   Clock3,
@@ -16,19 +25,28 @@ import {
   Flashlight,
   Fuel,
   Gamepad2,
-  Hammer,
   Pause,
-  RotateCcw,
   Siren,
   SlidersHorizontal,
-  Volume2,
-  VolumeX,
   Wrench,
   Zap,
 } from 'lucide-react';
 import { STRUCTURES, WEAPONS } from '../game/recipes';
 import { canAffordCost, pickBestFoodConsumable } from '../game/survivalLogic';
-import type { ConsumableItemId, HudSnapshot, StructureKind, WeaponId } from '../game/types';
+import type { ConsumableItemId, HudSnapshot, StructureKind } from '../game/types';
+
+interface HudDragState {
+  pointerId: number;
+  fromIndex: number;
+  entry: HotbarEntry;
+  startX: number;
+  startY: number;
+  x: number;
+  y: number;
+  active: boolean;
+  hoverSlot: number | null;
+  overHotbar: boolean;
+}
 
 interface GameHudProps {
   hud: HudSnapshot;
@@ -38,7 +56,6 @@ interface GameHudProps {
   touchEnabled: boolean;
   editing: boolean;
   minimapRef: React.RefObject<HTMLCanvasElement | null>;
-  onSelectWeapon: (weapon: WeaponId) => void;
   onToggleBuild: (kind?: StructureKind) => void;
   onUseConsumable: (item: ConsumableItemId) => void;
   onToggleCraft: () => void;
@@ -57,26 +74,26 @@ interface GameHudProps {
   onBarricadeDoor: () => void;
   onOpenNavigation: () => void;
   onEditHud: () => void;
+  onActivateHotbarSlot: (slotIndex: number) => void;
+  onToggleHotbarExpanded: (expanded?: boolean) => void;
+  onSwapHotbarSlots: (fromIndex: number, toIndex: number) => void;
+  onClearHotbarSlot: (slotIndex: number) => void;
 }
 
 export const GameHud: React.FC<GameHudProps> = ({
   hud,
-  muted,
   craftOpen,
   cookOpen,
   touchEnabled,
   editing,
   minimapRef,
-  onSelectWeapon,
   onToggleBuild,
   onUseConsumable,
   onToggleCraft,
   onToggleCook,
   onToggleTouch,
-  onToggleMute,
   onToggleCamera,
   onPause,
-  onRestart,
   onEnterExitVehicle,
   onToggleHeadlights,
   onHorn,
@@ -86,7 +103,18 @@ export const GameHud: React.FC<GameHudProps> = ({
   onBarricadeDoor,
   onOpenNavigation,
   onEditHud,
+  onActivateHotbarSlot,
+  onToggleHotbarExpanded,
+  onSwapHotbarSlots,
+  onClearHotbarSlot,
 }) => {
+  const [dragState, setDragState] = useState<HudDragState | null>(null);
+  const dragRef = useRef<HudDragState | null>(null);
+  dragRef.current = dragState;
+  const expandHoverTimerRef = useRef<number | null>(null);
+  const expandedRef = useRef(Boolean(hud.hotbar?.expanded));
+  expandedRef.current = Boolean(hud.hotbar?.expanded);
+
   // Saved per-button sizes (Edit HUD corner-drag) ride on data-btn-id attributes.
   useEffect(() => {
     applyButtonScales(document.documentElement);
@@ -94,10 +122,104 @@ export const GameHud: React.FC<GameHudProps> = ({
 
   useEffect(() => {
     const activeBtn = document.querySelector<HTMLElement>(
-      `.equipment-bar > button[data-item="${hud.equippedWeapon}"]`
+      `.equipment-bar > button[data-hotbar-active="true"]`
     );
     activeBtn?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
-  }, [hud.equippedWeapon]);
+  }, [hud.equippedWeapon, hud.buildMode]);
+
+  useEffect(() => {
+    if (!dragState) return;
+
+    const clearExpandTimer = () => {
+      if (expandHoverTimerRef.current !== null) {
+        window.clearTimeout(expandHoverTimerRef.current);
+        expandHoverTimerRef.current = null;
+      }
+    };
+
+    const inspectPoint = (clientX: number, clientY: number) => {
+      const els = document.elementsFromPoint(clientX, clientY);
+      let hoverSlot: number | null = null;
+      let overExpand = false;
+      let overHotbar = false;
+      for (const el of els) {
+        if (el instanceof HTMLElement) {
+          if (el.closest('.hotbar-rows')) overHotbar = true;
+          const slotEl = el.closest<HTMLElement>('[data-hotbar-slot]');
+          if (slotEl && hoverSlot === null) {
+            const parsed = Number(slotEl.dataset.hotbarSlot);
+            if (Number.isInteger(parsed)) hoverSlot = parsed;
+          }
+          if (el.closest('[data-hotbar-expand]')) overExpand = true;
+        }
+      }
+      return { hoverSlot, overExpand, overHotbar };
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      const curr = dragRef.current;
+      if (!curr || e.pointerId !== curr.pointerId) return;
+      const distMoved = Math.hypot(e.clientX - curr.startX, e.clientY - curr.startY);
+      const active = curr.active || distMoved >= 6;
+      if (!active) {
+        const next = { ...curr, x: e.clientX, y: e.clientY };
+        dragRef.current = next;
+        setDragState(next);
+        return;
+      }
+      const { hoverSlot, overExpand, overHotbar } = inspectPoint(e.clientX, e.clientY);
+      if (overExpand && !expandedRef.current) {
+        if (expandHoverTimerRef.current === null) {
+          expandHoverTimerRef.current = window.setTimeout(() => {
+            expandHoverTimerRef.current = null;
+            onToggleHotbarExpanded(true);
+          }, 180);
+        }
+      } else {
+        clearExpandTimer();
+      }
+      const next: HudDragState = {
+        ...curr,
+        active: true,
+        x: e.clientX,
+        y: e.clientY,
+        hoverSlot,
+        overHotbar,
+      };
+      dragRef.current = next;
+      setDragState(next);
+    };
+
+    const finishDrag = (e: PointerEvent, cancelled: boolean) => {
+      const curr = dragRef.current;
+      if (!curr || e.pointerId !== curr.pointerId) return;
+      clearExpandTimer();
+      dragRef.current = null;
+      setDragState(null);
+      if (cancelled) return;
+      const { hoverSlot, overHotbar } = inspectPoint(e.clientX, e.clientY);
+      if (!curr.active) {
+        onActivateHotbarSlot(curr.fromIndex);
+      } else if (hoverSlot !== null && hoverSlot !== curr.fromIndex) {
+        onSwapHotbarSlots(curr.fromIndex, hoverSlot);
+      } else if (!overHotbar) {
+        onClearHotbarSlot(curr.fromIndex);
+      }
+    };
+
+    const onPointerUp = (e: PointerEvent) => finishDrag(e, false);
+    const onPointerCancel = (e: PointerEvent) => finishDrag(e, true);
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+    return () => {
+      clearExpandTimer();
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+    };
+  }, [dragState?.pointerId, onActivateHotbarSlot, onClearHotbarSlot, onSwapHotbarSlots, onToggleHotbarExpanded]);
 
   const cues = getActionCues(hud);
   const vitalsDrag = useHudDrag('vitals', editing);
@@ -108,30 +230,103 @@ export const GameHud: React.FC<GameHudProps> = ({
   const waterPct = Math.max(0, Math.min(100, hud.thirst));
   const bestFood = pickBestFoodConsumable(hud.inventory) ?? 'food';
 
-  const weaponOrder: WeaponId[] = [
-    'crowbar',
-    'machete',
-    'barbed_bat',
-    'axe',
-    'sledgehammer',
-    'pistol',
-    'shotgun',
-    'lmg',
-    'molotov',
-  ];
+  const hotbar = hud.hotbar ?? { slots: new Array<HotbarSlotValue>(14).fill(null), expanded: false };
+  const row1Slots = hotbar.slots.slice(0, 7);
+  const row2Slots = hotbar.slots.slice(7, 14);
+  const row2FilledCount = countRowAssignedSlots(hotbar, 2);
 
-  /** Empty-and-no-reserve weapons blink red like the other emergency action buttons. */
-  const weaponSlotCue = (wId: WeaponId): ActionCue => {
-    if (wId === 'pistol' && hud.pistolMag <= 0 && hud.inventory.ammo_9mm <= 0) {
-      return { state: 'urgent', reason: 'Pistol out of ammunition' };
-    }
-    if (wId === 'shotgun' && hud.shotgunMag <= 0 && hud.inventory.ammo_shell <= 0) {
-      return { state: 'urgent', reason: 'Shotgun out of shells' };
-    }
-    if (wId === 'molotov' && hud.inventory.molotov <= 0) {
-      return { state: 'urgent', reason: 'No molotovs left' };
-    }
-    return { state: 'idle', reason: `${WEAPONS[wId].name} ready` };
+  const foodSlotIdx = findAssignedSlotIndex(hotbar, { kind: 'consumable', id: bestFood });
+  const waterSlotIdx = findAssignedSlotIndex(hotbar, { kind: 'consumable', id: 'water' });
+  const foodKeyText = foodSlotIdx >= 0 ? ` [${getSlotKeyLabel(foodSlotIdx)}]` : '';
+  const waterKeyText = waterSlotIdx >= 0 ? ` [${getSlotKeyLabel(waterSlotIdx)}]` : '';
+
+  const startSlotPointerDown = (
+    e: React.PointerEvent<HTMLButtonElement>,
+    slotIndex: number,
+    entry: HotbarSlotValue
+  ) => {
+    if (e.button > 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.blur();
+    if (editing) return;
+    if (!entry) return;
+    const initial: HudDragState = {
+      pointerId: e.pointerId,
+      fromIndex: slotIndex,
+      entry,
+      startX: e.clientX,
+      startY: e.clientY,
+      x: e.clientX,
+      y: e.clientY,
+      active: false,
+      hoverSlot: slotIndex,
+      overHotbar: true,
+    };
+    dragRef.current = initial;
+    setDragState(initial);
+  };
+
+  const renderHotbarSlot = (entry: HotbarSlotValue, slotIndex: number) => {
+    const keyLabel = getSlotKeyLabel(slotIndex);
+    const meta = getHotbarSlotMeta(entry, hud, touchEnabled);
+    const isSource = Boolean(dragState?.active && dragState.fromIndex === slotIndex);
+    const isDropTarget = Boolean(
+      dragState?.active && dragState.hoverSlot === slotIndex && dragState.fromIndex !== slotIndex
+    );
+
+    return (
+      <button
+        key={slotIndex}
+        type="button"
+        tabIndex={-1}
+        data-hotbar-slot={slotIndex}
+        data-item={entry ? `${entry.kind}:${entry.id}` : 'empty'}
+        data-btn-id={`hotbar:${slotIndex}`}
+        data-hotbar-active={meta.isActive ? 'true' : undefined}
+        {...actionCueProps(meta.cue)}
+        aria-label={
+          entry
+            ? `${meta.shortLabel}, slot ${keyLabel}, ${meta.badgeText}`
+            : `Empty hotbar slot ${keyLabel}`
+        }
+        title={meta.title}
+        onPointerDown={(e) => startSlotPointerDown(e, slotIndex, entry)}
+        className={`${
+          touchEnabled
+            ? 'px-1.5 py-1.5 min-w-[46px] min-h-[44px]'
+            : 'px-3 py-2 min-w-[76px]'
+        } flex flex-col items-start transition-colors cursor-pointer touch-none ${
+          meta.isActive ? 'hud-slot-active' : 'hud-slot hover:border-[#56615d]'
+        } ${meta.isDimmed && !meta.isActive ? 'hotbar-slot-dimmed' : ''} ${
+          !entry ? 'hotbar-slot-empty' : ''
+        } ${isSource ? 'hotbar-slot-dragging' : ''} ${
+          isDropTarget ? 'hotbar-drop-target' : ''
+        }`}
+      >
+        <div className="w-full flex items-center justify-between gap-0.5 text-[10px] font-telemetry text-[#8a918d]">
+          <span>[{keyLabel}]</span>
+          <span
+            className={
+              meta.badgeHighlight ? 'text-[#f0d078] font-bold' : 'text-[#c7c2b6]'
+            }
+          >
+            {meta.badgeText}
+          </span>
+        </div>
+        <ToolCornerMark entry={entry} />
+        {entry ? (
+          <ItemIcon kind={meta.icon} className="equipment-icon" />
+        ) : (
+          <div className="equipment-icon hotbar-empty-glyph" aria-hidden="true">
+            +
+          </div>
+        )}
+        <div className="equipment-name font-tactical text-[11px] md:text-xs font-bold text-[#f0ece1] mt-0.5 whitespace-nowrap">
+          {meta.shortLabel}
+        </div>
+      </button>
+    );
   };
 
   return (
@@ -191,8 +386,8 @@ export const GameHud: React.FC<GameHudProps> = ({
                   e.currentTarget.blur();
                 onUseConsumable(bestFood);
               }}
-              aria-label={`Eat Food (${bestFood}, key 6)`}
-              title={`Eat Best Food [6]`}
+              aria-label={`Eat Food (${bestFood})${foodKeyText}`}
+              title={`Eat Best Food${foodKeyText}`}
               className="flex items-center gap-1 flex-1 hover:bg-[#1d2224] px-1 py-0.5 -mx-1 rounded transition-colors cursor-pointer"
             >
               <span className="font-telemetry text-[10px] uppercase tracking-wider text-[#d99b38]">
@@ -215,8 +410,8 @@ export const GameHud: React.FC<GameHudProps> = ({
                   e.currentTarget.blur();
                 onUseConsumable('water');
               }}
-              aria-label={`Drink Purified Water (${hud.inventory.water} left, key 7)`}
-              title={`Drink Water [7] (x${hud.inventory.water})`}
+              aria-label={`Drink Purified Water (${hud.inventory.water} left)${waterKeyText}`}
+              title={`Drink Water${waterKeyText} (x${hud.inventory.water})`}
               className="flex items-center gap-1 flex-1 hover:bg-[#1d2224] px-1 py-0.5 -mx-1 rounded transition-colors cursor-pointer"
             >
               <span className="font-telemetry text-[10px] uppercase tracking-wider text-[#4ea2d4]">
@@ -244,7 +439,7 @@ export const GameHud: React.FC<GameHudProps> = ({
           {/* Bleeding or Flashlight status text */}
           <div className="flex items-center justify-between text-[11px] font-telemetry pt-0.5 border-t border-[#262b2a]">
             <span className={hud.bleeding ? 'text-[#ff5e57] font-bold' : 'text-[#8a918d]'}>
-              {hud.bleeding ? 'BLEEDING · [5] BANDAGE' : `BAT ${hud.battery}%`}
+              {hud.bleeding ? 'BLEEDING · [H] BANDAGE' : `BAT ${hud.battery}%`}
             </span>
             <span className="flex items-center gap-1 text-[#c7c2b6]">
               <Flashlight className="w-3 h-3 text-[#e8cf76]" />
@@ -761,15 +956,20 @@ export const GameHud: React.FC<GameHudProps> = ({
               )}
 
               <div className="equipped-readout"><span className="equipped-dot"/>{hud.buildMode ? STRUCTURES[hud.buildMode].name : WEAPONS[hud.equippedWeapon].name}<span className="equipped-sub">{hud.buildMode ? 'PLACEMENT' : 'EQUIPPED'}</span></div>
-              {/* Main 5-Slot Hotbar + Build Toggle, bag as a standalone chip left of the item slots */}
-              <div ref={hotbarDrag.ref} style={hotbarDrag.style} className="hotbar-wrap pointer-events-auto">
+              {/* Expandable 2-Row Hotbar (Row 1 compact primary + collapsible Row 2 above) */}
+              <div
+                ref={hotbarDrag.ref}
+                style={hotbarDrag.style}
+                data-expanded={hotbar.expanded ? 'true' : 'false'}
+                className="hotbar-wrap pointer-events-auto"
+              >
                 <button data-btn-id="hotbar:bag"
                   type="button"
                   tabIndex={-1}
                   onPointerDown={(e) => {
                     e.preventDefault();
-                  e.stopPropagation();
-                  e.currentTarget.blur();
+                    e.stopPropagation();
+                    e.currentTarget.blur();
                     onToggleCraft();
                   }}
                   aria-label="Open Backpack and Crafting (I)"
@@ -787,117 +987,57 @@ export const GameHud: React.FC<GameHudProps> = ({
                     Bag
                   </div>
                 </button>
-                <div className="equipment-bar flex items-center gap-1 md:gap-1.5">
-                {weaponOrder.map((wId) => {
-                  const spec = WEAPONS[wId];
-                  const active = hud.equippedWeapon === wId && !hud.buildMode;
-                  let ammoText = 'INF';
-                  if (wId === 'pistol') ammoText = `${hud.pistolMag}/${hud.inventory.ammo_9mm}`;
-                  if (wId === 'shotgun') ammoText = `${hud.shotgunMag}/${hud.inventory.ammo_shell}`;
-                  if (wId === 'molotov') ammoText = `x${hud.inventory.molotov}`;
 
-                  const shortName =
-                    wId === 'pistol'
-                      ? 'Pistol'
-                      : wId === 'shotgun'
-                        ? 'Shotgun'
-                        : wId === 'lmg'
-                          ? 'LMG'
-                          : wId === 'barbed_bat'
-                            ? 'Bat'
-                            : wId === 'axe'
-                              ? 'Axe'
-                              : wId === 'sledgehammer'
-                                ? 'Sledge'
-                                : spec.name;
-
-                  return (
-                    <button
-                      key={wId}
-                      data-item={wId}
-                      data-btn-id={`hotbar:${wId}`}
-                      {...actionCueProps(weaponSlotCue(wId))}
-                      aria-label={`Equip ${spec.name}`}
-                      type="button"
-                      tabIndex={-1}
-                      onPointerDown={(e) => {
-                        e.preventDefault();
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                        onSelectWeapon(wId);
-                      }}
-                      className={`${
-                        touchEnabled
-                          ? 'px-1.5 py-1.5 min-w-[50px] min-h-[44px]'
-                          : 'px-3 py-2 min-w-[78px]'
-                      } flex flex-col items-start transition-colors cursor-pointer ${
-                        active ? 'hud-slot-active' : 'hud-slot hover:border-[#56615d]'
-                      }`}
+                <div className="hotbar-rows">
+                  {hotbar.expanded && (
+                    <div
+                      role="region"
+                      aria-label="Secondary Hotbar Row (Slots 8 to 14)"
+                      data-testid="hotbar-row-2"
+                      className="equipment-bar hotbar-row-2 flex items-center gap-1 md:gap-1.5"
                     >
-                      <div className="w-full flex items-center justify-between gap-1.5 text-[10px] font-telemetry text-[#8a918d]">
-                        <span>[{spec.key}]</span>
-                        <span className={active ? 'text-[#f0d078] font-bold' : 'text-[#c7c2b6]'}>
-                          {ammoText}
-                        </span>
-                      </div>
-                      <ItemIcon kind={wId} className="equipment-icon" />
-                      <div className="equipment-name font-tactical text-[11px] md:text-xs font-bold text-[#f0ece1] mt-0.5 whitespace-nowrap">
-                        {touchEnabled ? shortName : spec.name}
-                      </div>
-                    </button>
-                  );
-                })}
+                      {row2Slots.map((entry, idx) => renderHotbarSlot(entry, idx + 7))}
+                    </div>
+                  )}
 
-                {/* Slot 5: Quick Bandage */}
-                <button data-btn-id="hotbar:bandage" {...actionCueProps(cues.heal)}
-                  type="button"
-                  tabIndex={-1}
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                    onUseConsumable('bandage');
-                  }}
-                  className={`hud-slot hover:border-[#56615d] ${
-                    touchEnabled ? 'px-1.5 py-1.5 min-w-[48px] min-h-[44px]' : 'px-3 py-2 min-w-[74px]'
-                  } flex flex-col items-start transition-colors cursor-pointer`}
-                >
-                  <div className="w-full flex items-center justify-between gap-1.5 text-[10px] font-telemetry text-[#8a918d]">
-                    <span>[H]</span>
-                    <span className="text-[#c7c2b6]">x{hud.inventory.bandage}</span>
+                  <div
+                    role="region"
+                    aria-label="Primary Hotbar Row (Slots 1 to 7)"
+                    data-testid="hotbar-row-1"
+                    className="equipment-bar hotbar-row-1 flex items-center gap-1 md:gap-1.5"
+                  >
+                    {row1Slots.map((entry, idx) => renderHotbarSlot(entry, idx))}
                   </div>
-                  <ItemIcon kind="bandage" className="equipment-icon" />
-                  <div className="equipment-name font-tactical text-[11px] md:text-xs font-bold text-[#f0ece1] mt-0.5 whitespace-nowrap">
-                    {touchEnabled ? 'Heal' : 'Bandage'}
-                  </div>
-                </button>
-
-                {/* Build Mode Toggle */}
-                <button data-btn-id="hotbar:build"
-                  type="button"
-                  tabIndex={-1}
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                    onToggleBuild();
-                  }}
-                  className={`${
-                    touchEnabled ? 'px-1.5 py-1.5 min-w-[46px] min-h-[44px]' : 'px-3 py-2 min-w-[74px]'
-                  } flex flex-col items-start transition-colors cursor-pointer ${
-                    hud.buildMode ? 'hud-slot-active' : 'hud-slot hover:border-[#56615d]'
-                  }`}
-                >
-                  <div className="w-full flex items-center justify-between gap-1.5 text-[10px] font-telemetry text-[#8a918d]">
-                    <span>[B]</span>
-                    <Hammer className="w-3 h-3 text-[#d9822b]" />
-                  </div>
-                  <ItemIcon kind="build" className="equipment-icon" />
-                  <div className="equipment-name font-tactical text-[11px] md:text-xs font-bold text-[#f0ece1] mt-0.5 whitespace-nowrap">
-                    Build
-                  </div>
-                </button>
                 </div>
+
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  data-testid="hotbar-expand-btn"
+                  data-hotbar-expand="true"
+                  aria-expanded={hotbar.expanded}
+                  aria-label={
+                    hotbar.expanded
+                      ? `Collapse extra hotbar row (${row2FilledCount} items kept active)`
+                      : `Expand extra hotbar row (${row2FilledCount} of 7 assigned)`
+                  }
+                  title={`${hotbar.expanded ? 'Collapse' : 'Expand'} Extra Hotbar Row [Tab]`}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.currentTarget.blur();
+                    if (!editing) onToggleHotbarExpanded();
+                  }}
+                  className={`hotbar-expand-btn ${hotbar.expanded ? 'is-expanded' : ''}`}
+                >
+                  {hotbar.expanded ? (
+                    <ChevronDown className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  ) : (
+                    <ChevronUp className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  )}
+                  <span className="hotbar-expand-key">[TAB]</span>
+                  <span className="hotbar-expand-count">{row2FilledCount}/7</span>
+                </button>
               </div>
             </>
           )}
@@ -921,6 +1061,21 @@ export const GameHud: React.FC<GameHudProps> = ({
           </div>
         )}
       </div>
+
+      {dragState?.active && (
+        <HotbarDragGhost
+          entry={dragState.entry}
+          x={dragState.x}
+          y={dragState.y}
+          hint={
+            dragState.hoverSlot !== null && dragState.hoverSlot !== dragState.fromIndex
+              ? `Swap → [${getSlotKeyLabel(dragState.hoverSlot)}]`
+              : !dragState.overHotbar
+                ? 'Drop to Unbind'
+                : 'Drag to Slot'
+          }
+        />
+      )}
     </div>
   );
 };
