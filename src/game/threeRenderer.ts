@@ -42,6 +42,14 @@ import { computeAtmosphereLighting, createAtmosphereLightingState } from './ligh
 import { getBuildTargetTile, getDaylightInfo } from './survivalLogic';
 import { getSettings } from './settings';
 import { STRUCTURES } from './recipes';
+import {
+  ZOMBIE_VISUAL_PRESETS,
+  computeZombieVisualLod,
+  evaluateBlisterPulse,
+  evaluateJawAndSpasm,
+  evaluateSalivaStrandCycle,
+  evaluateSkinDeformIntensity,
+} from './zombieVisuals';
 import type {
   BloodDecal,
   BulletImpactEffect,
@@ -182,6 +190,8 @@ const _camOffsetDir = new THREE.Vector3(1, Math.SQRT2 / Math.sqrt(3), 1);
 
 const MAX_PARTICLE_INSTANCES = 300;
 const MAX_ASH_INSTANCES = 48;
+const MAX_INFECT_DROPS = 96;
+const MAX_SPORE_PUFFS = 72;
 const MAX_DECAL_INSTANCES = 140;
 const MAX_IMPACT_DECALS = 96;
 const MAX_IMPACT_EFFECTS = 24;
@@ -240,13 +250,23 @@ export class ThreeIsometricRenderer {
   private vehicleRigs = new Map<number, VehicleRig3D>();
   private zombieRigs = new Map<
     number,
-    { rig: ActorRig3D; archetype: ZombieArchetype; ring: THREE.Mesh; wasFading: boolean; wasFlashing: boolean }
+    {
+      rig: ActorRig3D;
+      archetype: ZombieArchetype;
+      ring: THREE.Mesh;
+      wasFading: boolean;
+      wasFlashing: boolean;
+      salivaPhase: number;
+      oozeTimer: number;
+      sporeTimer: number;
+    }
   >();
   private zombieRigPool = new Map<ZombieArchetype, Array<{ rig: ActorRig3D; ring: THREE.Mesh }>>();
   private pooledZombieCount = 0;
   private zombieRingGeo: THREE.RingGeometry;
   private zombieRingMatRed: THREE.MeshBasicMaterial;
   private zombieRingMatMint: THREE.MeshBasicMaterial;
+  private lastRenderClock = 0;
 
   private playerRig: ActorRig3D;
   private playerWasFlashing = false;
@@ -263,6 +283,37 @@ export class ThreeIsometricRenderer {
 
   private particleInstanced: THREE.InstancedMesh;
   private ashInstanced: THREE.InstancedMesh;
+  private infectDropInstanced: THREE.InstancedMesh;
+  private sporePuffInstanced: THREE.InstancedMesh;
+  private infectDrops: Array<{
+    active: boolean;
+    x: number;
+    y: number;
+    z: number;
+    vx: number;
+    vy: number;
+    vz: number;
+    size: number;
+    life: number;
+    maxLife: number;
+    color: number;
+  }> = [];
+  private sporePuffs: Array<{
+    active: boolean;
+    x: number;
+    y: number;
+    z: number;
+    vx: number;
+    vy: number;
+    vz: number;
+    size: number;
+    life: number;
+    maxLife: number;
+    rot: number;
+    color: number;
+  }> = [];
+  private infectDropCursor = 0;
+  private sporePuffCursor = 0;
   private decalMeshes: THREE.Mesh[] = [];
   private bulletTracerGeo = new THREE.BoxGeometry(0.76, 0.036, 0.036);
   private bulletCoreGeo = new THREE.BoxGeometry(0.32, 0.056, 0.056);
@@ -489,6 +540,67 @@ export class ThreeIsometricRenderer {
     this.ashInstanced.frustumCulled = false;
     this.ashInstanced.count = 0;
     this.scene.add(this.ashInstanced);
+
+    // Pooled instanced infection droplets (saliva, oozing pus & bile) and toxic spore/miasma puffs
+    const dropGeo = new THREE.OctahedronGeometry(0.022, 0);
+    const dropMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.12,
+      metalness: 0.06,
+      transparent: true,
+      opacity: 0.9,
+    });
+    this.infectDropInstanced = new THREE.InstancedMesh(dropGeo, dropMat, MAX_INFECT_DROPS);
+    this.infectDropInstanced.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.infectDropInstanced.frustumCulled = false;
+    this.infectDropInstanced.count = 0;
+    this.scene.add(this.infectDropInstanced);
+    for (let i = 0; i < MAX_INFECT_DROPS; i++) {
+      this.infectDrops.push({
+        active: false,
+        x: 0,
+        y: 0,
+        z: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        size: 1,
+        life: 0,
+        maxLife: 1,
+        color: 0xc8d4b8,
+      });
+    }
+
+    const sporeGeo = new THREE.DodecahedronGeometry(0.085, 0);
+    const sporeMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.92,
+      metalness: 0.0,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+    });
+    this.sporePuffInstanced = new THREE.InstancedMesh(sporeGeo, sporeMat, MAX_SPORE_PUFFS);
+    this.sporePuffInstanced.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.sporePuffInstanced.frustumCulled = false;
+    this.sporePuffInstanced.count = 0;
+    this.scene.add(this.sporePuffInstanced);
+    for (let i = 0; i < MAX_SPORE_PUFFS; i++) {
+      this.sporePuffs.push({
+        active: false,
+        x: 0,
+        y: 0,
+        z: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        size: 1,
+        life: 0,
+        maxLife: 1,
+        rot: 0,
+        color: 0x7cb832,
+      });
+    }
 
     // Tile interaction & build-mode highlights
     const tileSquarePts = [
@@ -839,6 +951,11 @@ export class ThreeIsometricRenderer {
       this.recycleZombieEntry(z.archetype, z.rig, z.ring);
     }
     this.zombieRigs.clear();
+    for (let i = 0; i < this.infectDrops.length; i++) this.infectDrops[i].active = false;
+    for (let i = 0; i < this.sporePuffs.length; i++) this.sporePuffs[i].active = false;
+    this.infectDropInstanced.count = 0;
+    this.sporePuffInstanced.count = 0;
+    this.lastRenderClock = 0;
 
     for (const p of this.projectileMeshes.values()) {
       this.scene.remove(p);
@@ -1097,6 +1214,9 @@ export class ThreeIsometricRenderer {
   public render(state: RenderFrameState): void {
     const settings = getSettings();
     const isFps = state.cameraMode === 'fps' && state.phase !== 'title';
+    const rawDt = this.lastRenderClock > 0 ? state.elapsedClock - this.lastRenderClock : 0.016;
+    this.lastRenderClock = state.elapsedClock;
+    const dt = clamp(rawDt, 0, 0.05);
 
     // Trauma camera shake (can be switched off in Settings)
     const shakeMag = settings.screenShake ? state.trauma * state.trauma * (isFps ? 0.11 : 0.28) : 0;
@@ -1304,7 +1424,8 @@ export class ThreeIsometricRenderer {
     this.syncContainers(state.containers, state.player, state.elapsedClock, targetX, targetZ);
     this.syncStructures(state.structures, state.elapsedClock, targetX, targetZ);
     this.syncVehicles(state.vehicles, state.player, state.activeVehicleId, state.elapsedClock, isFps, targetX, targetZ);
-    this.syncZombies(state.zombies, state.elapsedClock, targetX, targetZ, state.getCell);
+    this.syncZombies(state.zombies, state.elapsedClock, targetX, targetZ, state.getCell, isFps, dt);
+    this.updateInfectionVfx(dt);
     this.syncPlayer(state, isFps, fpsMeleePose);
     this.syncProjectiles(state.projectiles, state.elapsedClock);
     this.syncFirePatches(state.firePatches, state.elapsedClock);
@@ -1808,12 +1929,120 @@ export class ThreeIsometricRenderer {
     for (const m of rig.allMaterials) m.dispose();
   }
 
+  private spawnInfectionDrop(
+    x: number,
+    y: number,
+    z: number,
+    vx: number,
+    vy: number,
+    vz: number,
+    size: number,
+    colorHex: number
+  ): void {
+    const slot = this.infectDrops[this.infectDropCursor];
+    this.infectDropCursor = (this.infectDropCursor + 1) % MAX_INFECT_DROPS;
+    slot.active = true;
+    slot.x = x;
+    slot.y = y;
+    slot.z = z;
+    slot.vx = vx;
+    slot.vy = vy;
+    slot.vz = vz;
+    slot.size = size;
+    slot.life = 0.58;
+    slot.maxLife = 0.58;
+    slot.color = colorHex;
+  }
+
+  private spawnSporePuff(x: number, y: number, z: number, colorHex: number, sizeScale: number): void {
+    const slot = this.sporePuffs[this.sporePuffCursor];
+    this.sporePuffCursor = (this.sporePuffCursor + 1) % MAX_SPORE_PUFFS;
+    slot.active = true;
+    slot.x = x;
+    slot.y = y;
+    slot.z = z;
+    slot.vx = (Math.random() - 0.5) * 0.24;
+    slot.vy = 0.22 + Math.random() * 0.22;
+    slot.vz = (Math.random() - 0.5) * 0.24;
+    slot.size = (0.75 + Math.random() * 0.55) * sizeScale;
+    slot.life = 0.85;
+    slot.maxLife = 0.85;
+    slot.rot = Math.random() * Math.PI * 2;
+    slot.color = colorHex;
+  }
+
+  private updateInfectionVfx(dt: number): void {
+    let dropCount = 0;
+    _quat.identity();
+    for (let i = 0; i < MAX_INFECT_DROPS; i++) {
+      const d = this.infectDrops[i];
+      if (!d.active) continue;
+      d.life -= dt;
+      if (d.life <= 0 || d.y <= 0.015) {
+        d.active = false;
+        continue;
+      }
+      d.vy -= 4.8 * dt;
+      d.x += d.vx * dt;
+      d.y += d.vy * dt;
+      d.z += d.vz * dt;
+      const t = clamp(d.life / d.maxLife, 0, 1);
+      const s = d.size * (0.45 + 0.55 * t);
+      _vec3A.set(d.x, Math.max(0.02, d.y), d.z);
+      _scale.set(s * 0.72, s * 1.65, s * 0.72);
+      _mat4.compose(_vec3A, _quat, _scale);
+      this.infectDropInstanced.setMatrixAt(dropCount, _mat4);
+      _color.setHex(d.color);
+      this.infectDropInstanced.setColorAt(dropCount, _color);
+      dropCount++;
+    }
+    this.infectDropInstanced.count = dropCount;
+    if (dropCount > 0) {
+      this.infectDropInstanced.instanceMatrix.needsUpdate = true;
+      if (this.infectDropInstanced.instanceColor) this.infectDropInstanced.instanceColor.needsUpdate = true;
+    }
+
+    let puffCount = 0;
+    for (let i = 0; i < MAX_SPORE_PUFFS; i++) {
+      const p = this.sporePuffs[i];
+      if (!p.active) continue;
+      p.life -= dt;
+      if (p.life <= 0) {
+        p.active = false;
+        continue;
+      }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.z += p.vz * dt;
+      p.rot += dt * 1.4;
+      const age = 1 - clamp(p.life / p.maxLife, 0, 1);
+      const env = Math.sin(age * Math.PI);
+      const s = p.size * (0.5 + age * 0.85) * env;
+      _euler.set(p.rot * 0.6, p.rot, p.rot * 0.4);
+      _quat.setFromEuler(_euler);
+      _vec3A.set(p.x, p.y, p.z);
+      _scale.setScalar(Math.max(0.001, s));
+      _mat4.compose(_vec3A, _quat, _scale);
+      this.sporePuffInstanced.setMatrixAt(puffCount, _mat4);
+      _color.setHex(p.color);
+      this.sporePuffInstanced.setColorAt(puffCount, _color);
+      puffCount++;
+    }
+    this.sporePuffInstanced.count = puffCount;
+    if (puffCount > 0) {
+      this.sporePuffInstanced.instanceMatrix.needsUpdate = true;
+      if (this.sporePuffInstanced.instanceColor) this.sporePuffInstanced.instanceColor.needsUpdate = true;
+    }
+  }
+
   private syncZombies(
     zombies: Zombie[],
     elapsedClock: number,
     targetX: number,
     targetZ: number,
-    getCell: (gx: number, gy: number) => TileCell
+    getCell: (gx: number, gy: number) => TileCell,
+    isFps: boolean,
+    dt: number
   ): void {
     const activeIds = this._scratchNumIds;
     activeIds.clear();
@@ -1829,6 +2058,9 @@ export class ThreeIsometricRenderer {
           ring: acquired.ring,
           wasFading: false,
           wasFlashing: false,
+          salivaPhase: ((z.id * 0.37) % 1 + 1) % 1,
+          oozeTimer: ((z.id * 0.53) % 1 + 1) % 1,
+          sporeTimer: ((z.id * 0.71) % 1 + 1) % 1,
         };
         this.zombieRigs.set(z.id, entry);
       }
@@ -1845,6 +2077,36 @@ export class ThreeIsometricRenderer {
         isMoving: z.state === 'chase' || z.state === 'wander' || z.state === 'alert',
       });
 
+      const camDist = Math.hypot(z.x - targetX, z.y - targetZ);
+      const lod = computeZombieVisualLod({
+        distance: camDist,
+        isFps,
+        isSoftwareGl: this.isSoftwareGl,
+      });
+      const preset = ZOMBIE_VISUAL_PRESETS[z.archetype];
+
+      if (rig.zombieUniforms) {
+        rig.zombieUniforms.uZTime.value = elapsedClock;
+        rig.zombieUniforms.uZSeed.value = (z.id % 97) + 1;
+        rig.zombieUniforms.uZDetail.value = lod.shaderDetail;
+        const skinDeform = evaluateSkinDeformIntensity({
+          archetype: z.archetype,
+          animState,
+          walkCycle: z.walkCycle,
+        });
+        rig.zombieUniforms.uZDeformAmp.value = skinDeform.deformAmp;
+        rig.zombieUniforms.uZLunge.value = skinDeform.lungeStretch;
+        rig.zombieUniforms.uZWalkPhase.value = z.walkCycle;
+      }
+
+      const jawPose = evaluateJawAndSpasm({
+        time: elapsedClock,
+        seed: z.id,
+        archetype: z.archetype,
+        state: z.state,
+        stateTimer: z.stateTimer,
+      });
+
       // Windup ground telegraph ring
       ring.visible = z.state === 'windup';
       if (ring.visible) {
@@ -1853,7 +2115,11 @@ export class ThreeIsometricRenderer {
         ring.scale.set(pulse, 1, pulse);
       }
 
-      // Articulated 3D animation
+      // Articulated 3D animation + infection twitches + jaw snap
+      if (rig.jawPivot) {
+        rig.jawPivot.rotation.z = -jawPose.jawOpenAngle;
+      }
+
       if (animState === 'dying') {
         const fallProg = clamp(1 - z.stateTimer / 0.52, 0, 1);
         rig.bodyPivot.rotation.z = fallProg * 1.48;
@@ -1878,29 +2144,132 @@ export class ThreeIsometricRenderer {
           const s = Math.sin(phase);
           rig.leftLegPivot.rotation.z = s * 0.58;
           rig.rightLegPivot.rotation.z = -s * 0.58;
-          rig.leftArmPivot.rotation.z = Math.sin(phase + 0.5) * 0.16;
-          rig.rightArmPivot.rotation.z = -Math.sin(phase + 0.5) * 0.16;
+          rig.leftArmPivot.rotation.z = Math.sin(phase + 0.5) * 0.16 + jawPose.armTwitchL;
+          rig.rightArmPivot.rotation.z = -Math.sin(phase + 0.5) * 0.16 + jawPose.armTwitchR;
           rig.bodyPivot.position.y = Math.abs(Math.cos(phase)) * 0.05;
-          rig.torso.rotation.z = z.archetype === 'runner' ? -0.26 : -0.08;
+          rig.torso.rotation.z = (z.archetype === 'runner' ? -0.26 : -0.08) + jawPose.torsoTwitchZ;
         } else if (animState === 'windup') {
           rig.leftLegPivot.rotation.z = 0.2;
           rig.rightLegPivot.rotation.z = -0.2;
-          rig.leftArmPivot.rotation.z = 0.9;
-          rig.rightArmPivot.rotation.z = 0.9;
-          rig.torso.rotation.z = 0.2;
+          rig.leftArmPivot.rotation.z = 0.24 + jawPose.armTwitchL;
+          rig.rightArmPivot.rotation.z = -0.18 + jawPose.armTwitchR;
+          rig.torso.rotation.z = 0.2 + jawPose.torsoTwitchZ;
           rig.bodyPivot.position.y = -0.04;
         } else if (animState === 'attack') {
-          rig.leftArmPivot.rotation.z = -0.55;
-          rig.rightArmPivot.rotation.z = -0.55;
-          rig.torso.rotation.z = -0.35;
+          rig.leftArmPivot.rotation.z = -0.55 + jawPose.armTwitchL;
+          rig.rightArmPivot.rotation.z = -0.55 + jawPose.armTwitchR;
+          rig.torso.rotation.z = -0.35 + jawPose.torsoTwitchZ;
           rig.bodyPivot.position.y = 0.03;
         } else {
           rig.leftLegPivot.rotation.z = 0;
           rig.rightLegPivot.rotation.z = 0;
-          rig.leftArmPivot.rotation.z = Math.sin(elapsedClock * 2.5 + z.id) * 0.08;
-          rig.rightArmPivot.rotation.z = -Math.sin(elapsedClock * 2.5 + z.id) * 0.08;
-          rig.torso.rotation.z = z.archetype === 'runner' ? -0.15 : 0;
+          rig.leftArmPivot.rotation.z = Math.sin(elapsedClock * 2.5 + z.id) * 0.08 + jawPose.armTwitchL;
+          rig.rightArmPivot.rotation.z = -Math.sin(elapsedClock * 2.5 + z.id) * 0.08 + jawPose.armTwitchR;
+          rig.torso.rotation.z = (z.archetype === 'runner' ? -0.15 : 0) + jawPose.torsoTwitchZ;
           rig.bodyPivot.position.y = Math.sin(elapsedClock * 3 + z.id) * 0.02;
+        }
+      }
+
+      const baseHeadTiltX = z.archetype === 'walker' ? 0.1 : 0;
+      const headCounterZ = animState === 'dying' ? 0 : -rig.torso.rotation.z * 0.85;
+      rig.headPivot.rotation.set(
+        baseHeadTiltX + jawPose.headTwitchX,
+        jawPose.headTwitchY,
+        headCounterZ + jawPose.headTwitchZ
+      );
+
+      // Macro blister swell, pulse, wobble & contraction (pairs with GLSL membrane vertex anim)
+      if (rig.blisters && rig.blisters.length > 0) {
+        if (lod.enableBlisterAnim && animState !== 'dying') {
+          for (let bi = 0; bi < rig.blisters.length; bi++) {
+            const b = rig.blisters[bi];
+            const pulse = evaluateBlisterPulse({
+              time: elapsedClock,
+              seed: z.id,
+              archetype: z.archetype,
+              state: z.state,
+              blisterIndex: bi,
+            });
+            const rScale = 1 + (pulse.radialScale - 1) * 0.55;
+            const aScale = 1 + (pulse.axialStretch - 1) * 0.6;
+            b.mesh.scale.set(
+              b.baseScale.x * rScale,
+              b.baseScale.y * aScale,
+              b.baseScale.z * rScale
+            );
+            b.mesh.rotation.set(pulse.wobbleX, 0, pulse.wobbleZ);
+          }
+        } else {
+          for (let bi = 0; bi < rig.blisters.length; bi++) {
+            const b = rig.blisters[bi];
+            b.mesh.scale.copy(b.baseScale);
+            b.mesh.rotation.set(0, 0, 0);
+          }
+        }
+      }
+
+      // Close-up saliva drool strand, mouth droplets, oozing pus/bile & toxic spore puffs
+      const showMicro = lod.enableMicroVfx && animState !== 'dying';
+      if (rig.salivaStrand) {
+        rig.salivaStrand.visible = showMicro;
+        if (showMicro) {
+          const salivaSample = evaluateSalivaStrandCycle({
+            prevPhase: entry.salivaPhase,
+            dt,
+            archetype: z.archetype,
+            jawOpenAngle: jawPose.jawOpenAngle,
+            isSnapping: jawPose.isSnapping,
+          });
+          entry.salivaPhase = salivaSample.phase;
+          rig.salivaStrand.scale.set(
+            salivaSample.strandThickness,
+            salivaSample.strandLength,
+            salivaSample.strandThickness
+          );
+          if (salivaSample.emitDrop && rig.mouthAnchor) {
+            rig.root.updateMatrixWorld(true);
+            rig.mouthAnchor.getWorldPosition(_vec3A);
+            this.spawnInfectionDrop(
+              _vec3A.x,
+              _vec3A.y,
+              _vec3A.z,
+              z.facingX * 0.24 + (Math.random() - 0.5) * 0.12,
+              -0.32,
+              z.facingY * 0.24 + (Math.random() - 0.5) * 0.12,
+              0.9,
+              preset.salivaColorHex
+            );
+          }
+        }
+      }
+
+      if (showMicro && rig.oozeAnchors && rig.oozeAnchors.length > 0 && dt > 0) {
+        entry.oozeTimer += dt * preset.oozeRate;
+        if (entry.oozeTimer >= 1.0) {
+          entry.oozeTimer -= Math.floor(entry.oozeTimer);
+          rig.root.updateMatrixWorld(true);
+          const idx = Math.floor((elapsedClock * 7 + z.id) % rig.oozeAnchors.length);
+          rig.oozeAnchors[idx].getWorldPosition(_vec3A);
+          this.spawnInfectionDrop(
+            _vec3A.x,
+            _vec3A.y,
+            _vec3A.z,
+            (Math.random() - 0.5) * 0.28,
+            -0.14,
+            (Math.random() - 0.5) * 0.28,
+            1.05,
+            preset.pusColorHex
+          );
+        }
+
+        entry.sporeTimer += dt * preset.sporeRate;
+        if (entry.sporeTimer >= 1.0) {
+          entry.sporeTimer -= Math.floor(entry.sporeTimer);
+          rig.root.updateMatrixWorld(true);
+          const idx = Math.floor((elapsedClock * 5 + z.id * 3) % rig.oozeAnchors.length);
+          rig.oozeAnchors[idx].getWorldPosition(_vec3A);
+          const puffScale = z.archetype === 'bloater' || z.archetype === 'spitter' ? 1.35 : 0.85;
+          this.spawnSporePuff(_vec3A.x, _vec3A.y, _vec3A.z, preset.sporeColorHex, puffScale);
         }
       }
 
@@ -3103,6 +3472,10 @@ export class ThreeIsometricRenderer {
     (this.particleInstanced.material as THREE.Material).dispose();
     this.ashInstanced.geometry.dispose();
     (this.ashInstanced.material as THREE.Material).dispose();
+    this.infectDropInstanced.geometry.dispose();
+    (this.infectDropInstanced.material as THREE.Material).dispose();
+    this.sporePuffInstanced.geometry.dispose();
+    (this.sporePuffInstanced.material as THREE.Material).dispose();
     for (const dm of this.decalMeshes) {
       dm.geometry.dispose();
       (dm.material as THREE.Material).dispose();

@@ -687,6 +687,7 @@ function buildActorHeadTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
   side: THREE.CanvasTexture;
   top: THREE.CanvasTexture;
   jaw?: THREE.CanvasTexture;
+  wrap?: THREE.CanvasTexture;
 } {
   if (kind === 'player') {
     const [cf, fctx] = makePixelCanvas(16, 16);
@@ -766,11 +767,11 @@ function buildActorHeadTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
           : { skin: '#58827d', hi: '#78aba5', dark: '#304c49', rot: '#1a2b2a', eye: '#6ef7be', eyeCore: '#e8fff6', seed: 53 };
 
   for (const [idx, ctx] of [fctx, bctx, sctx, tctx].entries()) {
-    drawPixelRect(ctx, 0, 0, S, S, '#101215');
-    drawZombieDither(ctx, 2, 2, S - 4, S - 4, pal.skin, pal.hi, pal.dark, pal.seed + idx * 7);
+    drawPixelRect(ctx, 0, 0, S, S, pal.dark);
+    drawZombieDither(ctx, 0, 0, S, S, pal.skin, pal.hi, pal.dark, pal.seed + idx * 7);
     // Ambient lower-jaw/crown shading
-    drawPixelRect(ctx, 2, 50, S - 4, 12, pal.dark);
-    drawPixelRect(ctx, 2, 2, S - 4, 6, pal.hi);
+    drawPixelRect(ctx, 0, 50, S, 14, pal.dark);
+    drawPixelRect(ctx, 0, 0, S, 6, pal.hi);
   }
 
   // Scalp / rotting cranial patches on back, side, and top
@@ -805,13 +806,13 @@ function buildActorHeadTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
   drawPixelRect(fctx, 10, 36, 8, 8, pal.dark);
   drawPixelRect(fctx, 46, 36, 8, 8, pal.dark);
 
-  // Gaping torn jaw, gumline & staggered teeth
-  drawPixelRect(fctx, 16, 42, 32, 16, '#260808');
-  drawPixelRect(fctx, 18, 43, 28, 13, '#571010');
-  drawPixelRect(fctx, 22, 46, 20, 8, '#7a1919');
-  for (let tx = 18; tx <= 42; tx += 5) {
-    drawPixelRect(fctx, tx, 42, 3, 4, '#e6dcc8');
-    drawPixelRect(fctx, tx + 1, 53, 3, 3, '#cfc3ab');
+  // Upper gumline, dark wet oral cavity & jagged upper teeth (aligns cleanly with hinged lower jaw)
+  drawPixelRect(fctx, 14, 46, 36, 18, '#1a0506');
+  drawPixelRect(fctx, 16, 46, 32, 8, '#4a0c0e');
+  drawPixelRect(fctx, 20, 48, 24, 5, '#731416');
+  for (let tx = 16; tx <= 44; tx += 5) {
+    drawPixelRect(fctx, tx, 50, 3, 6, '#e8dec9');
+    drawPixelRect(fctx, tx + 1, 55, 2, 2, '#b0a289');
   }
 
   // Archetype-specific gore & mutations
@@ -880,30 +881,101 @@ function buildActorHeadTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
     }
   }
 
-  // Dedicated 32x16 lower mandible / jagged teeth texture for hinged zombie jaw (no duplicate eyes!)
+  // Dedicated 32x16 lower mandible skin & dried-gore texture (3D teeth sit cleanly on top!)
   const [cj, jctx] = makePixelCanvas(32, 16);
-  drawPixelRect(jctx, 0, 0, 32, 16, '#101215');
-  drawZombieDither(jctx, 1, 1, 30, 14, pal.dark, pal.skin, pal.rot, pal.seed + 199);
-  // Bloody upper gumline + staggered lower teeth row across top of mandible
-  drawPixelRect(jctx, 4, 1, 24, 5, '#470d0d');
-  drawPixelRect(jctx, 6, 2, 20, 3, '#7a1919');
-  for (let tx = 6; tx <= 23; tx += 4) {
-    drawPixelRect(jctx, tx, 1, 3, 4, '#e6dcc8');
-    drawPixelRect(jctx, tx + 1, 4, 2, 1, '#9e9078');
-  }
+  drawPixelRect(jctx, 0, 0, 32, 16, pal.rot);
+  drawZombieDither(jctx, 0, 0, 32, 16, pal.skin, pal.hi, pal.dark, pal.seed + 199);
+  drawPixelRect(jctx, 0, 0, 32, 3, '#38090b'); // dark gum edge
+  drawPixelRect(jctx, 0, 12, 32, 4, pal.rot); // chin under-shadow
   if (kind === 'runner') {
-    drawPixelRect(jctx, 8, 6, 4, 8, '#8f1919');
-    drawPixelRect(jctx, 19, 6, 5, 9, '#6b0f0f');
+    drawPixelRect(jctx, 7, 3, 4, 10, '#781414');
+    drawPixelRect(jctx, 19, 3, 5, 11, '#590d0d');
   } else if (kind === 'bloater') {
-    drawPixelRect(jctx, 10, 5, 4, 9, '#9ed93b');
-    drawPixelRect(jctx, 18, 6, 3, 8, '#c8ff59');
+    drawPixelRect(jctx, 9, 5, 4, 8, '#6e9929');
+    drawPixelRect(jctx, 18, 6, 3, 7, '#4f731c');
   } else if (kind === 'spitter') {
-    drawPixelRect(jctx, 9, 4, 14, 10, '#19473d');
-    drawPixelRect(jctx, 12, 5, 8, 8, '#5ef2b5');
-    drawPixelRect(jctx, 14, 6, 4, 5, '#d9fff0');
+    drawPixelRect(jctx, 10, 4, 12, 9, '#19473d');
+    drawPixelRect(jctx, 13, 5, 6, 7, '#3ab583');
   } else {
-    drawPixelRect(jctx, 12, 6, 6, 7, '#5c1111');
+    drawPixelRect(jctx, 11, 4, 7, 8, '#4f1010');
   }
+
+  // Seamless 128x64 continuous spherical wrap texture for sculpted organic skulls
+  // u = 0.5 (x = 64) faces +X front; u = 0 / 1 (x = 0 / 128) wraps seamlessly at -X back.
+  const [cw, wctx] = makePixelCanvas(128, 64);
+  drawPixelRect(wctx, 0, 0, 128, 64, pal.dark);
+  drawZombieDither(wctx, 0, 0, 128, 64, pal.skin, pal.hi, pal.dark, pal.seed + 307);
+  // Subtle crown/occiput scalp rot & lower-jaw occlusion
+  drawZombieDither(wctx, 0, 0, 128, 16, pal.dark, pal.skin, pal.rot, pal.seed + 313);
+  drawPixelRect(wctx, 0, 50, 128, 14, pal.rot);
+  // Forehead brow crease + cheekbone highlights (no fake painted sticker eyes!)
+  drawZombieDither(wctx, 42, 16, 44, 8, pal.dark, pal.hi, pal.rot, pal.seed + 331);
+  drawPixelRect(wctx, 48, 22, 32, 3, pal.rot);
+  drawPixelRect(wctx, 46, 20, 16, 2, pal.hi);
+  drawPixelRect(wctx, 66, 20, 16, 2, pal.hi);
+  // Deeply shadowed eye socket rings + torn nasal recess
+  drawPixelDisc(wctx, 54, 30, 6.2, '#170c0e');
+  drawPixelDisc(wctx, 74, 30, 6.2, '#170c0e');
+  drawPixelDisc(wctx, 54, 30, 3.6, '#0b0607');
+  drawPixelDisc(wctx, 74, 30, 3.6, '#0b0607');
+  drawPixelRect(wctx, 62, 26, 4, 8, pal.hi);
+  drawPixelRect(wctx, 61, 34, 6, 5, '#190c0e');
+  // Upper bloody gumline & maxilla stain
+  drawPixelRect(wctx, 48, 43, 32, 12, '#3d090b');
+  drawPixelRect(wctx, 52, 45, 24, 7, '#6b1214');
+
+  if (kind === 'walker') {
+    // Exposed left parietal bone patch + bloody cheek laceration + tattered hair on nape
+    drawPixelDisc(wctx, 42, 14, 7, '#d6cbb8');
+    drawPixelDisc(wctx, 42, 14, 4.5, '#b8ab96');
+    drawPixelRect(wctx, 76, 34, 14, 15, '#5c1111');
+    drawPixelRect(wctx, 79, 36, 8, 11, '#8f1d1d');
+    drawPixelRect(wctx, 4, 10, 18, 22, '#1f1918');
+    drawPixelRect(wctx, 106, 10, 18, 22, '#1f1918');
+  } else if (kind === 'runner') {
+    // Flayed crimson muscle striations wrapping cheeks/temples + blood around snout
+    for (let sy = 14; sy < 52; sy += 4) {
+      drawPixelRect(wctx, 26, sy, 22, 2, '#7d1b1b');
+      drawPixelRect(wctx, 80, sy + 1, 22, 2, '#7d1b1b');
+    }
+    drawPixelRect(wctx, 52, 48, 24, 12, '#7d1414');
+    drawPixelRect(wctx, 48, 24, 12, 2, '#a82323');
+    drawPixelRect(wctx, 68, 24, 12, 2, '#a82323');
+  } else if (kind === 'bloater') {
+    // Tumorous lime pustule clusters wrapping temples, brow, cheeks & occiput
+    const wrapPustules: Array<[number, number, number]> = [
+      [44, 18, 6.5],
+      [82, 34, 7],
+      [28, 30, 8],
+      [100, 28, 7.5],
+      [14, 26, 7],
+      [114, 26, 7],
+    ];
+    for (const [px, py, r] of wrapPustules) {
+      drawPixelDisc(wctx, px, py, r + 1.5, '#2b3d16');
+      drawPixelDisc(wctx, px, py, r, '#9ed93b');
+      drawPixelDisc(wctx, px - 1, py - 1, r * 0.58, '#c8ff59');
+      drawPixelDisc(wctx, px - 1.5, py - 1.5, Math.max(1.2, r * 0.25), '#f5ffd9');
+    }
+  } else {
+    // Spitter: bioluminescent cyan venom veins + glowing cheek sac markings + dorsal skull nodes
+    drawPixelDisc(wctx, 36, 40, 9, '#19473d');
+    drawPixelDisc(wctx, 92, 40, 9, '#19473d');
+    drawPixelDisc(wctx, 36, 40, 5.5, '#4be3a5');
+    drawPixelDisc(wctx, 92, 40, 5.5, '#4be3a5');
+    for (let i = 0; i < 14; i++) {
+      drawPixelRect(wctx, 36 + i, 18 + (i % 4) * 3, 2, 2, '#5ef2b5');
+      drawPixelRect(wctx, 92 - i, 18 + (i % 4) * 3, 2, 2, '#5ef2b5');
+    }
+    for (let sy = 14; sy <= 48; sy += 9) {
+      drawPixelDisc(wctx, 4, sy, 3.5, '#5ef2b5');
+      drawPixelDisc(wctx, 124, sy, 3.5, '#5ef2b5');
+    }
+  }
+
+  const wrapHeadTex = toNearestTexture(cw);
+  wrapHeadTex.wrapS = THREE.RepeatWrapping;
+  wrapHeadTex.wrapT = THREE.ClampToEdgeWrapping;
 
   return {
     front: toNearestTexture(cf),
@@ -911,6 +983,7 @@ function buildActorHeadTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
     side: toNearestTexture(cs),
     top: toNearestTexture(ct),
     jaw: toNearestTexture(cj),
+    wrap: wrapHeadTex,
   };
 }
 
@@ -971,9 +1044,9 @@ function buildActorLimbTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
           : { main: '#21262b', hi: '#343c45', dark: '#121517', seed: 151 };
 
   // Arm / sleeve: tattered upper fabric + rotting forearm + grime/blood/pustules
-  drawPixelRect(sctx, 0, 0, 32, 48, '#101215');
-  drawZombieDither(sctx, 2, 2, 28, 18, sleevePal.cloth, sleevePal.cloth, sleevePal.clothDark, sleevePal.seed);
-  drawZombieDither(sctx, 2, 20, 28, 26, sleevePal.flesh, sleevePal.hi, sleevePal.dark, sleevePal.seed + 5);
+  drawPixelRect(sctx, 0, 0, 32, 48, sleevePal.clothDark);
+  drawZombieDither(sctx, 0, 0, 32, 20, sleevePal.cloth, sleevePal.cloth, sleevePal.clothDark, sleevePal.seed);
+  drawZombieDither(sctx, 0, 20, 32, 28, sleevePal.flesh, sleevePal.hi, sleevePal.dark, sleevePal.seed + 5);
   // Jagged torn fabric fringe
   for (let x = 2; x < 30; x += 4) {
     drawPixelRect(sctx, x, 18, 2, 5, sleevePal.clothDark);
@@ -991,15 +1064,15 @@ function buildActorLimbTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
   }
 
   // Legs: torn knee + stitching + mud-caked cuffs
-  drawPixelRect(lctx, 0, 0, 32, 48, '#101215');
-  drawZombieDither(lctx, 2, 2, 28, 44, pantsPal.main, pantsPal.hi, pantsPal.dark, pantsPal.seed);
+  drawPixelRect(lctx, 0, 0, 32, 48, pantsPal.dark);
+  drawZombieDither(lctx, 0, 0, 32, 48, pantsPal.main, pantsPal.hi, pantsPal.dark, pantsPal.seed);
   // Vertical seam + knee tear exposing flesh/bone
-  drawPixelRect(lctx, 15, 2, 2, 44, pantsPal.dark);
+  drawPixelRect(lctx, 15, 0, 2, 48, pantsPal.dark);
   drawPixelRect(lctx, 6, 18, 18, 8, '#161414');
   drawPixelRect(lctx, 8, 19, 14, 6, sleevePal.dark);
   drawPixelRect(lctx, 11, 20, 8, 3, '#cfc3ab'); // kneecap bone
   // Muddy hem
-  drawZombieDither(lctx, 2, 38, 28, 8, '#29211b', '#382e26', '#17120e', pantsPal.seed + 9);
+  drawZombieDither(lctx, 0, 38, 32, 10, '#29211b', '#382e26', '#17120e', pantsPal.seed + 9);
 
   return {
     sleeve: toNearestTexture(cs),
@@ -1011,6 +1084,7 @@ function buildActorTorsoTextures(kind: 'player' | 'walker' | 'runner' | 'bloater
   front: THREE.CanvasTexture;
   back: THREE.CanvasTexture;
   side: THREE.CanvasTexture;
+  wrap?: THREE.CanvasTexture;
 } {
   if (kind === 'player') {
     const [cf, fctx] = makePixelCanvas(16, 16);
@@ -1053,10 +1127,10 @@ function buildActorTorsoTextures(kind: 'player' | 'walker' | 'runner' | 'bloater
           : { main: '#38464d', hi: '#4e626b', dark: '#20292e', seed: 229 };
 
   for (const [idx, ctx] of [fctx, bctx, sctx].entries()) {
-    drawPixelRect(ctx, 0, 0, S, S, '#101215');
-    drawZombieDither(ctx, 2, 2, S - 4, S - 4, palette.main, palette.hi, palette.dark, palette.seed + idx * 13);
-    drawPixelRect(ctx, 2, 2, S - 4, 7, palette.hi);
-    drawPixelRect(ctx, 2, 52, S - 4, 10, palette.dark);
+    drawPixelRect(ctx, 0, 0, S, S, palette.dark);
+    drawZombieDither(ctx, 0, 0, S, S, palette.main, palette.hi, palette.dark, palette.seed + idx * 13);
+    drawPixelRect(ctx, 0, 0, S, 7, palette.hi);
+    drawPixelRect(ctx, 0, 52, S, 12, palette.dark);
   }
 
   if (kind === 'walker') {
@@ -1132,10 +1206,74 @@ function buildActorTorsoTextures(kind: 'player' | 'walker' | 'runner' | 'bloater
     }
   }
 
+  // Seamless 128x64 continuous cylindrical wrap texture for sculpted organic zombie torsos
+  const [cwt, wtctx] = makePixelCanvas(128, 64);
+  drawPixelRect(wtctx, 0, 0, 128, 64, palette.dark);
+  drawZombieDither(wtctx, 0, 0, 128, 64, palette.main, palette.hi, palette.dark, palette.seed + 503);
+  drawPixelRect(wtctx, 0, 0, 128, 7, palette.hi);
+  drawPixelRect(wtctx, 0, 52, 128, 12, palette.dark);
+
+  if (kind === 'walker') {
+    // Torn jacket parting at x=46..82 over deep chest wound + blood drips onto belt + spine gap
+    drawPixelRect(wtctx, 46, 10, 36, 36, '#380b0b');
+    drawPixelRect(wtctx, 50, 12, 28, 32, '#6e1616');
+    drawPixelRect(wtctx, 61, 12, 6, 32, '#420c0c');
+    drawPixelRect(wtctx, 54, 46, 5, 12, '#7a1616');
+    drawPixelRect(wtctx, 69, 45, 6, 13, '#590d0d');
+    drawPixelRect(wtctx, 0, 50, 128, 6, '#211914');
+    drawPixelRect(wtctx, 0, 16, 12, 26, '#4a1b1b');
+    drawPixelRect(wtctx, 116, 16, 12, 26, '#4a1b1b');
+  } else if (kind === 'runner') {
+    // Shredded crimson athletic vest + striated chest sinew + diagonal claw slashes on sides/back
+    drawPixelRect(wtctx, 44, 10, 40, 42, '#4d1111');
+    drawPixelRect(wtctx, 48, 14, 32, 32, '#8a1e1e');
+    for (let sx = 50; sx <= 76; sx += 5) {
+      drawPixelRect(wtctx, sx, 16, 2, 28, '#5e1111');
+    }
+    for (let i = 0; i < 24; i++) {
+      drawPixelRect(wtctx, 20 + i, 20 + (i >> 1), 3, 2, '#591616');
+      drawPixelRect(wtctx, 84 + i, 28 - (i >> 1), 3, 2, '#591616');
+    }
+  } else if (kind === 'bloater') {
+    drawPixelRect(wtctx, 44, 16, 40, 40, '#5a6e39');
+    drawZombieDither(wtctx, 48, 20, 32, 34, '#6f8c49', '#87a85b', '#415727', 239);
+    const tPust: Array<[number, number, number]> = [
+      [50, 24, 8],
+      [76, 36, 9],
+      [26, 30, 8],
+      [100, 32, 8],
+      [12, 24, 7],
+      [116, 28, 7],
+    ];
+    for (const [px, py, r] of tPust) {
+      drawPixelDisc(wtctx, px, py, r + 2, '#283814');
+      drawPixelDisc(wtctx, px, py, r, '#9ed93b');
+      drawPixelDisc(wtctx, px - 1.5, py - 1.5, r * 0.58, '#c8ff59');
+    }
+  } else {
+    drawPixelDisc(wtctx, 64, 30, 16, '#173830');
+    drawPixelDisc(wtctx, 64, 30, 12, '#24735e');
+    drawPixelDisc(wtctx, 64, 29, 8, '#4be3a5');
+    drawPixelDisc(wtctx, 64, 28, 4, '#c4ffea');
+    for (let i = 0; i < 16; i++) {
+      drawPixelRect(wtctx, 36 + i, 14 + i, 2, 2, '#4be3a5');
+      drawPixelRect(wtctx, 92 - i, 14 + i, 2, 2, '#4be3a5');
+    }
+    for (let sy = 12; sy <= 48; sy += 9) {
+      drawPixelDisc(wtctx, 4, sy, 4, '#5ef2b5');
+      drawPixelDisc(wtctx, 124, sy, 4, '#5ef2b5');
+    }
+  }
+
+  const wrapTorsoTex = toNearestTexture(cwt);
+  wrapTorsoTex.wrapS = THREE.RepeatWrapping;
+  wrapTorsoTex.wrapT = THREE.ClampToEdgeWrapping;
+
   return {
     front: toNearestTexture(cf),
     back: toNearestTexture(cb),
     side: toNearestTexture(cs),
+    wrap: wrapTorsoTex,
   };
 }
 
@@ -2152,8 +2290,8 @@ export class ThreePixelAtlas {
   public readonly bulletImpactTex: Record<'stone' | 'wood' | 'metal' | 'blood_wall', THREE.CanvasTexture>;
 
   // Pixel-art model surface textures
-  public readonly actorHeadTex: Record<'player' | 'walker' | 'runner' | 'bloater' | 'spitter', { front: THREE.CanvasTexture; back: THREE.CanvasTexture; side: THREE.CanvasTexture; top: THREE.CanvasTexture; jaw?: THREE.CanvasTexture }>;
-  public readonly actorTorsoTex: Record<'player' | 'walker' | 'runner' | 'bloater' | 'spitter', { front: THREE.CanvasTexture; back: THREE.CanvasTexture; side: THREE.CanvasTexture }>;
+  public readonly actorHeadTex: Record<'player' | 'walker' | 'runner' | 'bloater' | 'spitter', { front: THREE.CanvasTexture; back: THREE.CanvasTexture; side: THREE.CanvasTexture; top: THREE.CanvasTexture; jaw?: THREE.CanvasTexture; wrap?: THREE.CanvasTexture }>;
+  public readonly actorTorsoTex: Record<'player' | 'walker' | 'runner' | 'bloater' | 'spitter', { front: THREE.CanvasTexture; back: THREE.CanvasTexture; side: THREE.CanvasTexture; wrap?: THREE.CanvasTexture }>;
   public readonly actorLimbTex: Record<'player' | 'walker' | 'runner' | 'bloater' | 'spitter', { sleeve: THREE.CanvasTexture; leg: THREE.CanvasTexture }>;
   public readonly pustuleTex: { lime: THREE.CanvasTexture; cyan: THREE.CanvasTexture };
   public readonly backpackTex: THREE.CanvasTexture;
@@ -2258,9 +2396,11 @@ export class ThreePixelAtlas {
       this.track(h.side);
       this.track(h.top);
       if (h.jaw) this.track(h.jaw);
+      if (h.wrap) this.track(h.wrap);
       this.track(t.front);
       this.track(t.back);
       this.track(t.side);
+      if (t.wrap) this.track(t.wrap);
       this.track(l.sleeve);
       this.track(l.leg);
       this.actorHeadTex[k] = h;
