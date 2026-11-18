@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { derivePlayerPalette, shadeHex } from './profile';
 import type { ItemId, TileKind } from './types';
+import { computeWaterShoreDepth } from './waterSystem';
 
 function makePixelCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
   const c = document.createElement('canvas');
@@ -2340,6 +2341,48 @@ export class ThreePixelAtlas {
     return this.tileCanvases.get(`${kind}_${variant % 4}`)!;
   }
 
+  private drawSubmergedLakebedTile(
+    ctx: CanvasRenderingContext2D,
+    px: number,
+    py: number,
+    pxPerTile: number,
+    gx: number,
+    gy: number,
+    depth01: number,
+    variant: number
+  ): void {
+    // 16x16 pixel-art submerged floor (drawn in 2x2 pixel blocks over 32x32 tile area for crisp texels)
+    const cells = 16;
+    const step = pxPerTile / cells;
+    const seed = (gx * 73856093) ^ (gy * 19349663) ^ (variant * 83492791);
+    for (let sy = 0; sy < cells; sy++) {
+      for (let sx = 0; sx < cells; sx++) {
+        const h = Math.abs(Math.sin((seed + sx * 17 + sy * 31) * 12.9898) * 43758.5453) % 1;
+        let col: string;
+        if (depth01 < 0.34) {
+          // Shallow sunlit wet sand & scattered shore pebbles
+          if (h < 0.08) col = '#5c523b';
+          else if (h < 0.22) col = '#9c865b';
+          else if (h < 0.76) col = '#7a6c4c';
+          else col = '#526152';
+        } else if (depth01 < 0.68) {
+          // Mid-depth mossy river silt & darker stones
+          if (h < 0.1) col = '#223338';
+          else if (h < 0.28) col = '#3c4f49';
+          else if (h < 0.78) col = '#2b3f42';
+          else col = '#4a5444';
+        } else {
+          // Deep abyssal slate riverbed
+          if (h < 0.14) col = '#0c171e';
+          else if (h < 0.34) col = '#1c2e36';
+          else col = '#132229';
+        }
+        ctx.fillStyle = col;
+        ctx.fillRect(px + sx * step, py + sy * step, step, step);
+      }
+    }
+  }
+
   createChunkTerrainTexture(getCell: (gx: number, gy: number) => { tile: TileKind; variant: number }, cx: number, cy: number, chunkSize: number): THREE.CanvasTexture {
     const pxPerTile = 32;
     const dim = chunkSize * pxPerTile;
@@ -2348,9 +2391,16 @@ export class ThreePixelAtlas {
     const startY = cy * chunkSize;
     for (let ly = 0; ly < chunkSize; ly++) {
       for (let lx = 0; lx < chunkSize; lx++) {
-        const cell = getCell(startX + lx, startY + ly);
-        const tileCanvas = this.getTileCanvas(cell.tile, cell.variant);
-        ctx.drawImage(tileCanvas, lx * pxPerTile, ly * pxPerTile);
+        const gx = startX + lx;
+        const gy = startY + ly;
+        const cell = getCell(gx, gy);
+        if (cell.tile === 'water') {
+          const depth01 = computeWaterShoreDepth(gx, gy, getCell);
+          this.drawSubmergedLakebedTile(ctx, lx * pxPerTile, ly * pxPerTile, pxPerTile, gx, gy, depth01, cell.variant);
+        } else {
+          const tileCanvas = this.getTileCanvas(cell.tile, cell.variant);
+          ctx.drawImage(tileCanvas, lx * pxPerTile, ly * pxPerTile);
+        }
       }
     }
     return toNearestTexture(c);

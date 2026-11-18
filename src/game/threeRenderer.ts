@@ -30,6 +30,14 @@ import {
 } from './threeModels';
 import { SkyCloudDome } from './threeSky';
 import { ThreePixelAtlas } from './threeTextures';
+import {
+  WATER_SURFACE_Y,
+  WaterRippleBuffer,
+  buildChunkWaterGeometry,
+  createPixelWaterMaterial,
+  syncPixelWaterUniforms,
+  type PixelWaterMaterialUniforms,
+} from './waterSystem';
 import { computeAtmosphereLighting, createAtmosphereLightingState } from './lighting';
 import { getBuildTargetTile, getDaylightInfo } from './survivalLogic';
 import { getSettings } from './settings';
@@ -153,6 +161,7 @@ interface ChunkVisual {
   lightAnchors: Array<{ x: number; z: number; color: number; intensity: number; distance: number; flicker: boolean }>;
   fpsRoofMesh?: THREE.InstancedMesh;
   grassMesh?: THREE.InstancedMesh | null;
+  waterMesh?: THREE.Mesh;
 }
 
 // Reusable scratch math objects for zero-GC per-frame updates
@@ -200,6 +209,11 @@ export class ThreeIsometricRenderer {
   private factory: ThreeModelFactory;
   private skyDome: SkyCloudDome;
   private grassSystem: ThreeGrassSystem;
+  private waterMaterial: THREE.ShaderMaterial;
+  private waterUniforms: PixelWaterMaterialUniforms;
+  private waterRipples = new WaterRippleBuffer();
+  private lastBobberRippleTime = -10;
+  private _flashlightDir = new THREE.Vector3(1, -0.1, 0);
 
   private sunLight: THREE.DirectionalLight;
   private rimLight: THREE.DirectionalLight;
@@ -409,6 +423,9 @@ export class ThreeIsometricRenderer {
     this.skyDome = new SkyCloudDome();
     this.scene.add(this.skyDome.group);
     this.grassSystem = new ThreeGrassSystem();
+    const waterSetup = createPixelWaterMaterial();
+    this.waterMaterial = waterSetup.material;
+    this.waterUniforms = waterSetup.uniforms;
 
     this.zombieRingGeo = new THREE.RingGeometry(0.32, 0.42, 18);
     this.zombieRingGeo.rotateX(-Math.PI * 0.5);
@@ -764,12 +781,17 @@ export class ThreeIsometricRenderer {
     return { wx: 28.5, wy: 28.5 };
   }
 
+  public addWaterRipple(x: number, z: number, elapsedClock: number, strength = 1.0): void {
+    this.waterRipples.push(x, z, elapsedClock, strength);
+  }
+
   private disposeChunkVisual(chunk: ChunkVisual): void {
     this.chunksGroup.remove(chunk.group);
     chunk.terrainTex.dispose();
     chunk.terrainMat.dispose();
     chunk.fpsRoofMesh?.dispose();
     chunk.grassMesh?.dispose();
+    chunk.waterMesh?.geometry.dispose();
     for (const geo of chunk.mergedGeos) {
       geo.dispose();
     }
@@ -788,6 +810,8 @@ export class ThreeIsometricRenderer {
       this.disposeChunkVisual(chunk);
     }
     this.chunkVisuals.clear();
+    this.waterRipples.clear();
+    this.lastBobberRippleTime = -10;
     this.lastOccludedWalls.length = 0;
     this.lastFallbackWallChunks.length = 0;
     this.lastIsFps = null;
@@ -1038,6 +1062,16 @@ export class ThreeIsometricRenderer {
       group.add(fpsRoofMesh);
     }
 
+    const waterGeo = buildChunkWaterGeometry(cx, cy, CHUNK_SIZE, getCell);
+    let waterMesh: THREE.Mesh | undefined;
+    if (waterGeo) {
+      waterMesh = new THREE.Mesh(waterGeo, this.waterMaterial);
+      waterMesh.castShadow = false;
+      waterMesh.receiveShadow = false;
+      waterMesh.renderOrder = 1;
+      group.add(waterMesh);
+    }
+
     this.chunksGroup.add(group);
     return {
       key,
@@ -1056,6 +1090,7 @@ export class ThreeIsometricRenderer {
       lightAnchors,
       fpsRoofMesh,
       grassMesh,
+      waterMesh,
     };
   }
 
@@ -1269,7 +1304,7 @@ export class ThreeIsometricRenderer {
     this.syncContainers(state.containers, state.player, state.elapsedClock, targetX, targetZ);
     this.syncStructures(state.structures, state.elapsedClock, targetX, targetZ);
     this.syncVehicles(state.vehicles, state.player, state.activeVehicleId, state.elapsedClock, isFps, targetX, targetZ);
-    this.syncZombies(state.zombies, state.elapsedClock, targetX, targetZ);
+    this.syncZombies(state.zombies, state.elapsedClock, targetX, targetZ, state.getCell);
     this.syncPlayer(state, isFps, fpsMeleePose);
     this.syncProjectiles(state.projectiles, state.elapsedClock);
     this.syncFirePatches(state.firePatches, state.elapsedClock);
@@ -1335,7 +1370,12 @@ export class ThreeIsometricRenderer {
     this.renderer.toneMappingExposure = atmo.exposure;
 
     // Player flashlight SpotLight (tracks vertical pitch in FPS mode!)
-    if (state.phase !== 'title' && state.activeVehicleId === null && state.player.flashlightOn && state.player.battery > 0) {
+    const flashlightOn =
+      state.phase !== 'title' &&
+      state.activeVehicleId === null &&
+      state.player.flashlightOn &&
+      state.player.battery > 0;
+    if (flashlightOn) {
       const p = state.player;
       if (isFps) {
         const fx = Math.cos(p.facingAngle);
@@ -1359,9 +1399,21 @@ export class ThreeIsometricRenderer {
       }
       this.flashlight.target.updateMatrixWorld();
       this.flashlight.intensity = 2.8 + nightT * 7.5;
+      this._flashlightDir.copy(this.flashlight.target.position).sub(this.flashlight.position).normalize();
     } else {
       this.flashlight.intensity = 0;
     }
+
+    syncPixelWaterUniforms(this.waterUniforms, {
+      elapsedClock: state.elapsedClock,
+      atmo,
+      isFps,
+      fogDensity: this.fogExp.density,
+      flashlightOn,
+      flashlightPos: this.flashlight.position,
+      flashlightDir: this._flashlightDir,
+      ripples: this.waterRipples,
+    });
 
     // Vehicle headlight SpotLights
     let hlIdx = 0;
@@ -1756,7 +1808,13 @@ export class ThreeIsometricRenderer {
     for (const m of rig.allMaterials) m.dispose();
   }
 
-  private syncZombies(zombies: Zombie[], elapsedClock: number, targetX: number, targetZ: number): void {
+  private syncZombies(
+    zombies: Zombie[],
+    elapsedClock: number,
+    targetX: number,
+    targetZ: number,
+    getCell: (gx: number, gy: number) => TileCell
+  ): void {
     const activeIds = this._scratchNumIds;
     activeIds.clear();
     for (const z of zombies) {
@@ -1776,7 +1834,8 @@ export class ThreeIsometricRenderer {
       }
 
       const { rig, ring } = entry;
-      rig.root.position.set(z.x, 0, z.y);
+      const inWater = z.state !== 'dying' && getCell(Math.floor(z.x), Math.floor(z.y)).tile === 'water';
+      rig.root.position.set(z.x, inWater ? -0.22 * z.scaleY : 0, z.y);
       const facingAngle = Math.atan2(z.facingY, z.facingX);
       rig.root.rotation.y = -facingAngle;
       rig.root.scale.set(z.scaleX, z.scaleY, z.scaleX);
@@ -2008,16 +2067,17 @@ export class ThreeIsometricRenderer {
 
     if (!thirdPersonVisible) return;
 
-    this.playerRig.root.position.set(p.x, 0, p.y);
-    this.playerRig.root.rotation.y = -p.facingAngle;
-    this.playerRig.root.scale.set(p.scaleX, p.scaleY, p.scaleX);
-
-    // Wading: while standing in lake/river water, about 55% of the body sits below the surface.
+    // Wading: while standing in lake/river water, sink the lower half below the animated surface.
     const inWater = state.getCell(Math.floor(p.x), Math.floor(p.y)).tile === 'water';
     this.playerWadeDepth += ((inWater ? 0.55 : 0) - this.playerWadeDepth) * 0.25;
     if (Math.abs(this.playerWadeDepth - (inWater ? 0.55 : 0)) < 0.004) this.playerWadeDepth = inWater ? 0.55 : 0;
     const hasWade = this.playerWadeDepth > 0;
-    if (hasWade) this.playerWadePlane.constant = -this.playerWadeDepth * this.playerRigHeight * p.scaleY;
+    const sinkY = (this.playerWadeDepth / 0.55) * 0.52 * p.scaleY;
+    this.playerRig.root.position.set(p.x, hasWade ? -sinkY : 0, p.y);
+    this.playerRig.root.rotation.y = -p.facingAngle;
+    this.playerRig.root.scale.set(p.scaleX, p.scaleY, p.scaleX);
+
+    if (hasWade) this.playerWadePlane.constant = -WATER_SURFACE_Y;
     if (hasWade !== this.playerWadeClipActive) {
       this.playerWadeClipActive = hasWade;
       const wadePlanes = hasWade ? [this.playerWadePlane] : [];
@@ -2616,13 +2676,19 @@ export class ThreeIsometricRenderer {
         ? Math.sin(elapsedClock * 26) * 0.08 - 0.04
         : Math.sin(elapsedClock * 4) * 0.03;
 
-    this.fishingBobber.position.set(fishing.bobberX, 0.06 + bobDip, fishing.bobberY);
+    this.fishingBobber.position.set(fishing.bobberX, WATER_SURFACE_Y + 0.036 + bobDip, fishing.bobberY);
     (this.fishingBobber.children[0] as THREE.Mesh).material = this.factory.getMat(
       fishing.phase === 'bite' ? '#ffd266' : '#e0483e'
     );
 
+    const ripInterval = fishing.phase === 'bite' ? 0.22 : 0.56;
+    if (elapsedClock < this.lastBobberRippleTime || elapsedClock - this.lastBobberRippleTime >= ripInterval) {
+      this.lastBobberRippleTime = elapsedClock;
+      this.waterRipples.push(fishing.bobberX, fishing.bobberY, elapsedClock, fishing.phase === 'bite' ? 0.95 : 0.44);
+    }
+
     const rip = (fishing.ripplePhase * 1.4) % 1;
-    this.fishingRipple.position.set(fishing.bobberX, 0.02, fishing.bobberY);
+    this.fishingRipple.position.set(fishing.bobberX, WATER_SURFACE_Y + 0.008, fishing.bobberY);
     const ripScale = 0.4 + rip * 1.6;
     this.fishingRipple.scale.set(ripScale, 1, ripScale);
     (this.fishingRipple.material as THREE.LineBasicMaterial).color.set(
@@ -3007,6 +3073,7 @@ export class ThreeIsometricRenderer {
     this.chunkPlaneGeo.dispose();
     this.ceilingBoxGeo.dispose();
     this.ceilingMat.dispose();
+    this.waterMaterial.dispose();
     this.skyDome.dispose();
     this.grassSystem.dispose();
     this.overlayCanvas.remove();

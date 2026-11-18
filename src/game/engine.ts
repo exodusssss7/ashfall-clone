@@ -283,6 +283,8 @@ export class SurvivalEngine {
   private playerVelX = 0;
   private playerVelY = 0;
   private isSprinting = false;
+  private playerWaterRippleTimer = 0;
+  private zombieWaterRippleTimer = 0;
   private lastFrameDt = 0.016;
   private ambientAsh: Array<{ x: number; y: number; speed: number; drift: number; size: number; alpha: number }> = [];
 
@@ -470,6 +472,8 @@ export class SurvivalEngine {
     this.meleeComboStep = 0;
     this.meleeComboResetTimer = 0;
     this.meleeHitConfirmed = false;
+    this.playerWaterRippleTimer = 0;
+    this.zombieWaterRippleTimer = 0;
     const world = generateWorld(1994);
     const effectiveSpawnX = spawnOverride ? spawnOverride.x : world.spawnX;
     const effectiveSpawnY = spawnOverride ? spawnOverride.y : world.spawnY;
@@ -2372,6 +2376,14 @@ export class SurvivalEngine {
       this.playerVelX = p.dodgeDirX * dodgeSpeed;
       this.playerVelY = p.dodgeDirY * dodgeSpeed;
       this.moveActor(p, this.playerVelX * dt, this.playerVelY * dt, 0.22);
+      if (this.getCell(Math.floor(p.x), Math.floor(p.y)).tile === 'water') {
+        this.playerWaterRippleTimer -= dt;
+        if (this.playerWaterRippleTimer <= 0) {
+          this.playerWaterRippleTimer = 0.14;
+          this.threeRenderer.addWaterRipple(p.x, p.y, this.elapsedClock, 1.2);
+          this.spawnParticles(p.x, p.y, 0.08, 4, '#a6e4f5', 1.7, 1.6);
+        }
+      }
     } else {
       const baseSpeed = wantsSprint ? 4.8 : 3.25;
       const targetVx = moveLen > 0 ? moveX * baseSpeed : 0;
@@ -2402,6 +2414,17 @@ export class SurvivalEngine {
           const cell = this.getCell(Math.floor(p.x), Math.floor(p.y));
           const surf = footstepSurfaceForTile(cell.tile);
           if (surf) soundEngine.playFootstep(surf, wantsSprint);
+          if (cell.tile === 'water') {
+            this.threeRenderer.addWaterRipple(p.x, p.y, this.elapsedClock, wantsSprint ? 1.1 : 0.78);
+            this.spawnParticles(p.x, p.y, 0.08, wantsSprint ? 4 : 2, '#a6e4f5', 1.4, 1.5);
+          }
+        }
+        if (stepDist > 0.002 && this.getCell(Math.floor(p.x), Math.floor(p.y)).tile === 'water') {
+          this.playerWaterRippleTimer -= dt;
+          if (this.playerWaterRippleTimer <= 0) {
+            this.playerWaterRippleTimer = wantsSprint ? 0.22 : 0.34;
+            this.threeRenderer.addWaterRipple(p.x, p.y, this.elapsedClock, wantsSprint ? 0.96 : 0.68);
+          }
         }
       }
     }
@@ -3494,6 +3517,7 @@ export class SurvivalEngine {
       }
     } else if (hit.material === 'water') {
       this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, 8, '#a6e4f5', 1.6, 3.4);
+      this.threeRenderer.addWaterRipple(hit.hx, hit.hy, this.elapsedClock, kind === 'bullet' ? 1.15 : 0.82);
     } else {
       this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, 6, '#6e543a', 1.4, 3.0);
     }
@@ -3804,6 +3828,7 @@ export class SurvivalEngine {
   private updateZombies(dt: number): void {
     const p = this.player;
     const { darkness } = getDaylightInfo(this.timeMinutes);
+    this.zombieWaterRippleTimer = Math.max(0, this.zombieWaterRippleTimer - dt);
 
     // Attack token pool (max 3 simultaneous close attackers so hordes remain fair)
     let activeAttackers = this.zombies.filter((z) => z.hasAttackToken).length;
@@ -4011,6 +4036,14 @@ export class SurvivalEngine {
             this.moveActor(z, mx * z.speed * dt, my * z.speed * dt, 0.21);
             z.walkCycle += z.speed * dt * 3;
           }
+        }
+        if (
+          this.zombieWaterRippleTimer <= 0 &&
+          dToPlayer < 16 &&
+          this.getCell(Math.floor(z.x), Math.floor(z.y)).tile === 'water'
+        ) {
+          this.zombieWaterRippleTimer = 0.26;
+          this.threeRenderer.addWaterRipple(z.x, z.y, this.elapsedClock, 0.65);
         }
       } else if (z.state === 'windup') {
         z.stateTimer -= dt;
