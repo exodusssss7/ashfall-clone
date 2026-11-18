@@ -92,6 +92,13 @@ export const GameHud: React.FC<GameHudProps> = ({
     applyButtonScales(document.documentElement);
   });
 
+  useEffect(() => {
+    const activeBtn = document.querySelector<HTMLElement>(
+      `.equipment-bar > button[data-item="${hud.equippedWeapon}"]`
+    );
+    activeBtn?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+  }, [hud.equippedWeapon]);
+
   const cues = getActionCues(hud);
   const vitalsDrag = useHudDrag('vitals', editing);
   const utilityDrag = useHudDrag('utility', editing);
@@ -101,7 +108,17 @@ export const GameHud: React.FC<GameHudProps> = ({
   const waterPct = Math.max(0, Math.min(100, hud.thirst));
   const bestFood = pickBestFoodConsumable(hud.inventory) ?? 'food';
 
-  const weaponOrder: WeaponId[] = ['crowbar', 'pistol', 'shotgun', 'lmg', 'molotov'];
+  const weaponOrder: WeaponId[] = [
+    'crowbar',
+    'machete',
+    'barbed_bat',
+    'axe',
+    'sledgehammer',
+    'pistol',
+    'shotgun',
+    'lmg',
+    'molotov',
+  ];
 
   /** Empty-and-no-reserve weapons blink red like the other emergency action buttons. */
   const weaponSlotCue = (wId: WeaponId): ActionCue => {
@@ -786,7 +803,13 @@ export const GameHud: React.FC<GameHudProps> = ({
                         ? 'Shotgun'
                         : wId === 'lmg'
                           ? 'LMG'
-                          : spec.name;
+                          : wId === 'barbed_bat'
+                            ? 'Bat'
+                            : wId === 'axe'
+                              ? 'Axe'
+                              : wId === 'sledgehammer'
+                                ? 'Sledge'
+                                : spec.name;
 
                   return (
                     <button

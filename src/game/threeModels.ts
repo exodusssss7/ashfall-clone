@@ -5,9 +5,12 @@ import {
   TENT_PROFILE,
   WRECKED_SUPERCAR_PROFILE,
   createFacetedBoulderGeometry,
+  createHelicalWireGeometry,
+  createLatheWeaponGeometry,
   createSculptedProfileGeometry,
   createTaperedBoxGeometry,
 } from './modelSculpt';
+import { getFirstPersonMeleeGripPose } from './meleeAnimation';
 import { derivePlayerPalette } from './profile';
 import type { ThreePixelAtlas } from './threeTextures';
 import type { ItemId, PropKind, StructureKind, WeaponId, ZombieArchetype } from './types';
@@ -190,6 +193,14 @@ export class ThreeModelFactory {
     const existing = this.geoCache.get(key);
     if (existing) return existing;
     const g = this.trackGeo(createTaperedBoxGeometry(topW, topD, botW, botD, height, centerY));
+    this.geoCache.set(key, g);
+    return g;
+  }
+
+  private getCachedGeo(key: string, build: () => THREE.BufferGeometry): THREE.BufferGeometry {
+    const existing = this.geoCache.get(key);
+    if (existing) return existing;
+    const g = this.trackGeo(build());
     this.geoCache.set(key, g);
     return g;
   }
@@ -1598,18 +1609,470 @@ export class ThreeModelFactory {
     const g = new THREE.Group();
     const wTex = this.atlas.weaponTex;
     if (weapon === 'crowbar') {
-      const steel = this.getMat(0xffffff, { map: wTex.crowbarSteel, roughness: 0.34, metalness: 0.78 });
-      const darkSteel = this.getMat('#212529', { roughness: 0.5, metalness: 0.7 });
-      const red = this.getMat(0xffffff, { map: wTex.crowbarRed, roughness: 0.48, metalness: 0.25 });
-      g.add(this.box(0.46, 0.055, 0.055, steel, 0.22, 0, 0));
-      g.add(this.box(0.47, 0.025, 0.064, darkSteel, 0.22, -0.02, 0));
-      g.add(this.box(0.14, 0.065, 0.065, red, 0.01, 0, 0));
-      const hook = this.box(0.15, 0.055, 0.055, red, 0.46, 0.05, 0);
-      hook.rotation.z = 0.85;
-      g.add(hook);
-      const claw = this.box(0.06, 0.025, 0.058, steel, 0.52, 0.1, 0);
-      claw.rotation.z = 0.35;
-      g.add(claw);
+      const steel = this.getMat(0xffffff, { map: wTex.crowbarSteel, roughness: 0.34, metalness: 0.8 });
+      const brightSteel = this.getMat('#d4dde3', { roughness: 0.22, metalness: 0.9 });
+      const red = this.getMat(0xffffff, { map: wTex.crowbarRed, roughness: 0.48, metalness: 0.26 });
+      const gripMat = this.getMat(0xffffff, { map: wTex.rubberGrip, roughness: 0.9, metalness: 0.04 });
+
+      // Forged hexagonal steel gooseneck pry bar curving smoothly into -Y striking hook
+      const barGeo = this.getCachedGeo('melee_crowbar_bar', () =>
+        createSculptedProfileGeometry(
+          [
+            [-0.125, -0.004],
+            [-0.08, -0.015],
+            [0.42, -0.016],
+            [0.485, -0.025],
+            [0.515, -0.058],
+            [0.506, -0.102],
+            [0.474, -0.132],
+            [0.498, -0.146],
+            [0.548, -0.102],
+            [0.562, -0.036],
+            [0.526, 0.016],
+            [0.46, 0.028],
+            [0.39, 0.018],
+            [-0.04, 0.016],
+            [-0.11, 0.006],
+          ],
+          0.03,
+          { bevelThickness: 0.004, bevelSize: 0.004, bevelSegments: 2, curveSegments: 6 }
+        )
+      );
+      g.add(new THREE.Mesh(barGeo, steel));
+
+      // Worn red industrial enamel sleeve along shaft & outer gooseneck spine
+      const sleeveGeo = this.getCachedGeo('melee_crowbar_sleeve', () =>
+        createSculptedProfileGeometry(
+          [
+            [0.11, -0.017],
+            [0.422, -0.018],
+            [0.482, -0.026],
+            [0.492, 0.028],
+            [0.395, 0.019],
+            [0.11, 0.018],
+          ],
+          0.033,
+          { bevelThickness: 0.003, bevelSize: 0.003, bevelSegments: 1, curveSegments: 4 }
+        )
+      );
+      g.add(new THREE.Mesh(sleeveGeo, red));
+
+      // Split V-claw honed pry tips at gooseneck beak (-Y)
+      const prongGeo = this.getCachedGeo('melee_crowbar_prong', () =>
+        createSculptedProfileGeometry(
+          [
+            [0.47, -0.128],
+            [0.496, -0.152],
+            [0.522, -0.124],
+            [0.498, -0.1],
+          ],
+          0.009,
+          { bevelThickness: 0.002, bevelSize: 0.002, bevelSegments: 1 }
+        )
+      );
+      const prongL = new THREE.Mesh(prongGeo, brightSteel);
+      prongL.position.z = -0.01;
+      const prongR = new THREE.Mesh(prongGeo, brightSteel);
+      prongR.position.z = 0.01;
+      g.add(prongL, prongR);
+
+      // Ribbed rubber lower grip sleeve turned around shaft
+      const gripGeo = this.getCachedGeo('melee_crowbar_grip', () =>
+        createLatheWeaponGeometry(
+          [
+            [-0.035, 0.006],
+            [-0.03, 0.024],
+            [0.01, 0.022],
+            [0.05, 0.025],
+            [0.09, 0.022],
+            [0.125, 0.025],
+            [0.132, 0.006],
+          ],
+          14
+        )
+      );
+      g.add(new THREE.Mesh(gripGeo, gripMat));
+    } else if (weapon === 'machete') {
+      const gripMat = this.getMat(0xffffff, { map: wTex.macheteGrip, roughness: 0.78, metalness: 0.08 });
+      const guardMat = this.getMat('#c49c48', { roughness: 0.34, metalness: 0.82 });
+      const bladeMat = this.getMat(0xffffff, { map: wTex.macheteBlade, roughness: 0.28, metalness: 0.84 });
+      const razorMat = this.getMat('#e5edf2', { roughness: 0.16, metalness: 0.94 });
+
+      // Ergonomic riveted walnut grip with flared pommel & finger groove
+      const handleGeo = this.getCachedGeo('melee_machete_handle', () =>
+        createSculptedProfileGeometry(
+          [
+            [-0.072, -0.026],
+            [-0.048, -0.02],
+            [-0.005, -0.017],
+            [0.042, -0.021],
+            [0.085, -0.018],
+            [0.088, 0.02],
+            [0.025, 0.021],
+            [-0.035, 0.019],
+            [-0.068, 0.024],
+          ],
+          0.028,
+          { bevelThickness: 0.005, bevelSize: 0.004, bevelSegments: 2, curveSegments: 4 }
+        )
+      );
+      g.add(new THREE.Mesh(handleGeo, gripMat));
+
+      // Brass tang rivets & contoured cross-guard bolster
+      const rivetGeo = this.getCachedGeo('melee_machete_rivet', () => {
+        const cyl = new THREE.CylinderGeometry(0.0052, 0.0052, 0.032, 8);
+        cyl.rotateX(Math.PI * 0.5);
+        return cyl;
+      });
+      for (const rx of [-0.038, 0.01, 0.056]) {
+        const r = new THREE.Mesh(rivetGeo, guardMat);
+        r.position.set(rx, 0, 0);
+        g.add(r);
+      }
+
+      const guardGeo = this.getCachedGeo('melee_machete_guard', () =>
+        createSculptedProfileGeometry(
+          [
+            [0.082, -0.038],
+            [0.104, -0.032],
+            [0.108, 0.026],
+            [0.084, 0.026],
+          ],
+          0.036,
+          { bevelThickness: 0.004, bevelSize: 0.004, bevelSegments: 1 }
+        )
+      );
+      g.add(new THREE.Mesh(guardGeo, guardMat));
+
+      // Swept curved clip-point blade: honed cutting belly curves cleanly along -Y
+      const bladeGeo = this.getCachedGeo('melee_machete_blade', () =>
+        createSculptedProfileGeometry(
+          [
+            [0.102, -0.024],
+            [0.24, -0.033],
+            [0.39, -0.043],
+            [0.505, -0.03],
+            [0.575, 0.006],
+            [0.525, 0.028],
+            [0.36, 0.03],
+            [0.102, 0.023],
+          ],
+          0.014,
+          { bevelThickness: 0.003, bevelSize: 0.003, bevelSegments: 2, curveSegments: 6 }
+        )
+      );
+      g.add(new THREE.Mesh(bladeGeo, bladeMat));
+
+      // Polished razor-honed primary cutting edge hugging -Y belly
+      const razorGeo = this.getCachedGeo('melee_machete_razor', () =>
+        createSculptedProfileGeometry(
+          [
+            [0.105, -0.028],
+            [0.24, -0.039],
+            [0.392, -0.049],
+            [0.508, -0.036],
+            [0.58, 0.005],
+            [0.556, 0.006],
+            [0.495, -0.023],
+            [0.39, -0.034],
+            [0.24, -0.025],
+            [0.105, -0.018],
+          ],
+          0.011,
+          { bevelThickness: 0.002, bevelSize: 0.002, bevelSegments: 1 }
+        )
+      );
+      const razorMesh = new THREE.Mesh(razorGeo, razorMat);
+      razorMesh.castShadow = false;
+      g.add(razorMesh);
+    } else if (weapon === 'barbed_bat') {
+      const tape = this.getMat(0xffffff, { map: wTex.rubberGrip, roughness: 0.9, metalness: 0.04 });
+      const wood = this.getMat(0xffffff, { map: wTex.batWood, roughness: 0.72, metalness: 0.05 });
+      const wire = this.getMat(0xffffff, { map: wTex.barbedWire, roughness: 0.36, metalness: 0.78 });
+      const barbMat = this.getMat('#dfe7eb', { roughness: 0.24, metalness: 0.88 });
+
+      const batRadiusAt = (x: number): number => {
+        if (x <= 0.14) return 0.0185;
+        if (x >= 0.47) return 0.0415;
+        const t = (x - 0.14) / 0.33;
+        return 0.0185 + t * t * (3 - 2 * t) * (0.0415 - 0.0185);
+      };
+
+      // Smooth turned ash baseball bat via LatheGeometry (knob -> neck -> barrel -> cupped tip)
+      const batGeo = this.getCachedGeo('melee_bat_lathe', () =>
+        createLatheWeaponGeometry(
+          [
+            [-0.066, 0.006],
+            [-0.062, 0.027],
+            [-0.044, 0.025],
+            [-0.032, 0.017],
+            [0.14, 0.0185],
+            [0.24, 0.025],
+            [0.34, 0.035],
+            [0.44, 0.041],
+            [0.52, 0.0415],
+            [0.556, 0.034],
+            [0.562, 0.006],
+          ],
+          18
+        )
+      );
+      g.add(new THREE.Mesh(batGeo, wood));
+
+      // Ribbed athletic handle tape wrap
+      const tapeGeo = this.getCachedGeo('melee_bat_tape', () =>
+        createLatheWeaponGeometry(
+          [
+            [-0.064, 0.0285],
+            [-0.043, 0.0265],
+            [-0.03, 0.0195],
+            [0.03, 0.021],
+            [0.09, 0.0205],
+            [0.145, 0.0215],
+            [0.15, 0.018],
+          ],
+          16
+        )
+      );
+      g.add(new THREE.Mesh(tapeGeo, tape));
+
+      // Dual continuous 3D helical barbed-wire coils wrapped tightly around the barrel
+      const wireGeoA = this.getCachedGeo('melee_bat_wire_a', () =>
+        createHelicalWireGeometry({
+          startX: 0.27,
+          endX: 0.52,
+          radiusFn: (t) => batRadiusAt(0.27 + t * 0.25) + 0.0038,
+          turns: 5.5,
+          tubeRadius: 0.0048,
+          radialSegments: 6,
+          tubularSegments: 72,
+          phaseOffset: 0,
+        })
+      );
+      const wireGeoB = this.getCachedGeo('melee_bat_wire_b', () =>
+        createHelicalWireGeometry({
+          startX: 0.29,
+          endX: 0.505,
+          radiusFn: (t) => batRadiusAt(0.29 + t * 0.215) + 0.0052,
+          turns: 4.0,
+          tubeRadius: 0.004,
+          radialSegments: 6,
+          tubularSegments: 54,
+          phaseOffset: Math.PI * 0.85,
+        })
+      );
+      g.add(new THREE.Mesh(wireGeoA, wire), new THREE.Mesh(wireGeoB, wire));
+
+      // 14 sharp conical steel barbs protruding radially along the wire helix
+      const spikeGeo = this.getCachedGeo('melee_bat_barb_cone', () => new THREE.ConeGeometry(0.0055, 0.024, 5));
+      for (let i = 0; i < 14; i++) {
+        const t = i / 13;
+        const bx = 0.28 + t * 0.23;
+        const br = batRadiusAt(bx) + 0.005;
+        const ang = t * 5.5 * Math.PI * 2 + (i % 2 === 0 ? 0.2 : Math.PI + 0.6);
+        const ny = Math.cos(ang);
+        const nz = Math.sin(ang);
+        const spike = new THREE.Mesh(spikeGeo, barbMat);
+        spike.position.set(bx, ny * (br + 0.008), nz * (br + 0.008));
+        spike.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0.22, ny, nz).normalize());
+        spike.castShadow = false;
+        g.add(spike);
+      }
+    } else if (weapon === 'axe') {
+      const hickory = this.getMat(0xffffff, { map: wTex.batWood, roughness: 0.78, metalness: 0.04 });
+      const collarMat = this.getMat('#24282e', { roughness: 0.65, metalness: 0.45 });
+      const headMat = this.getMat(0xffffff, { map: wTex.axeHead, roughness: 0.38, metalness: 0.62 });
+      const bitMat = this.getMat('#e4edf2', { roughness: 0.18, metalness: 0.92 });
+      const gripMat = this.getMat(0xffffff, { map: wTex.rubberGrip, roughness: 0.9 });
+
+      // Ergonomic S-curved hickory haft with fawn's-foot pommel flare
+      const haftGeo = this.getCachedGeo('melee_axe_haft', () =>
+        createSculptedProfileGeometry(
+          [
+            [-0.085, -0.028],
+            [-0.042, -0.024],
+            [0.06, -0.015],
+            [0.24, -0.016],
+            [0.41, -0.014],
+            [0.545, -0.016],
+            [0.552, 0.02],
+            [0.42, 0.02],
+            [0.24, 0.017],
+            [0.06, 0.019],
+            [-0.048, 0.016],
+            [-0.08, 0.012],
+          ],
+          0.028,
+          { bevelThickness: 0.005, bevelSize: 0.005, bevelSegments: 2, curveSegments: 5 }
+        )
+      );
+      g.add(new THREE.Mesh(haftGeo, hickory));
+
+      // Lower palm grip wrap
+      const gripGeo = this.getCachedGeo('melee_axe_grip', () =>
+        createLatheWeaponGeometry(
+          [
+            [-0.032, 0.022],
+            [0.03, 0.02],
+            [0.11, 0.021],
+            [0.12, 0.016],
+          ],
+          14
+        )
+      );
+      g.add(new THREE.Mesh(gripGeo, gripMat));
+
+      // Sculpted steel overstrike collar below axe eye
+      const collarGeo = this.getCachedGeo('melee_axe_collar', () =>
+        createSculptedProfileGeometry(
+          [
+            [0.425, -0.02],
+            [0.548, -0.022],
+            [0.552, 0.024],
+            [0.425, 0.024],
+          ],
+          0.036,
+          { bevelThickness: 0.004, bevelSize: 0.004, bevelSegments: 1 }
+        )
+      );
+      g.add(new THREE.Mesh(collarGeo, collarMat));
+
+      // Bearded crimson fire-axe head: broad curved crescent bit extending cleanly into -Y!
+      const headGeo = this.getCachedGeo('melee_axe_head', () =>
+        createSculptedProfileGeometry(
+          [
+            [0.426, -0.022],
+            [0.386, -0.116],
+            [0.425, -0.144],
+            [0.495, -0.15],
+            [0.568, -0.126],
+            [0.554, -0.042],
+            [0.538, 0.034],
+            [0.436, 0.034],
+          ],
+          0.034,
+          { bevelThickness: 0.006, bevelSize: 0.005, bevelSegments: 2, curveSegments: 6 }
+        )
+      );
+      g.add(new THREE.Mesh(headGeo, headMat));
+
+      // Gleaming honed crescent cutting bit along -Y edge
+      const bitGeo = this.getCachedGeo('melee_axe_bit', () =>
+        createSculptedProfileGeometry(
+          [
+            [0.384, -0.118],
+            [0.424, -0.148],
+            [0.496, -0.155],
+            [0.57, -0.13],
+            [0.558, -0.106],
+            [0.494, -0.128],
+            [0.43, -0.122],
+            [0.396, -0.102],
+          ],
+          0.012,
+          { bevelThickness: 0.004, bevelSize: 0.003, bevelSegments: 2 }
+        )
+      );
+      const bitMesh = new THREE.Mesh(bitGeo, bitMat);
+      bitMesh.castShadow = false;
+      g.add(bitMesh);
+
+      // Rear tapered demolition pick spike projecting on +Y
+      const pickGeo = this.getCachedGeo('melee_axe_pick', () =>
+        createSculptedProfileGeometry(
+          [
+            [0.452, 0.028],
+            [0.522, 0.028],
+            [0.482, 0.098],
+            [0.46, 0.098],
+          ],
+          0.02,
+          { bevelThickness: 0.004, bevelSize: 0.004, bevelSegments: 1 }
+        )
+      );
+      g.add(new THREE.Mesh(pickGeo, bitMat));
+    } else if (weapon === 'sledgehammer') {
+      const shaftMat = this.getMat(0xffffff, { map: wTex.batWood, roughness: 0.82, metalness: 0.05 });
+      const gripMat = this.getMat(0xffffff, { map: wTex.rubberGrip, roughness: 0.92 });
+      const ironMat = this.getMat(0xffffff, { map: wTex.sledgeIron, roughness: 0.42, metalness: 0.78 });
+      const faceMat = this.getMat('#9aa6b0', { roughness: 0.28, metalness: 0.88 });
+
+      // Contoured thick hickory shaft with pommel flare
+      const shaftGeo = this.getCachedGeo('melee_sledge_shaft', () =>
+        createSculptedProfileGeometry(
+          [
+            [-0.085, -0.026],
+            [-0.04, -0.02],
+            [0.575, -0.02],
+            [0.58, 0.02],
+            [-0.04, 0.02],
+            [-0.085, 0.026],
+          ],
+          0.034,
+          { bevelThickness: 0.005, bevelSize: 0.005, bevelSegments: 2 }
+        )
+      );
+      g.add(new THREE.Mesh(shaftGeo, shaftMat));
+
+      // Ribbed rubber lower grip + heavy overstrike sleeve near hammer eye
+      const gripGeo = this.getCachedGeo('melee_sledge_grip', () =>
+        createLatheWeaponGeometry(
+          [
+            [-0.042, 0.025],
+            [0.02, 0.023],
+            [0.09, 0.025],
+            [0.16, 0.023],
+            [0.17, 0.018],
+          ],
+          16
+        )
+      );
+      const collarGeo = this.getCachedGeo('melee_sledge_collar', () =>
+        createLatheWeaponGeometry(
+          [
+            [0.42, 0.018],
+            [0.435, 0.028],
+            [0.482, 0.03],
+            [0.496, 0.025],
+          ],
+          16
+        )
+      );
+      g.add(new THREE.Mesh(gripGeo, gripMat), new THREE.Mesh(collarGeo, gripMat));
+
+      // Chamfered twin-faced cast-iron sledge head with pinched waist cheeks
+      const headGeo = this.getCachedGeo('melee_sledge_head', () =>
+        createSculptedProfileGeometry(
+          [
+            [0.494, -0.098],
+            [0.586, -0.098],
+            [0.578, -0.042],
+            [0.588, 0.0],
+            [0.578, 0.042],
+            [0.586, 0.098],
+            [0.494, 0.098],
+            [0.502, 0.042],
+            [0.49, 0.0],
+            [0.502, -0.042],
+          ],
+          0.084,
+          { bevelThickness: 0.012, bevelSize: 0.01, bevelSegments: 2 }
+        )
+      );
+      g.add(new THREE.Mesh(headGeo, ironMat));
+
+      // Octagonal beveled steel striking face caps aligned to head cheeks at -Y (primary strike) and +Y
+      const capGeo = this.getCachedGeo('melee_sledge_face', () => {
+        const cyl = new THREE.CylinderGeometry(0.036, 0.043, 0.016, 8);
+        cyl.rotateY(Math.PI / 8);
+        return cyl;
+      });
+      const faceBot = new THREE.Mesh(capGeo, faceMat);
+      faceBot.position.set(0.54, -0.104, 0);
+      faceBot.rotation.x = Math.PI;
+      const faceTop = new THREE.Mesh(capGeo, faceMat);
+      faceTop.position.set(0.54, 0.104, 0);
+      g.add(faceBot, faceTop);
     } else if (weapon === 'pistol') {
       const slide = this.getMat(0xffffff, { map: this.atlas.weaponTex.pistolSlide, roughness: 0.28, metalness: 0.86 });
       const slideTop = this.getMat('#7f8a94', { roughness: 0.26, metalness: 0.88 });
@@ -2244,6 +2707,10 @@ export class ThreeModelFactory {
       rightArmPivot.add(weaponGroup);
       const weapons: Record<WeaponId, THREE.Group> = {
         crowbar: this.createWeaponGroup('crowbar'),
+        machete: this.createWeaponGroup('machete'),
+        barbed_bat: this.createWeaponGroup('barbed_bat'),
+        axe: this.createWeaponGroup('axe'),
+        sledgehammer: this.createWeaponGroup('sledgehammer'),
         pistol: this.createWeaponGroup('pistol'),
         shotgun: this.createWeaponGroup('shotgun'),
         lmg: this.createWeaponGroup('lmg'),
@@ -2315,12 +2782,21 @@ export class ThreeModelFactory {
 
     const weapons: Record<WeaponId, THREE.Group> = {
       crowbar: this.createWeaponGroup('crowbar'),
+      machete: this.createWeaponGroup('machete'),
+      barbed_bat: this.createWeaponGroup('barbed_bat'),
+      axe: this.createWeaponGroup('axe'),
+      sledgehammer: this.createWeaponGroup('sledgehammer'),
       pistol: this.createWeaponGroup('pistol'),
       shotgun: this.createWeaponGroup('shotgun'),
       lmg: this.createWeaponGroup('lmg'),
       molotov: this.createWeaponGroup('molotov'),
     };
-    weapons.crowbar.rotation.z = 0.2;
+    for (const key of ['crowbar', 'machete', 'barbed_bat', 'axe', 'sledgehammer'] as const) {
+      const grip = getFirstPersonMeleeGripPose(key);
+      weapons[key].position.set(grip.posX, grip.posY, grip.posZ);
+      weapons[key].rotation.order = 'ZYX';
+      weapons[key].rotation.set(grip.rollX, grip.yawY, grip.pitchZ);
+    }
     weapons.pistol.position.set(0.02, 0.005, 0);
     weapons.shotgun.position.set(-0.02, 0.005, 0);
     weapons.lmg.position.set(-0.04, 0.005, 0);

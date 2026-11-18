@@ -1,6 +1,7 @@
 import { CHUNK_SIZE, MAP_SIZE, angleDiff, clamp, dist, readCellFromSource } from './isometric';
 import type { CellSource } from './isometric';
 import { STRUCTURES } from './recipes';
+import type { WeaponSpec } from './recipes';
 import {
   applyBuildingToSetter,
   applyDoorCellState,
@@ -1168,6 +1169,19 @@ export function computeCombatDamage(
     damage: isCrit ? Math.round(baseDamage * 1.6) : baseDamage,
     isCrit,
   };
+}
+
+export function resolveMeleeHit(
+  spec: WeaponSpec,
+  roll: number
+): { damage: number; isCrit: boolean; knockback: number; bleedDuration: number } {
+  const critChance = spec.critChance ?? 0.2;
+  const { damage, isCrit } = computeCombatDamage(spec.damage, roll, critChance);
+  const baseKb = spec.knockback ?? 3.8;
+  const knockback = isCrit ? baseKb * 1.32 : baseKb;
+  const baseBleed = spec.bleedDuration ?? 0;
+  const bleedDuration = baseBleed > 0 ? (isCrit ? baseBleed * 1.25 : baseBleed) : 0;
+  return { damage, isCrit, knockback, bleedDuration };
 }
 
 /**

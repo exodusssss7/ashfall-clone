@@ -258,9 +258,9 @@ class SurvivalSoundEngine {
     const level = { concrete: 0.17, grass: 0.17, dirt: 0.17, planks: 0.19, carpet: 0.12, tile: 0.16 }[surface];
     this.sample(this.choose(surface, 4), level * (sprinting ? 1.28 : 1), sprinting ? 1.07 : 1);
   }
-  playMeleeSwing(): void { this.sample(this.choose('swing', 3), 0.42, 0.9); }
+  playMeleeSwing(rate = 0.9, gain = 0.42): void { this.sample(this.choose('swing', 3), gain, rate); }
   playDodge(): void { this.sample('cloth2', 0.22, 0.85); this.sample('cloth3', 0.14, 1.05, 0.06); }
-  playMeleeHit(heavy = false): void { this.sample(this.choose('punch', 2), heavy ? 0.54 : 0.4, heavy ? 0.88 : 1); }
+  playMeleeHit(heavy = false, rate?: number): void { this.sample(this.choose('punch', 2), heavy ? 0.54 : 0.4, rate ?? (heavy ? 0.88 : 1)); }
   playGunshot(kind: 'pistol' | 'shotgun' | 'lmg'): void {
     // LMG fires ~11 rounds/s, so each shot sits lower than the handguns to keep the mix clean.
     const level = kind === 'pistol' ? 0.75 : kind === 'shotgun' ? 0.85 : 0.5;

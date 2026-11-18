@@ -38,13 +38,46 @@ export interface WeaponSpec {
   pellets: number;
   reloadTime: number;
   ammoItem?: ItemId;
+  isMelee?: boolean;
+  knockback?: number;
+  critChance?: number;
+  bleedDuration?: number;
+  swingDuration?: number;
+  doorLockProgress?: number;
+  hitstop?: number;
+  trauma?: number;
+  arcColor?: number;
+}
+
+export const MELEE_WEAPON_IDS: readonly WeaponId[] = [
+  'crowbar',
+  'machete',
+  'barbed_bat',
+  'axe',
+  'sledgehammer',
+];
+
+export function isMeleeWeapon(id: WeaponId): boolean {
+  return (
+    id === 'crowbar' ||
+    id === 'machete' ||
+    id === 'barbed_bat' ||
+    id === 'axe' ||
+    id === 'sledgehammer'
+  );
+}
+
+export function cycleMeleeWeapon(current: WeaponId): WeaponId {
+  const idx = MELEE_WEAPON_IDS.indexOf(current);
+  if (idx === -1) return MELEE_WEAPON_IDS[0];
+  return MELEE_WEAPON_IDS[(idx + 1) % MELEE_WEAPON_IDS.length];
 }
 
 export const WEAPONS: Record<WeaponId, WeaponSpec> = {
   crowbar: {
     id: 'crowbar',
     name: 'Crowbar',
-    role: 'Silent Melee · Knockback',
+    role: 'Balanced Melee · Lock Pry',
     key: '1',
     damage: 34,
     cooldown: 0.42,
@@ -53,6 +86,103 @@ export const WEAPONS: Record<WeaponId, WeaponSpec> = {
     spreadRad: 1.05,
     pellets: 1,
     reloadTime: 0,
+    isMelee: true,
+    knockback: 3.8,
+    critChance: 0.2,
+    bleedDuration: 0,
+    swingDuration: 0.26,
+    doorLockProgress: 0.55,
+    hitstop: 0.045,
+    trauma: 0.26,
+    arcColor: 0xf2eee2,
+  },
+  machete: {
+    id: 'machete',
+    name: 'Machete',
+    role: 'Fast Slash · Deep Bleed',
+    key: '8',
+    damage: 28,
+    cooldown: 0.27,
+    noiseRadius: 2.2,
+    range: 1.75,
+    spreadRad: 1.2,
+    pellets: 1,
+    reloadTime: 0,
+    isMelee: true,
+    knockback: 2.2,
+    critChance: 0.24,
+    bleedDuration: 4.0,
+    swingDuration: 0.22,
+    doorLockProgress: 0.2,
+    hitstop: 0.032,
+    trauma: 0.18,
+    arcColor: 0xd9e8f5,
+  },
+  barbed_bat: {
+    id: 'barbed_bat',
+    name: 'Barbed Bat',
+    role: 'Heavy Knockback · Bleed',
+    key: '9',
+    damage: 44,
+    cooldown: 0.5,
+    noiseRadius: 3.4,
+    range: 2.05,
+    spreadRad: 1.12,
+    pellets: 1,
+    reloadTime: 0,
+    isMelee: true,
+    knockback: 5.2,
+    critChance: 0.22,
+    bleedDuration: 2.8,
+    swingDuration: 0.3,
+    doorLockProgress: 0.35,
+    hitstop: 0.055,
+    trauma: 0.32,
+    arcColor: 0xf0c988,
+  },
+  axe: {
+    id: 'axe',
+    name: 'Fire Axe',
+    role: 'High Cleave · Chops Doors',
+    key: '0',
+    damage: 60,
+    cooldown: 0.64,
+    noiseRadius: 4.0,
+    range: 2.15,
+    spreadRad: 1.18,
+    pellets: 1,
+    reloadTime: 0,
+    isMelee: true,
+    knockback: 4.8,
+    critChance: 0.25,
+    bleedDuration: 1.8,
+    swingDuration: 0.34,
+    doorLockProgress: 0.6,
+    hitstop: 0.065,
+    trauma: 0.38,
+    arcColor: 0xf0937a,
+  },
+  sledgehammer: {
+    id: 'sledgehammer',
+    name: 'Sledgehammer',
+    role: 'Crushing Blow · Massive KB',
+    key: '-',
+    damage: 82,
+    cooldown: 0.88,
+    noiseRadius: 5.2,
+    range: 2.3,
+    spreadRad: 1.28,
+    pellets: 1,
+    reloadTime: 0,
+    isMelee: true,
+    knockback: 8.5,
+    critChance: 0.18,
+    bleedDuration: 0,
+    swingDuration: 0.4,
+    doorLockProgress: 1.0,
+    hitstop: 0.085,
+    trauma: 0.48,
+    arcColor: 0xffd266,
   },
   pistol: {
     id: 'pistol',

@@ -3,7 +3,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { getLootPopTransform, resolvePlayerAnimState, resolveZombieAnimState, type ActionVisual } from './actionAnimation';
 import { CHUNK_SIZE, PIXEL_SCALE, TILE_W, clamp, dist, isoToWorld } from './isometric';
 import { getPrimaryLootItem } from './lootUi';
-import { WEAPONS } from './recipes';
+import { WEAPONS, isMeleeWeapon } from './recipes';
 import {
   FPS_CAR_EYE_HEIGHT,
   FPS_EYE_HEIGHT,
@@ -11,6 +11,12 @@ import {
   computeFirstPersonStrafeRoll,
   computeFirstPersonWeaponRaiseOffset,
 } from './firstPerson';
+import {
+  evaluateFirstPersonMeleePose,
+  evaluateThirdPersonMeleePose,
+  getFirstPersonMeleeGripPose,
+  type FirstPersonMeleeSwingPose,
+} from './meleeAnimation';
 import { createAshFlakeGeometry, createDebrisShardGeometry } from './modelSculpt';
 import { batchStaticObjectGroups } from './threeBatching';
 import { ThreeGrassSystem } from './threeGrass';
@@ -112,6 +118,8 @@ export interface RenderFrameState {
   hitMarkerTimer: number;
   hitMarkerCrit: boolean;
   hitMarkerHeadshot: boolean;
+  meleeComboStep: number;
+  meleeHitConfirmed: boolean;
   impactDecals: SurfaceImpactDecal[];
   impactEffects: BulletImpactEffect[];
   sleepTransitionTimer: number;
@@ -233,6 +241,7 @@ export class ThreeIsometricRenderer {
   private playerWadePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private playerWadeClipActive = false;
   private fpsViewmodelRig: FirstPersonViewmodelRig;
+  private fpsSlashMesh: THREE.Mesh;
 
   private projectileMeshes = new Map<number, THREE.Group>();
   private firePatchMeshes = new Map<number, THREE.Group>();
@@ -507,19 +516,41 @@ export class ThreeIsometricRenderer {
     this.molotovReticle.visible = false;
     this.scene.add(this.molotovReticle);
 
-    // 3D Melee crescent slash arc
-    const arcGeo = new THREE.RingGeometry(0.75, 1.25, 14, 1, -0.9, 1.8);
+    // First-person pixel-art melee slash smear attached to fpsCamera
+    this.fpsSlashMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.96, 0.46),
+      new THREE.MeshBasicMaterial({
+        map: this.atlas.meleeSlashTex,
+        color: 0xf2eee2,
+        transparent: true,
+        opacity: 0,
+        side: THREE.DoubleSide,
+        depthTest: false,
+        depthWrite: false,
+      })
+    );
+    this.fpsSlashMesh.position.set(0, -0.02, -0.58);
+    this.fpsSlashMesh.renderOrder = 12;
+    this.fpsSlashMesh.visible = false;
+    this.fpsCamera.add(this.fpsSlashMesh);
+
+    // 3D Melee crescent pixel-art slash arc (oriented along +X world forward)
+    const arcGeo = new THREE.PlaneGeometry(1.68, 0.92);
     arcGeo.rotateX(-Math.PI * 0.5);
+    arcGeo.rotateY(-Math.PI * 0.5);
+    arcGeo.translate(0.94, 0, 0);
     this.meleeArcMesh = new THREE.Mesh(
       arcGeo,
       new THREE.MeshBasicMaterial({
+        map: this.atlas.meleeSlashTex,
         color: 0xf2eee2,
         transparent: true,
-        opacity: 0.78,
+        opacity: 0.82,
         side: THREE.DoubleSide,
         depthWrite: false,
       })
     );
+    this.meleeArcMesh.rotation.order = 'YXZ';
     this.meleeArcMesh.visible = false;
     this.scene.add(this.meleeArcMesh);
 
@@ -1041,6 +1072,8 @@ export class ThreeIsometricRenderer {
     let targetX: number;
     let targetZ: number;
 
+    let fpsMeleePose: FirstPersonMeleeSwingPose | null = null;
+
     if (isFps) {
       const p = state.player;
       const activeCar =
@@ -1073,6 +1106,22 @@ export class ThreeIsometricRenderer {
         targetRoll = settings.fpsHeadBob ? computeFirstPersonStrafeRoll(state.strafeInput, speedNow) : 0;
         if (state.isSprinting && speedNow > 0.5) targetFov = baseFov + 4.5;
         else if (p.dodgeTimer > 0) targetFov = baseFov + 6;
+        if (
+          state.phase === 'playing' &&
+          p.meleeSwingTimer > 0 &&
+          p.reloadingTimer <= 0 &&
+          p.dodgeTimer <= 0 &&
+          isMeleeWeapon(p.equippedWeapon)
+        ) {
+          const swingTotal = WEAPONS[p.equippedWeapon].swingDuration ?? 0.26;
+          const swingProg = 1 - clamp(p.meleeSwingTimer / swingTotal, 0, 1);
+          fpsMeleePose = evaluateFirstPersonMeleePose({
+            weapon: p.equippedWeapon,
+            progress: swingProg,
+            comboStep: state.meleeComboStep,
+            hasHit: state.meleeHitConfirmed,
+          });
+        }
       }
 
       if (Math.abs(this.currentFpsFov - targetFov) > 0.05) {
@@ -1083,10 +1132,19 @@ export class ThreeIsometricRenderer {
       }
       this.currentFpsRoll += (targetRoll - this.currentFpsRoll) * 0.18;
 
-      const cosP = Math.cos(state.fpsPitch);
-      const lookDirX = Math.cos(p.facingAngle) * cosP;
-      const lookDirY = Math.sin(state.fpsPitch);
-      const lookDirZ = Math.sin(p.facingAngle) * cosP;
+      const punchScale = settings.screenShake ? 1 : 0.35;
+      const effYaw = p.facingAngle + (fpsMeleePose ? fpsMeleePose.camYawOffset * punchScale : 0);
+      const effPitch = clamp(
+        state.fpsPitch + (fpsMeleePose ? fpsMeleePose.camPitchOffset * punchScale : 0),
+        -1.3,
+        1.3
+      );
+      const effRoll = this.currentFpsRoll + (fpsMeleePose ? fpsMeleePose.camRollOffset * punchScale : 0);
+
+      const cosP = Math.cos(effPitch);
+      const lookDirX = Math.cos(effYaw) * cosP;
+      const lookDirY = Math.sin(effPitch);
+      const lookDirZ = Math.sin(effYaw) * cosP;
 
       this.fpsCamera.position.set(eyeX + shakeX, eyeY + shakeY, eyeZ + shakeZ);
       this.fpsCamera.lookAt(
@@ -1094,8 +1152,8 @@ export class ThreeIsometricRenderer {
         eyeY + shakeY + lookDirY,
         eyeZ + shakeZ + lookDirZ
       );
-      if (Math.abs(this.currentFpsRoll) > 0.0005) {
-        this.fpsCamera.rotateZ(this.currentFpsRoll);
+      if (Math.abs(effRoll) > 0.0005) {
+        this.fpsCamera.rotateZ(effRoll);
       }
       this.fpsCamera.updateMatrixWorld();
       this.activeCamera = this.fpsCamera;
@@ -1212,7 +1270,7 @@ export class ThreeIsometricRenderer {
     this.syncStructures(state.structures, state.elapsedClock, targetX, targetZ);
     this.syncVehicles(state.vehicles, state.player, state.activeVehicleId, state.elapsedClock, isFps, targetX, targetZ);
     this.syncZombies(state.zombies, state.elapsedClock, targetX, targetZ);
-    this.syncPlayer(state, isFps);
+    this.syncPlayer(state, isFps, fpsMeleePose);
     this.syncProjectiles(state.projectiles, state.elapsedClock);
     this.syncFirePatches(state.firePatches, state.elapsedClock);
     this.syncDecals(state.decals);
@@ -1823,7 +1881,11 @@ export class ThreeIsometricRenderer {
     }
   }
 
-  private syncPlayer(state: RenderFrameState, isFps: boolean): void {
+  private syncPlayer(
+    state: RenderFrameState,
+    isFps: boolean,
+    fpsMeleePose: FirstPersonMeleeSwingPose | null
+  ): void {
     const p = state.player;
     const thirdPersonVisible = !isFps && state.phase !== 'title' && state.activeVehicleId === null;
     this.playerRig.root.visible = thirdPersonVisible;
@@ -1840,7 +1902,9 @@ export class ThreeIsometricRenderer {
     // Sync First-Person 3D pixel-art viewmodel attached to fpsCamera
     const showViewmodel = isFps && state.phase === 'playing' && state.activeVehicleId === null;
     this.fpsViewmodelRig.root.visible = showViewmodel;
-    if (showViewmodel) {
+    if (!showViewmodel) {
+      this.fpsSlashMesh.visible = false;
+    } else {
       for (const wKey of Object.keys(this.fpsViewmodelRig.weapons) as Array<keyof typeof this.fpsViewmodelRig.weapons>) {
         this.fpsViewmodelRig.weapons[wKey].visible =
           state.fishing.phase === 'idle' && wKey === p.equippedWeapon && animState !== 'dodge';
@@ -1876,6 +1940,22 @@ export class ThreeIsometricRenderer {
         this.fpsViewmodelRig.molotovFlame.rotation.y = Math.sin(state.elapsedClock * 11) * 0.25;
       }
 
+      if (isMeleeWeapon(p.equippedWeapon)) {
+        const grip = getFirstPersonMeleeGripPose(p.equippedWeapon);
+        const wObj = this.fpsViewmodelRig.weapons[p.equippedWeapon];
+        wObj.rotation.order = 'ZYX';
+        wObj.position.set(grip.posX, grip.posY, grip.posZ);
+        if (fpsMeleePose && p.meleeSwingTimer > 0 && p.reloadingTimer <= 0 && p.dodgeTimer <= 0) {
+          wObj.rotation.set(
+            grip.rollX + fpsMeleePose.wristRollX,
+            grip.yawY + fpsMeleePose.wristYawY,
+            grip.pitchZ + fpsMeleePose.wristPitchZ
+          );
+        } else {
+          wObj.rotation.set(grip.rollX, grip.yawY, grip.pitchZ);
+        }
+      }
+
       if (p.reloadingTimer > 0) {
         const total = WEAPONS[p.reloadingWeapon ?? p.equippedWeapon].reloadTime || 1;
         const prog = clamp(1 - p.reloadingTimer / total, 0, 1);
@@ -1883,24 +1963,43 @@ export class ThreeIsometricRenderer {
         posY -= dip * 0.14;
         rotX -= dip * 0.55;
         rotZ += dip * 0.25;
-      } else if (p.meleeSwingTimer > 0) {
-        const swingProg = 1 - clamp(p.meleeSwingTimer / 0.22, 0, 1);
-        const arc = Math.sin(swingProg * Math.PI);
-        posX -= arc * 0.18;
-        posZ -= arc * 0.08;
-        rotX -= arc * 0.72;
-        rotY += arc * 0.65;
-        rotZ += arc * 0.55;
-      } else if (p.attackCooldown > 0 && (p.equippedWeapon === 'pistol' || p.equippedWeapon === 'shotgun')) {
-        const specCd = WEAPONS[p.equippedWeapon].cooldown || 0.25;
-        const kick = clamp(p.attackCooldown / specCd, 0, 1);
-        const kickSq = kick * kick;
-        posZ += kickSq * (p.equippedWeapon === 'shotgun' ? 0.09 : 0.055);
-        posY += kickSq * 0.025;
-        rotX += kickSq * (p.equippedWeapon === 'shotgun' ? 0.28 : 0.18);
-      } else if (p.dodgeTimer > 0) {
-        posY -= 0.14;
-        rotZ += 0.35;
+        this.fpsSlashMesh.visible = false;
+      } else if (fpsMeleePose && p.meleeSwingTimer > 0 && isMeleeWeapon(p.equippedWeapon)) {
+        posX += fpsMeleePose.armPosX;
+        posY += fpsMeleePose.armPosY;
+        posZ += fpsMeleePose.armPosZ;
+        rotX += fpsMeleePose.armRotX;
+        rotY += fpsMeleePose.armRotY;
+        rotZ += fpsMeleePose.armRotZ;
+
+        this.fpsSlashMesh.visible = fpsMeleePose.slashVisible;
+        if (fpsMeleePose.slashVisible) {
+          const slashMat = this.fpsSlashMesh.material as THREE.MeshBasicMaterial;
+          slashMat.color.setHex(WEAPONS[p.equippedWeapon].arcColor ?? 0xf2eee2);
+          slashMat.opacity = fpsMeleePose.slashAlpha;
+          this.fpsSlashMesh.rotation.z = fpsMeleePose.slashAngleZ;
+          this.fpsSlashMesh.position.set(
+            Math.sin(fpsMeleePose.slashAngleZ) * 0.14,
+            -0.02 - Math.cos(fpsMeleePose.slashAngleZ) * 0.08,
+            -0.58
+          );
+          const sx = (fpsMeleePose.slashFlipX ? -1 : 1) * fpsMeleePose.slashScale;
+          const sy = fpsMeleePose.slashScale * (0.86 + fpsMeleePose.slashProgress * 0.26);
+          this.fpsSlashMesh.scale.set(sx, sy, 1);
+        }
+      } else {
+        this.fpsSlashMesh.visible = false;
+        if (p.attackCooldown > 0 && (p.equippedWeapon === 'pistol' || p.equippedWeapon === 'shotgun')) {
+          const specCd = WEAPONS[p.equippedWeapon].cooldown || 0.25;
+          const kick = clamp(p.attackCooldown / specCd, 0, 1);
+          const kickSq = kick * kick;
+          posZ += kickSq * (p.equippedWeapon === 'shotgun' ? 0.09 : 0.055);
+          posY += kickSq * 0.025;
+          rotX += kickSq * (p.equippedWeapon === 'shotgun' ? 0.28 : 0.18);
+        } else if (p.dodgeTimer > 0) {
+          posY -= 0.14;
+          rotZ += 0.35;
+        }
       }
 
       this.fpsViewmodelRig.armPivot.position.set(posX, posY, posZ);
@@ -1963,9 +2062,13 @@ export class ThreeIsometricRenderer {
       this.playerRig.bodyPivot.position.y = 0.22;
       this.playerRig.leftLegPivot.rotation.z = 0.5;
       this.playerRig.rightLegPivot.rotation.z = 0.5;
+      this.playerRig.rightArmPivot.rotation.set(0, 0, 0.2);
+      this.playerRig.torso.rotation.y = 0;
       if (this.playerRig.weaponGroup) this.playerRig.weaponGroup.rotation.z = 0;
     } else {
       this.playerRig.bodyPivot.rotation.z = 0;
+      let torsoZ = 0;
+      let torsoY = 0;
       if (animState === 'walk') {
         const phase = p.walkCycle * 1.1;
         const s = Math.sin(phase);
@@ -1974,27 +2077,46 @@ export class ThreeIsometricRenderer {
         this.playerRig.leftArmPivot.rotation.z = -s * 0.45;
         this.playerRig.rightArmPivot.rotation.z = isGun ? 1.32 : s * 0.35;
         this.playerRig.bodyPivot.position.y = Math.abs(Math.cos(phase)) * 0.05;
-        this.playerRig.torso.rotation.z = -0.06;
+        torsoZ = -0.06;
       } else {
         this.playerRig.leftLegPivot.rotation.z = 0;
         this.playerRig.rightLegPivot.rotation.z = 0;
         this.playerRig.leftArmPivot.rotation.z = 0;
         this.playerRig.rightArmPivot.rotation.z =
-          state.fishing.phase !== 'idle' ? 0.85 : isGun ? 1.38 : 0.35;
-        this.playerRig.torso.rotation.z = 0;
+          state.fishing.phase !== 'idle' ? 0.85 : isGun ? 1.38 : 0.42;
         this.playerRig.bodyPivot.position.y = Math.sin(state.elapsedClock * 3.5) * 0.02;
       }
 
-      if (p.meleeSwingTimer > 0) {
-        const swingProg = 1 - clamp(p.meleeSwingTimer / 0.22, 0, 1);
-        this.playerRig.rightArmPivot.rotation.z = 1.4 - swingProg * 2.2;
-        this.playerRig.rightArmPivot.rotation.y = 0.7 - swingProg * 1.6;
-        this.meleeArcMesh.visible = true;
-        this.meleeArcMesh.position.set(p.x, 0.46, p.y);
-        this.meleeArcMesh.rotation.y = -p.facingAngle;
+      if (p.meleeSwingTimer > 0 && isMeleeWeapon(p.equippedWeapon)) {
+        const spec = WEAPONS[p.equippedWeapon];
+        const swingTotal = spec.swingDuration ?? 0.26;
+        const swingProg = 1 - clamp(p.meleeSwingTimer / swingTotal, 0, 1);
+        const tp = evaluateThirdPersonMeleePose({
+          weapon: p.equippedWeapon,
+          progress: swingProg,
+          comboStep: state.meleeComboStep,
+        });
+        this.playerRig.rightArmPivot.rotation.set(tp.rightArmRotX, tp.rightArmRotY, tp.rightArmRotZ);
+        torsoY += tp.torsoRotY;
+        torsoZ += tp.torsoRotZ;
+
+        if (tp.arcOpacity > 0.02) {
+          this.meleeArcMesh.visible = true;
+          this.meleeArcMesh.position.set(p.x, 0.56, p.y);
+          this.meleeArcMesh.rotation.set(0, -p.facingAngle, tp.arcRotZ);
+          const arcScale = spec.range / 1.85;
+          this.meleeArcMesh.scale.set(arcScale, 1, tp.arcFlipX ? -arcScale : arcScale);
+          const arcMat = this.meleeArcMesh.material as THREE.MeshBasicMaterial;
+          arcMat.color.setHex(spec.arcColor ?? 0xf2eee2);
+          arcMat.opacity = tp.arcOpacity;
+        }
       } else {
+        this.playerRig.rightArmPivot.rotation.x = 0;
         this.playerRig.rightArmPivot.rotation.y = 0;
       }
+
+      this.playerRig.torso.rotation.y = torsoY;
+      this.playerRig.torso.rotation.z = torsoZ;
 
       if (this.playerRig.weaponGroup) {
         this.playerRig.weaponGroup.rotation.z = isGun ? -this.playerRig.rightArmPivot.rotation.z : 0;
@@ -2784,7 +2906,7 @@ export class ThreeIsometricRenderer {
       const baseGap = showFpsReticle
         ? state.player.equippedWeapon === 'shotgun'
           ? 7
-          : state.player.equippedWeapon === 'crowbar'
+          : isMeleeWeapon(state.player.equippedWeapon)
             ? 4
             : 3
         : 3;
@@ -2807,7 +2929,7 @@ export class ThreeIsometricRenderer {
       ctx.moveTo(mx, my + spreadGap);
       ctx.lineTo(mx, my + armLen);
       ctx.stroke();
-      ctx.fillStyle = state.player.equippedWeapon === 'crowbar' && showFpsReticle ? '#ffd266' : '#d9822b';
+      ctx.fillStyle = isMeleeWeapon(state.player.equippedWeapon) && showFpsReticle ? '#ffd266' : '#d9822b';
       ctx.fillRect(mx - 1, my - 1, 2, 2);
     }
 
@@ -2905,6 +3027,7 @@ export class ThreeIsometricRenderer {
     disposeGroup(this.interactHighlight);
     disposeGroup(this.buildHighlight);
     disposeGroup(this.molotovReticle);
+    disposeGroup(this.fpsSlashMesh);
     disposeGroup(this.meleeArcMesh);
     disposeGroup(this.fishingLine);
     disposeGroup(this.fishingBobber);

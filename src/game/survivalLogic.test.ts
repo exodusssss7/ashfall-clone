@@ -27,8 +27,9 @@ import {
   advanceDoorLockpick,
   repairVehicleWithScrap,
   pickBestFoodConsumable,
+  resolveMeleeHit,
 } from './survivalLogic';
-import { COOK_RECIPES, CRAFT_RECIPES } from './recipes';
+import { COOK_RECIPES, CRAFT_RECIPES, MELEE_WEAPON_IDS, WEAPONS, cycleMeleeWeapon, isMeleeWeapon } from './recipes';
 
 test('isometric projection round-trip preserves world coordinates', () => {
   const samples = [
@@ -479,4 +480,61 @@ test('all 8 town buildings have reachable interior rooms with matching door enti
     }
   }
 });
+
+test('melee arsenal provides five distinct weapons with unique damage, speed, reach, knockback, and bleed', () => {
+  assert.deepEqual(MELEE_WEAPON_IDS, ['crowbar', 'machete', 'barbed_bat', 'axe', 'sledgehammer']);
+  for (const id of MELEE_WEAPON_IDS) {
+    assert.equal(isMeleeWeapon(id), true);
+  }
+  assert.equal(isMeleeWeapon('pistol'), false);
+  assert.equal(isMeleeWeapon('molotov'), false);
+
+  const damages = new Set(MELEE_WEAPON_IDS.map((id) => WEAPONS[id].damage));
+  const cooldowns = new Set(MELEE_WEAPON_IDS.map((id) => WEAPONS[id].cooldown));
+  assert.equal(damages.size, 5, 'Every melee weapon must have distinct base damage');
+  assert.equal(cooldowns.size, 5, 'Every melee weapon must have distinct swing speed');
+
+  // Speed vs damage progression: machete is fastest, sledgehammer hits hardest & reaches furthest
+  assert.ok(WEAPONS.machete.cooldown < WEAPONS.crowbar.cooldown);
+  assert.ok(WEAPONS.sledgehammer.damage > WEAPONS.axe.damage);
+  assert.ok(WEAPONS.axe.damage > WEAPONS.barbed_bat.damage);
+  assert.ok(WEAPONS.barbed_bat.damage > WEAPONS.crowbar.damage);
+  assert.ok(WEAPONS.crowbar.damage > WEAPONS.machete.damage);
+  assert.ok((WEAPONS.sledgehammer.knockback ?? 0) > (WEAPONS.barbed_bat.knockback ?? 0));
+  assert.ok((WEAPONS.machete.bleedDuration ?? 0) > (WEAPONS.barbed_bat.bleedDuration ?? 0));
+});
+
+test('cycleMeleeWeapon rotates cleanly across all five melee weapons and resets from firearms', () => {
+  let w = cycleMeleeWeapon('pistol');
+  assert.equal(w, 'crowbar');
+  w = cycleMeleeWeapon(w);
+  assert.equal(w, 'machete');
+  w = cycleMeleeWeapon(w);
+  assert.equal(w, 'barbed_bat');
+  w = cycleMeleeWeapon(w);
+  assert.equal(w, 'axe');
+  w = cycleMeleeWeapon(w);
+  assert.equal(w, 'sledgehammer');
+  w = cycleMeleeWeapon(w);
+  assert.equal(w, 'crowbar');
+});
+
+test('resolveMeleeHit calculates critical hits, knockback boost, and bleed duration per weapon', () => {
+  const macheteNormal = resolveMeleeHit(WEAPONS.machete, 0.9);
+  assert.equal(macheteNormal.isCrit, false);
+  assert.equal(macheteNormal.damage, 28);
+  assert.equal(macheteNormal.bleedDuration, 4.0);
+
+  const batCrit = resolveMeleeHit(WEAPONS.barbed_bat, 0.05);
+  assert.equal(batCrit.isCrit, true);
+  assert.equal(batCrit.damage, Math.round(44 * 1.6));
+  assert.ok(batCrit.knockback > 5.2);
+  assert.ok(batCrit.bleedDuration > 2.8);
+
+  const sledgeHit = resolveMeleeHit(WEAPONS.sledgehammer, 0.5);
+  assert.equal(sledgeHit.damage, 82);
+  assert.equal(sledgeHit.knockback, 8.5);
+  assert.equal(sledgeHit.bleedDuration, 0);
+});
+
 

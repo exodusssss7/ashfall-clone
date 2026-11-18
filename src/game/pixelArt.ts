@@ -1876,6 +1876,31 @@ export class PixelArtAtlas {
       px(ctx, 6, 8, '#5a636b', 12, 2);
       px(ctx, 10, 10, '#633f25', 5, 2);
       px(ctx, 17, 8, '#8d98a3', 1, 1);
+    } else if (weapon === 'machete') {
+      for (let i = 0; i < 11; i++) {
+        px(ctx, 4 + i, 15 - i, '#212529', 3, 3);
+        px(ctx, 5 + i, 15 - i, '#b8c4c9', 2, 2);
+      }
+      px(ctx, 3, 14, '#6e4a2e', 3, 3);
+    } else if (weapon === 'barbed_bat') {
+      for (let i = 0; i < 12; i++) {
+        px(ctx, 3 + i, 15 - i, '#212529', 3, 3);
+        px(ctx, 4 + i, 15 - i, i > 5 ? '#a87447' : '#3a332d', 2, 2);
+      }
+      px(ctx, 11, 6, '#d4dde0', 2, 1);
+      px(ctx, 13, 4, '#d4dde0', 2, 1);
+    } else if (weapon === 'axe') {
+      for (let i = 0; i < 11; i++) {
+        px(ctx, 3 + i, 15 - i, '#8f5f39', 2, 2);
+      }
+      px(ctx, 12, 3, '#c94138', 5, 4);
+      px(ctx, 15, 5, '#dce4e8', 2, 2);
+    } else if (weapon === 'sledgehammer') {
+      for (let i = 0; i < 11; i++) {
+        px(ctx, 3 + i, 15 - i, '#6b4628', 2, 2);
+      }
+      px(ctx, 11, 2, '#4f5961', 6, 5);
+      px(ctx, 12, 3, '#98a3ab', 4, 2);
     } else {
       px(ctx, 8, 8, '#1e2b18', 5, 8);
       px(ctx, 9, 9, '#63914e', 3, 6);

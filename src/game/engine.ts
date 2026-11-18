@@ -65,7 +65,7 @@ import {
 } from './saveGame';
 import { getSettings, particleBudgetScale, pixelRatioCap, subscribeSettings } from './settings';
 import type { GraphicsQuality } from './settings';
-import { COOK_RECIPES, CRAFT_RECIPES, STRUCTURES, WEAPONS, ZOMBIE_CONFIGS } from './recipes';
+import { COOK_RECIPES, CRAFT_RECIPES, STRUCTURES, WEAPONS, ZOMBIE_CONFIGS, cycleMeleeWeapon, isMeleeWeapon } from './recipes';
 import { soundEngine } from './sound';
 import {
   VEHICLE_REPAIR_SCRAP_COST,
@@ -92,6 +92,7 @@ import {
   isTargetInMeleeArc,
   pickBestFoodConsumable,
   repairVehicleWithScrap,
+  resolveMeleeHit,
   spendCost,
   stepVehiclePhysics,
   tickSurvivalNeeds,
@@ -266,6 +267,9 @@ export class SurvivalEngine {
   private hitMarkerTimer = 0;
   private hitMarkerCrit = false;
   private hitMarkerHeadshot = false;
+  private meleeComboStep: 0 | 1 = 0;
+  private meleeComboResetTimer = 0;
+  private meleeHitConfirmed = false;
   private screechCooldown = 0;
   private heartbeatTimer = 0;
   private crackleTimer = 0;
@@ -463,6 +467,9 @@ export class SurvivalEngine {
   private initWorld(titleMode: boolean, spawnOverride?: { x: number; y: number }): void {
     this.threeRenderer?.clearSceneCaches();
     this.zombieRoutes.clear();
+    this.meleeComboStep = 0;
+    this.meleeComboResetTimer = 0;
+    this.meleeHitConfirmed = false;
     const world = generateWorld(1994);
     const effectiveSpawnX = spawnOverride ? spawnOverride.x : world.spawnX;
     const effectiveSpawnY = spawnOverride ? spawnOverride.y : world.spawnY;
@@ -677,6 +684,9 @@ export class SurvivalEngine {
     this.deathDelayTimer = 0;
     this.trauma = 0;
     this.hitstopTimer = 0;
+    this.meleeComboStep = 0;
+    this.meleeComboResetTimer = 0;
+    this.meleeHitConfirmed = false;
     this.activeVehicleId = null;
     this.activeLootSource = null;
     this.activeLootContainer = null;
@@ -897,6 +907,9 @@ export class SurvivalEngine {
       activeId !== null && this.vehicles.some((v) => v.id === activeId) ? activeId : null;
 
     this.zombieRoutes.clear();
+    this.meleeComboStep = 0;
+    this.meleeComboResetTimer = 0;
+    this.meleeHitConfirmed = false;
     this.spawnTimer = 3.0;
     const iso = worldToIso(this.player.x, this.player.y, 0);
     this.camX = iso.sx;
@@ -1691,7 +1704,8 @@ export class SurvivalEngine {
     } else if (code === 'KeyG') {
       this.triggerEnterExitVehicle();
     } else if (code === 'KeyQ') {
-      this.triggerHorn();
+      if (this.activeVehicleId !== null) this.triggerHorn();
+      else this.selectWeapon(cycleMeleeWeapon(this.player.equippedWeapon));
     } else if (code === 'KeyT') {
       this.triggerRepairVehicle();
     } else if (code === 'KeyK' && this.activeVehicleId === null) {
@@ -1700,6 +1714,14 @@ export class SurvivalEngine {
       this.triggerBarricadeDoor();
     } else if (code === 'Digit1' && this.activeVehicleId === null) {
       this.selectWeapon('crowbar');
+    } else if (code === 'Digit8' && this.activeVehicleId === null) {
+      this.selectWeapon('machete');
+    } else if (code === 'Digit9' && this.activeVehicleId === null) {
+      this.selectWeapon('barbed_bat');
+    } else if (code === 'Digit0' && this.activeVehicleId === null) {
+      this.selectWeapon('axe');
+    } else if (code === 'Minus' && this.activeVehicleId === null) {
+      this.selectWeapon('sledgehammer');
     } else if (code === 'Digit2' && this.activeVehicleId === null) {
       this.selectWeapon('pistol');
     } else if (code === 'Digit3' && this.activeVehicleId === null) {
@@ -2246,6 +2268,8 @@ export class SurvivalEngine {
     p.invulnTimer = Math.max(0, p.invulnTimer - dt);
     p.attackCooldown = Math.max(0, p.attackCooldown - dt);
     p.meleeSwingTimer = Math.max(0, p.meleeSwingTimer - dt);
+    if (p.meleeSwingTimer <= 0) this.meleeHitConfirmed = false;
+    this.meleeComboResetTimer = Math.max(0, this.meleeComboResetTimer - dt);
     p.dodgeCooldown = Math.max(0, p.dodgeCooldown - dt);
     p.scaleX = lerp(p.scaleX, 1, 1 - Math.exp(-dt * 14));
     p.scaleY = lerp(p.scaleY, 1, 1 - Math.exp(-dt * 14));
@@ -2439,7 +2463,7 @@ export class SurvivalEngine {
       this.virtualFireJustPressed ||
       this.virtualFireHeld ||
       aimStickAttack ||
-      (this.mouseDown && (p.equippedWeapon === 'crowbar' || p.equippedWeapon === 'lmg')) ||
+      (this.mouseDown && (isMeleeWeapon(p.equippedWeapon) || p.equippedWeapon === 'lmg')) ||
       this.justPressed.has('KeyJ');
 
     if (
@@ -2561,51 +2585,146 @@ export class SurvivalEngine {
 
     const spec = WEAPONS[p.equippedWeapon];
 
-    if (p.equippedWeapon === 'crowbar') {
+    if (isMeleeWeapon(p.equippedWeapon)) {
       p.attackCooldown = spec.cooldown;
-      p.meleeSwingTimer = 0.22;
-      p.scaleX = 1.16;
-      p.scaleY = 0.88;
-      soundEngine.playMeleeSwing();
+      p.meleeSwingTimer = spec.swingDuration ?? 0.26;
+      this.meleeComboStep = this.meleeComboResetTimer > 0 ? ((this.meleeComboStep ^ 1) as 0 | 1) : 0;
+      this.meleeComboResetTimer = Math.max(spec.cooldown + 0.55, 0.95);
+      const isHeavyMelee =
+        p.equippedWeapon === 'barbed_bat' ||
+        p.equippedWeapon === 'axe' ||
+        p.equippedWeapon === 'sledgehammer';
+      p.scaleX = isHeavyMelee ? 1.24 : 1.16;
+      p.scaleY = isHeavyMelee ? 0.84 : 0.88;
+      // Subtle forward combat step-in lunge along facing direction
+      if (p.dodgeTimer <= 0) {
+        const lungeAmt =
+          p.equippedWeapon === 'machete'
+            ? 1.1
+            : p.equippedWeapon === 'barbed_bat'
+              ? 1.3
+              : p.equippedWeapon === 'axe'
+                ? 1.4
+                : p.equippedWeapon === 'sledgehammer'
+                  ? 1.5
+                  : 1.2;
+        this.playerVelX += Math.cos(p.facingAngle) * lungeAmt;
+        this.playerVelY += Math.sin(p.facingAngle) * lungeAmt;
+      }
+      const swingRate =
+        p.equippedWeapon === 'machete'
+          ? 1.18
+          : p.equippedWeapon === 'barbed_bat'
+            ? 0.84
+            : p.equippedWeapon === 'axe'
+              ? 0.78
+              : p.equippedWeapon === 'sledgehammer'
+                ? 0.66
+                : 0.9;
+      const swingGain = p.equippedWeapon === 'sledgehammer' ? 0.5 : p.equippedWeapon === 'machete' ? 0.36 : 0.42;
+      soundEngine.playMeleeSwing(swingRate, swingGain);
 
       let hitCount = 0;
+      let anyCrit = false;
       for (const z of this.zombies) {
         if (z.state === 'dying') continue;
         if (isTargetInMeleeArc(p.x, p.y, p.facingAngle, z.x, z.y, spec.range, spec.spreadRad * 0.55)) {
           hitCount++;
-          const kbX = (z.x - p.x) / (Math.hypot(z.x - p.x, z.y - p.y) || 1);
-          const kbY = (z.y - p.y) / (Math.hypot(z.x - p.x, z.y - p.y) || 1);
-          const { damage, isCrit } = computeCombatDamage(spec.damage, Math.random(), 0.2);
-          this.damageZombie(z, damage, kbX * (isCrit ? 5.0 : 3.8), kbY * (isCrit ? 5.0 : 3.8), true, isCrit);
+          const dx = z.x - p.x;
+          const dy = z.y - p.y;
+          const dLen = Math.hypot(dx, dy) || 1;
+          const kbX = dx / dLen;
+          const kbY = dy / dLen;
+          const hit = resolveMeleeHit(spec, Math.random());
+          if (hit.isCrit) anyCrit = true;
+          const wasBleeding = z.bleedTimer > 0;
+          if (hit.bleedDuration > 0 && z.hp - hit.damage > 0) {
+            z.bleedTimer = Math.max(z.bleedTimer, hit.bleedDuration);
+            if (!wasBleeding) {
+              this.addFloatingText(z.x, z.y, 1.48, 'BLEED!', '#e04f44');
+            }
+          }
+          // Heavy weapons & critical blows interrupt zombie attack windup
+          if (z.state === 'windup' && (isHeavyMelee || hit.isCrit) && z.hp - hit.damage > 0) {
+            z.state = 'recover';
+            z.stateTimer = 0.36;
+          }
+          this.damageZombie(
+            z,
+            hit.damage,
+            kbX * hit.knockback,
+            kbY * hit.knockback,
+            isHeavyMelee || hit.isCrit,
+            hit.isCrit
+          );
+          this.spawnParticles(
+            z.x - kbX * 0.14,
+            z.y - kbY * 0.14,
+            0.72,
+            isHeavyMelee || hit.isCrit ? 11 : 6,
+            '#a61c1c',
+            3.4,
+            2.2
+          );
+          if (hit.isCrit || p.equippedWeapon === 'barbed_bat') {
+            this.spawnParticles(z.x - kbX * 0.1, z.y - kbY * 0.1, 0.78, 4, '#f5d27a', 3.8, 2.0);
+          }
         }
       }
+      let hitDoor = false;
       if (hitCount > 0) {
-        soundEngine.playMeleeHit(hitCount > 1);
-        this.hitstopTimer = 0.045;
-        this.trauma = Math.min(1, this.trauma + 0.26);
+        const hitRate =
+          p.equippedWeapon === 'machete'
+            ? 1.16
+            : p.equippedWeapon === 'sledgehammer'
+              ? 0.72
+              : p.equippedWeapon === 'axe'
+                ? 0.8
+                : p.equippedWeapon === 'barbed_bat'
+                  ? 0.86
+                  : undefined;
+        soundEngine.playMeleeHit(hitCount > 1 || isHeavyMelee || anyCrit, hitRate);
+        this.emitSound(p.x, p.y, spec.noiseRadius, false);
+        this.hitstopTimer = Math.max(this.hitstopTimer, spec.hitstop ?? 0.045);
+        this.trauma = Math.min(1, this.trauma + (spec.trauma ?? 0.26));
+        this.hitMarkerTimer = 0.14;
+        this.hitMarkerCrit = anyCrit;
+        this.hitMarkerHeadshot = false;
       } else {
-        // Crowbar can pry open locked doors loudly in 2 hits
+        // Melee tools can pry/chop/smash locked doors at weapon-specific speed
         const lockedDoor = this.doors.find(
           (d) =>
             d.status === 'locked' &&
             isTargetInMeleeArc(p.x, p.y, p.facingAngle, d.gx + 0.5, d.gy + 0.5, spec.range, spec.spreadRad * 0.7)
         );
         if (lockedDoor) {
+          hitDoor = true;
           const cell = this.getCell(lockedDoor.gx, lockedDoor.gy);
-          const pry = advanceDoorLockpick(lockedDoor, cell, 0.55);
+          const pry = advanceDoorLockpick(lockedDoor, cell, spec.doorLockProgress ?? 0.55);
           lockedDoor.hitFlash = 0.14;
           soundEngine.playCarImpact();
-          this.emitSound(lockedDoor.gx + 0.5, lockedDoor.gy + 0.5, 9.5, true);
+          this.emitSound(lockedDoor.gx + 0.5, lockedDoor.gy + 0.5, Math.max(8, spec.noiseRadius * 2.2), true);
           this.spawnParticles(lockedDoor.gx + 0.5, lockedDoor.gy + 0.5, 0.45, 7, '#a67449', 2.4, 1.8);
+          const openMsg =
+            p.equippedWeapon === 'sledgehammer'
+              ? 'SMASHED OPEN!'
+              : p.equippedWeapon === 'axe'
+                ? 'CHOPPED OPEN!'
+                : 'PRIED OPEN!';
+          const progressMsg =
+            p.equippedWeapon === 'sledgehammer' || p.equippedWeapon === 'axe'
+              ? 'SPLINTERING DOOR...'
+              : 'PRYING LOCK...';
           this.addFloatingText(
             lockedDoor.gx + 0.5,
             lockedDoor.gy + 0.5,
             1.1,
-            pry.unlocked ? 'PRIED OPEN!' : 'PRYING LOCK...',
+            pry.unlocked ? openMsg : progressMsg,
             '#ffd266'
           );
         }
       }
+      this.meleeHitConfirmed = hitCount > 0 || hitDoor;
       this.emitHud();
       return;
     }
@@ -4433,6 +4552,8 @@ export class SurvivalEngine {
       hitMarkerTimer: this.hitMarkerTimer,
       hitMarkerCrit: this.hitMarkerCrit,
       hitMarkerHeadshot: this.hitMarkerHeadshot,
+      meleeComboStep: this.meleeComboStep,
+      meleeHitConfirmed: this.meleeHitConfirmed,
       impactDecals: this.impactDecals,
       impactEffects: this.impactEffects,
       sleepTransitionTimer: this.sleepTransitionTimer,

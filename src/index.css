@@ -757,7 +757,7 @@ html[data-skin="a"] [data-testid="touch-attack-btn"] svg{
   color:#ffe39d;
   filter:drop-shadow(0 2px #100e17);
 }
-html[data-skin="a"] [data-testid="touch-attack-btn"][data-weapon="crowbar"] svg{
+html[data-skin="a"] [data-testid="touch-attack-btn"]:is([data-weapon="crowbar"],[data-weapon="machete"],[data-weapon="barbed_bat"],[data-weapon="axe"],[data-weapon="sledgehammer"]) svg{
   color:#ffd08a;
 }
 html[data-skin="a"] [data-testid="touch-attack-btn"][data-weapon="molotov"] svg{
@@ -1129,8 +1129,17 @@ html[data-skin="a"] .journal-title-card .menu-continue-btn span { color: #fff1cd
 
 /* Bag chip: standalone backpack/crafting button detached from the hotbar slots (user request:
    bag must sit left of the item slots, not framed as one of them). */
-.hotbar-wrap { display:flex; align-items:flex-end; gap:10px; }
-.hotbar-wrap .equipment-bar { flex:1; min-width:0; }
+.hotbar-wrap { display:flex; align-items:flex-end; gap:10px; max-width:calc(100vw - 24px); }
+.hotbar-wrap .equipment-bar { flex:1; min-width:0; overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
+.hotbar-wrap .equipment-bar::-webkit-scrollbar { display:none; }
+html[data-skin="a"] .game-hud[data-touch="true"] .hotbar-wrap .equipment-bar { touch-action:pan-x; }
+html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar>button { flex:0 0 46px!important; min-width:46px!important; width:46px!important; }
+@media(max-width:960px) and (orientation:landscape){
+  html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar>button { flex:0 0 42px!important; min-width:42px!important; width:42px!important; }
+}
+@media(max-width:600px) and (orientation:portrait){
+  html[data-skin="a"] .game-hud[data-touch="true"] .equipment-bar>button { flex:0 0 44px!important; min-width:44px!important; width:44px!important; }
+}
 .bag-btn { position:relative; flex:0 0 auto; display:flex; flex-direction:column; justify-content:center; align-items:center; min-width:64px; height:80px; padding:4px 7px; background:#071011b8; border:1px solid #68736680; border-bottom:3px solid #39433d; border-radius:10px; color:#f0ece1; }
 .bag-btn .equipment-icon { width:37px; height:34px; margin:-1px 0 -2px; }
 .bag-btn:hover { border-color:#8a918d; }

@@ -1528,24 +1528,35 @@ function buildCeilingTexture(): THREE.CanvasTexture {
 }
 
 function buildWeaponTextures() {
-  // Crowbar forged steel + worn red paint edge
-  const [cs, csCtx] = makePixelCanvas(16, 8);
-  for (let y = 0; y < 8; y++) {
-    for (let x = 0; x < 16; x++) {
-      const topHi = y === 0 || y === 1;
-      const botDark = y >= 6;
-      const wear = (x * 5 + y * 11) % 9 === 0;
-      csCtx.fillStyle = topHi ? '#a0aab2' : botDark ? '#3a4249' : wear ? '#5f6972' : '#7a848c';
+  // Crowbar forged hexagonal steel with specular chamfer & rust wear (32x16)
+  const [cs, csCtx] = makePixelCanvas(32, 16);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 32; x++) {
+      const bevelTop = y === 1 || y === 2;
+      const ridge = y === 4;
+      const under = y >= 13;
+      const pit = pxHash(x, y, 17) < 0.08;
+      const rust = pxHash(x, y, 31) < 0.05 && y >= 7;
+      let col = '#6f7a84';
+      if (y === 0 || y === 15) col = '#2a3036';
+      else if (bevelTop) col = '#aeb9c2';
+      else if (ridge) col = '#919da6';
+      else if (under) col = '#3c444c';
+      else if (rust) col = '#6e432f';
+      else if (pit) col = '#535d66';
+      csCtx.fillStyle = col;
       csCtx.fillRect(x, y, 1, 1);
     }
   }
 
-  // Crowbar red pry-tip/grip paint
-  const [cr, crCtx] = makePixelCanvas(12, 8);
-  for (let y = 0; y < 8; y++) {
-    for (let x = 0; x < 12; x++) {
-      const chip = (x + y * 3) % 7 === 0;
-      crCtx.fillStyle = chip ? '#8f2923' : y < 2 ? '#e35950' : '#c94138';
+  // Crowbar worn red industrial enamel with scratched metal chips (24x12)
+  const [cr, crCtx] = makePixelCanvas(24, 12);
+  for (let y = 0; y < 12; y++) {
+    for (let x = 0; x < 24; x++) {
+      const chip = pxHash(x, y, 43) < 0.14 && (x > 16 || y <= 2 || y >= 9);
+      const hi = y === 1 || y === 2;
+      const shadow = y >= 9;
+      crCtx.fillStyle = chip ? '#8f9ba3' : y === 0 || y === 11 ? '#4d1814' : hi ? '#eb6154' : shadow ? '#8c2820' : '#c94138';
       crCtx.fillRect(x, y, 1, 1);
     }
   }
@@ -1673,9 +1684,132 @@ function buildWeaponTextures() {
     }
   }
 
+  // Machete carbon-steel blade with fuller groove, oil-rubbed spine, subtle patina & gleaming honed edge (48x16)
+  // Note: tri-planar v=0 (canvas y=15) maps to -Y cutting edge!
+  const [mb, mbCtx] = makePixelCanvas(48, 16);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 48; x++) {
+      const spine = y <= 2;
+      const fuller = (y === 4 || y === 5) && x >= 3 && x <= 34;
+      const bevelLine = y === 11;
+      const edge = y >= 12;
+      const razor = y >= 14;
+      const scratch = pxHash(x, y, 71) < 0.08 && y >= 6 && y <= 10;
+      const patina = ((x >= 16 && x <= 23 && y >= 7 && y <= 10) || (x >= 32 && x <= 37 && y >= 7 && y <= 10)) && pxHash(x, y, 89) > 0.56;
+      let col = '#68757e';
+      if (y === 0) col = '#1a1f24';
+      else if (spine) col = '#2c343b';
+      else if (fuller) col = y === 4 ? '#39424a' : '#4e5862';
+      else if (razor) col = '#f3f8fb';
+      else if (edge) col = y === 12 ? '#b7c4ce' : '#d8e3ea';
+      else if (patina) col = '#5c2623';
+      else if (bevelLine) col = '#8c9aa4';
+      else if (scratch) col = '#8896a0';
+      mbCtx.fillStyle = col;
+      mbCtx.fillRect(x, y, 1, 1);
+    }
+  }
+
+  // Machete riveted walnut grip scales with brass pins (24x12)
+  const [mgr, mgrCtx] = makePixelCanvas(24, 12);
+  for (let y = 0; y < 12; y++) {
+    for (let x = 0; x < 24; x++) {
+      const rivet = (y >= 4 && y <= 7) && ((x >= 4 && x <= 6) || (x >= 11 && x <= 13) || (x >= 18 && x <= 20));
+      const tang = y === 0 || y === 11;
+      const grain = (x + y * 2) % 5 === 0;
+      mgrCtx.fillStyle = tang ? '#556068' : rivet ? '#d9b54a' : grain ? '#573923' : '#422a19';
+      mgrCtx.fillRect(x, y, 1, 1);
+    }
+  }
+
+  // Turned ash-wood baseball bat / hickory haft grain with dark toasted barrel bands (32x16)
+  const [bw, bwCtx] = makePixelCanvas(32, 16);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 32; x++) {
+      const wave = Math.sin(x * 0.38 + y * 0.7) > 0.55;
+      const hi = y <= 3;
+      const dark = y >= 12;
+      const scuff = x >= 18 && pxHash(x, y, 103) < 0.08;
+      bwCtx.fillStyle = scuff ? '#59361d' : hi ? '#d49d64' : dark ? '#664021' : wave ? '#8f5e35' : '#ad7749';
+      bwCtx.fillRect(x, y, 1, 1);
+    }
+  }
+
+  // Coiled twisted twin-strand galvanized & oxidized barbed wire (32x8)
+  const [wi, wiCtx] = makePixelCanvas(32, 8);
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 32; x++) {
+      const twist = (x + y * 2) % 6;
+      const rust = pxHash(x, y, 127) < 0.14;
+      wiCtx.fillStyle = rust ? '#783c29' : twist === 0 || twist === 1 ? '#e3ecee' : twist >= 4 ? '#3f474d' : '#7b8891';
+      wiCtx.fillRect(x, y, 1, 1);
+    }
+  }
+
+  // Weathered crimson fire axe head with steel collar & bright honed cutting bit along v=0 (-Y) (32x24)
+  const [ax, axCtx] = makePixelCanvas(32, 24);
+  for (let y = 0; y < 24; y++) {
+    for (let x = 0; x < 32; x++) {
+      const border = y === 0 || x === 0 || x === 31;
+      const collar = y <= 5 && x >= 10 && x <= 21;
+      const honedBevel = y >= 18;
+      const razor = y >= 21;
+      const chip = (y >= 15 && y <= 17 && pxHash(x, y, 149) < 0.35) || pxHash(x, y, 151) < 0.06;
+      const blood = y >= 19 && x >= 4 && x <= 14 && pxHash(x, y, 163) > 0.55;
+      let col = '#b52e26';
+      if (border) col = '#2a1614';
+      else if (blood) col = '#7a1919';
+      else if (razor) col = '#eef4f7';
+      else if (honedBevel) col = y === 18 ? '#87949e' : '#c6d1d9';
+      else if (collar) col = '#32383e';
+      else if (chip) col = '#6f7b85';
+      else if (y <= 8) col = '#df4f44';
+      axCtx.fillStyle = col;
+      axCtx.fillRect(x, y, 1, 1);
+    }
+  }
+
+  // Forged cast-iron sledgehammer head with machined chamfered strike faces & patina (32x16)
+  const [sl, slCtx] = makePixelCanvas(32, 16);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 32; x++) {
+      const faceBottom = y >= 13;
+      const faceTop = y <= 2;
+      const eyeBand = x >= 12 && x <= 19 && y >= 5 && y <= 10;
+      const pit = pxHash(x, y, 193) < 0.1;
+      const rust = pxHash(x, y, 197) < 0.07;
+      let col = '#444c54';
+      if (faceBottom || faceTop) col = y === 15 || y === 0 ? '#aeb9c2' : '#7b8791';
+      else if (eyeBand) col = '#262b30';
+      else if (rust) col = '#633f2a';
+      else if (pit) col = '#32383f';
+      else if (y <= 4) col = '#5d6770';
+      slCtx.fillStyle = col;
+      slCtx.fillRect(x, y, 1, 1);
+    }
+  }
+
+  // Cross-wrapped dark athletic tape & ribbed rubber grip (16x12)
+  const [rg, rgCtx] = makePixelCanvas(16, 12);
+  for (let y = 0; y < 12; y++) {
+    for (let x = 0; x < 16; x++) {
+      const seam = (x + y * 2) % 6 === 0;
+      const ridge = x % 4 === 1;
+      rgCtx.fillStyle = seam ? '#121417' : ridge ? '#33383f' : '#21252a';
+      rgCtx.fillRect(x, y, 1, 1);
+    }
+  }
+
   return {
     crowbarSteel: toNearestTexture(cs),
     crowbarRed: toNearestTexture(cr),
+    macheteBlade: toNearestTexture(mb),
+    macheteGrip: toNearestTexture(mgr),
+    batWood: toNearestTexture(bw),
+    barbedWire: toNearestTexture(wi),
+    axeHead: toNearestTexture(ax),
+    sledgeIron: toNearestTexture(sl),
+    rubberGrip: toNearestTexture(rg),
     pistolSlide: toNearestTexture(ps),
     pistolGrip: toNearestTexture(pg),
     shotgunWood: toNearestTexture(sw),
@@ -1686,6 +1820,37 @@ function buildWeaponTextures() {
     molotovGlass: toNearestTexture(mg),
     glove: toNearestTexture(gl),
   };
+}
+
+function buildMeleeSlashTexture(): THREE.CanvasTexture {
+  const w = 64;
+  const h = 32;
+  const [c, ctx] = makePixelCanvas(w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const nx = x / (w - 1); // 0..1 along arc width
+      const ny = y / (h - 1); // 0=outer edge, 1=inner trail
+      const arcCurve = Math.sin(nx * Math.PI);
+      if (arcCurve < 0.08) continue;
+      // Crescent thickness swells in middle of swing and tapers sharply at tips
+      const outer = 0.08 + (1 - arcCurve) * 0.42;
+      const inner = outer + 0.14 + arcCurve * 0.56;
+      if (ny < outer || ny > inner) continue;
+      const bandPos = (ny - outer) / Math.max(0.01, inner - outer);
+      const n = pxHash(x, y, 223);
+      // Tapered trailing pixel streaks
+      if (bandPos > 0.62 && n < (bandPos - 0.52) * 1.9) continue;
+      if (bandPos < 0.22) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
+      } else if (bandPos < 0.48) {
+        ctx.fillStyle = n > 0.25 ? 'rgba(245, 245, 240, 0.72)' : 'rgba(225, 225, 220, 0.48)';
+      } else {
+        ctx.fillStyle = `rgba(220, 220, 215, ${(Math.max(0.12, (1 - bandPos) * 0.7)).toFixed(2)})`;
+      }
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+  return toNearestTexture(c);
 }
 
 function buildItemDropTextures(): Record<ItemId, THREE.CanvasTexture> {
@@ -2002,6 +2167,7 @@ export class ThreePixelAtlas {
   public readonly woodDarkTex: THREE.CanvasTexture;
   public readonly ceilingTex: THREE.CanvasTexture;
   public readonly weaponTex: ReturnType<typeof buildWeaponTextures>;
+  public readonly meleeSlashTex: THREE.CanvasTexture;
   public readonly itemDropTex: Record<ItemId, THREE.CanvasTexture>;
   public readonly contactShadowTex: THREE.CanvasTexture;
   public readonly tentTex: THREE.CanvasTexture;
@@ -2134,6 +2300,13 @@ export class ThreePixelAtlas {
     this.weaponTex = buildWeaponTextures();
     this.track(this.weaponTex.crowbarSteel);
     this.track(this.weaponTex.crowbarRed);
+    this.track(this.weaponTex.macheteBlade);
+    this.track(this.weaponTex.macheteGrip);
+    this.track(this.weaponTex.batWood);
+    this.track(this.weaponTex.barbedWire);
+    this.track(this.weaponTex.axeHead);
+    this.track(this.weaponTex.sledgeIron);
+    this.track(this.weaponTex.rubberGrip);
     this.track(this.weaponTex.pistolSlide);
     this.track(this.weaponTex.pistolGrip);
     this.track(this.weaponTex.shotgunWood);
@@ -2143,6 +2316,7 @@ export class ThreePixelAtlas {
     this.track(this.weaponTex.lmgAmmoBox);
     this.track(this.weaponTex.molotovGlass);
     this.track(this.weaponTex.glove);
+    this.meleeSlashTex = this.track(buildMeleeSlashTexture());
     this.itemDropTex = buildItemDropTextures();
     for (const tex of Object.values(this.itemDropTex)) {
       this.track(tex);

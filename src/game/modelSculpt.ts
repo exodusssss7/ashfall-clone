@@ -31,9 +31,10 @@ export function createSculptedProfileGeometry(
   const bevelThickness = opts.bevelThickness ?? 0.02;
   const bevelSize = opts.bevelSize ?? 0.018;
   const bevelSegments = opts.bevelSegments ?? 1;
+  const coreDepth = Math.max(0.004, depth - bevelThickness * 2);
 
   const raw = new THREE.ExtrudeGeometry(shape, {
-    depth: Math.max(0.02, depth - bevelThickness * 2),
+    depth: coreDepth,
     bevelEnabled: bevelThickness > 0 && bevelSize > 0,
     bevelThickness,
     bevelSize,
@@ -42,7 +43,7 @@ export function createSculptedProfileGeometry(
   });
 
   // Center along Z so depth spans [-depth/2, +depth/2]
-  raw.translate(0, 0, -(depth - bevelThickness * 2) * 0.5);
+  raw.translate(0, 0, -coreDepth * 0.5);
 
   // Convert to non-indexed for crisp per-face tri-planar UVs & clean normals
   const geo = raw.index ? raw.toNonIndexed() : raw;
@@ -395,6 +396,78 @@ export function createDebrisShardGeometry(): THREE.BufferGeometry {
       z * (0.82 + h * 0.22)
     );
   }
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+/**
+ * Revolves a 2D [xOffset, radius] profile along the +X weapon axis with crisp
+ * cylindrical UVs (u along length, v around circumference) for turned bats, collars, and grips.
+ */
+export function createLatheWeaponGeometry(
+  profilePts: ReadonlyArray<readonly [number, number]>,
+  radialSegments = 16
+): THREE.BufferGeometry {
+  const pts = profilePts.map(([x, r]) => new THREE.Vector2(Math.max(0.0005, r), x));
+  const geo = new THREE.LatheGeometry(pts, radialSegments);
+  // Rotate so Lathe's +Y axis aligns along +X weapon shaft
+  geo.rotateZ(-Math.PI * 0.5);
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox!;
+  const spanX = Math.max(1e-4, bb.max.x - bb.min.x);
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    const u = clamp01((x - bb.min.x) / spanX);
+    const v = clamp01((Math.atan2(z, y) + Math.PI) / (Math.PI * 2));
+    uv.setXY(i, u, v);
+  }
+  uv.needsUpdate = true;
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/**
+ * Generates a continuous 3D helical wire coil around the +X axis with variable barrel radius,
+ * extruded via TubeGeometry for barbed-wire wraps and textured cordage.
+ */
+export function createHelicalWireGeometry(opts: {
+  startX: number;
+  endX: number;
+  radiusFn: (t: number) => number;
+  turns: number;
+  tubeRadius: number;
+  radialSegments?: number;
+  tubularSegments?: number;
+  phaseOffset?: number;
+}): THREE.BufferGeometry {
+  const sampleCount = Math.max(24, Math.round(opts.turns * 16));
+  const curvePts: THREE.Vector3[] = [];
+  const phase0 = opts.phaseOffset ?? 0;
+  for (let i = 0; i <= sampleCount; i++) {
+    const t = i / sampleCount;
+    const x = opts.startX + (opts.endX - opts.startX) * t;
+    const r = opts.radiusFn(t);
+    const angle = phase0 + t * opts.turns * Math.PI * 2;
+    curvePts.push(new THREE.Vector3(x, Math.cos(angle) * r, Math.sin(angle) * r));
+  }
+  const curve = new THREE.CatmullRomCurve3(curvePts);
+  const geo = new THREE.TubeGeometry(
+    curve,
+    opts.tubularSegments ?? sampleCount * 2,
+    opts.tubeRadius,
+    opts.radialSegments ?? 6,
+    false
+  );
   geo.computeVertexNormals();
   geo.computeBoundingSphere();
   return geo;

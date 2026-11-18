@@ -22,6 +22,7 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react';
+import { WEAPONS, isMeleeWeapon } from '../game/recipes';
 import type { HudSnapshot } from '../game/types';
 
 interface TouchControlsProps {
@@ -178,13 +179,15 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
   // Keep a separate left trigger like the reference; right-hand attack button or aim stick handles primary right-thumb combat.
   const showLeftTrigger = true;
 
+  const isMeleeEquipped = isMeleeWeapon(hud.equippedWeapon);
+
   const combatActionLabel = isFishing
     ? hud.fishing?.canHook
       ? 'REEL!'
       : 'PULL'
     : hud.buildMode
       ? 'PLACE'
-      : hud.equippedWeapon === 'crowbar'
+      : isMeleeEquipped
         ? 'SLASH'
         : hud.equippedWeapon === 'molotov'
           ? 'THROW'
@@ -194,7 +197,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
 
   const renderAttackIcon = (className: string) => {
     if (hud.buildMode) return <Hammer className={className} />;
-    if (hud.equippedWeapon === 'crowbar' && !isFishing) return <Sword className={className} />;
+    if (isMeleeEquipped && !isFishing) return <Sword className={className} />;
     if (hud.equippedWeapon === 'molotov' && !isFishing) return <Flame className={className} />;
     if ((hud.equippedWeapon === 'pistol' || hud.equippedWeapon === 'shotgun' || hud.equippedWeapon === 'lmg') && !isFishing) {
       return <Crosshair className={className} />;
@@ -204,7 +207,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
 
   const aimStickLabel = hud.buildMode
     ? 'Aim Build'
-    : hud.equippedWeapon === 'crowbar'
+    : isMeleeEquipped
       ? 'Aim & Swing'
       : hud.equippedWeapon === 'molotov'
         ? 'Aim & Throw'
@@ -259,7 +262,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                 ? 'Handbrake Drift Button'
                 : isFishing
                   ? 'Reel Fishing Line'
-                  : hud.equippedWeapon === 'crowbar' && isFps
+                  : isMeleeEquipped && isFps
                     ? 'Left Hand Slash Button'
                     : 'Left Hand Fire Button'
             }
@@ -576,8 +579,8 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                     ? 'Reel Fishing Line'
                     : hud.buildMode
                       ? 'Place Structure'
-                      : hud.equippedWeapon === 'crowbar'
-                        ? 'Slash Crowbar'
+                      : isMeleeEquipped
+                        ? `Slash ${WEAPONS[hud.equippedWeapon].name}`
                         : hud.equippedWeapon === 'molotov'
                           ? 'Throw Molotov'
                           : 'Fire Weapon'
