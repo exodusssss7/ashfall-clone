@@ -3,15 +3,21 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import {
   createCurvedTeethRowGeometry,
+  createSculptedBoilGeometry,
   createSculptedBootGeometry,
   createSculptedClawHandGeometry,
+  createSculptedHairCrownGeometry,
   createSculptedJawGeometry,
   createSculptedLimbSegmentGeometry,
   createSculptedMouthCavityGeometry,
   createSculptedNeckGeometry,
   createSculptedRibArchGeometry,
   createSculptedSkullGeometry,
+  createSculptedSpineFinGeometry,
+  createSculptedThroatSacGeometry,
   createSculptedTorsoGeometry,
+  createTatteredHemGeometry,
+  createTornCollarGeometry,
   getSkullMetrics,
 } from './zombieSculpt';
 import type { ZombieArchetype } from './types';
@@ -190,3 +196,38 @@ test('sculpted mandibles, 3D teeth rows, torsos, limbs, claws, and boots validat
   assertValidGeometry(rib, 'rib', 160);
   rib.dispose();
 });
+
+test('tattered clothing hems, collars, boils, hair crowns, dorsal spines, and throat sac validate cleanly', () => {
+  const hem = createTatteredHemGeometry({ topRx: 0.10, topRz: 0.14, length: 0.12, seed: 3 });
+  assertValidGeometry(hem, 'tattered-hem', 96);
+  assertMostlyOutwardWinding(hem, 'tattered-hem');
+  hem.dispose();
+
+  const collar = createTornCollarGeometry({ rx: 0.085, rz: 0.11, height: 0.055, seed: 5 });
+  assertValidGeometry(collar, 'torn-collar', 64);
+  assertMostlyOutwardWinding(collar, 'torn-collar');
+  collar.dispose();
+
+  for (let s = 1; s <= 3; s++) {
+    const boil = createSculptedBoilGeometry(s);
+    assertValidGeometry(boil, `boil-${s}`, 120);
+    assertMostlyOutwardWinding(boil, `boil-${s}`);
+    boil.dispose();
+  }
+
+  for (const kind of ['walker', 'runner'] as ZombieArchetype[]) {
+    const hair = createSculptedHairCrownGeometry(kind);
+    assertValidGeometry(hair, `hair-${kind}`, 160);
+    hair.dispose();
+  }
+
+  const spine = createSculptedSpineFinGeometry(5, 1.0);
+  assertValidGeometry(spine, 'spine-fin', 160);
+  spine.dispose();
+
+  const sac = createSculptedThroatSacGeometry();
+  assertValidGeometry(sac, 'throat-sac', 96);
+  assertMostlyOutwardWinding(sac, 'throat-sac');
+  sac.dispose();
+});
+

@@ -27,6 +27,95 @@ function toNearestTexture(canvas: HTMLCanvasElement, repeatX = 1, repeatY = 1): 
   return tex;
 }
 
+function toOrganicTexture(canvas: HTMLCanvasElement, wrapS = false): THREE.CanvasTexture {
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = 4;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = wrapS ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function paintSoftMottle(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  count: number,
+  colors: string[],
+  minR: number,
+  maxR: number,
+  alpha: number,
+  seed: number,
+  wrapX = true
+): void {
+  ctx.save();
+  for (let i = 0; i < count; i++) {
+    const rx = pxHash(i, 1, seed) * w;
+    const ry = pxHash(i, 2, seed) * h;
+    const r = minR + pxHash(i, 3, seed) * (maxR - minR);
+    const col = colors[Math.floor(pxHash(i, 4, seed) * colors.length) % colors.length];
+    const a = alpha * (0.55 + 0.45 * pxHash(i, 5, seed));
+    const drawAt = (cx: number) => {
+      const grad = ctx.createRadialGradient(cx, ry, r * 0.12, cx, ry, r);
+      grad.addColorStop(0, col);
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.globalAlpha = a;
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(cx, ry, r, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    drawAt(rx);
+    if (wrapX) {
+      if (rx - r < 0) drawAt(rx + w);
+      if (rx + r > w) drawAt(rx - w);
+    }
+  }
+  ctx.restore();
+}
+
+function paintFabricWeave(
+  ctx: CanvasRenderingContext2D,
+  x0: number,
+  y0: number,
+  w: number,
+  h: number,
+  hiColor: string,
+  darkColor: string,
+  seed: number
+): void {
+  ctx.save();
+  ctx.globalAlpha = 0.14;
+  ctx.fillStyle = darkColor;
+  for (let y = y0; y < y0 + h; y += 3) {
+    ctx.fillRect(x0, y, w, 1);
+  }
+  ctx.globalAlpha = 0.08;
+  ctx.fillStyle = hiColor;
+  for (let x = x0; x < x0 + w; x += 4) {
+    ctx.fillRect(x, y0, 1, h);
+  }
+  // Subtle directional cloth creases
+  ctx.globalAlpha = 0.18;
+  ctx.strokeStyle = darkColor;
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < 9; i++) {
+    const sx = x0 + pxHash(i, 11, seed) * w;
+    const sy = y0 + pxHash(i, 12, seed) * h * 0.7;
+    const len = 14 + pxHash(i, 13, seed) * 26;
+    const dx = (pxHash(i, 14, seed) - 0.5) * 14;
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.quadraticCurveTo(sx + dx * 0.6, sy + len * 0.5, sx + dx, sy + len);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 /**
  * Generates a high-resolution 32x32 square pixel-art canvas for any ground tile kind & variant,
  * preserving ASHFALL's gritty survival palette with crisp blades, cracks, planks, and mortar.
@@ -688,6 +777,7 @@ function buildActorHeadTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
   top: THREE.CanvasTexture;
   jaw?: THREE.CanvasTexture;
   wrap?: THREE.CanvasTexture;
+  eye?: THREE.CanvasTexture;
 } {
   if (kind === 'player') {
     const [cf, fctx] = makePixelCanvas(16, 16);
@@ -750,7 +840,7 @@ function buildActorHeadTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
     };
   }
 
-  // High-resolution 64x64 sculpted pixel-art textures for all zombie archetypes
+  // High-craft organic horror textures for all four zombie archetypes
   const S = 64;
   const [cf, fctx] = makePixelCanvas(S, S);
   const [cb, bctx] = makePixelCanvas(S, S);
@@ -759,247 +849,380 @@ function buildActorHeadTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
 
   const pal =
     kind === 'walker'
-      ? { skin: '#7d9478', hi: '#9db897', dark: '#4c6148', rot: '#2d3b2b', eye: '#ff4d42', eyeCore: '#ffe0b8', seed: 11 }
+      ? {
+          skin: '#7e8f77',
+          hi: '#a3b39a',
+          dark: '#465442',
+          rot: '#252e23',
+          bruise: '#3d2a30',
+          eye: '#e85a3a',
+          eyeRim: '#992218',
+          eyeCore: '#fff0c2',
+          seed: 11,
+        }
       : kind === 'runner'
-        ? { skin: '#996c68', hi: '#b88580', dark: '#5e3533', rot: '#381616', eye: '#ff5233', eyeCore: '#fff0bd', seed: 23 }
+        ? {
+            skin: '#966c68',
+            hi: '#ba8d86',
+            dark: '#572f2e',
+            rot: '#2e1213',
+            bruise: '#6e161a',
+            eye: '#ff4b2b',
+            eyeRim: '#a6140c',
+            eyeCore: '#fff6cc',
+            seed: 23,
+          }
         : kind === 'bloater'
-          ? { skin: '#6f8c49', hi: '#96b569', dark: '#415727', rot: '#273616', eye: '#c4f24b', eyeCore: '#f6ffd6', seed: 37 }
-          : { skin: '#58827d', hi: '#78aba5', dark: '#304c49', rot: '#1a2b2a', eye: '#6ef7be', eyeCore: '#e8fff6', seed: 53 };
+          ? {
+              skin: '#728554',
+              hi: '#95ab71',
+              dark: '#42522d',
+              rot: '#253017',
+              bruise: '#473e29',
+              eye: '#b5e342',
+              eyeRim: '#4f7314',
+              eyeCore: '#f6ffd6',
+              seed: 37,
+            }
+          : {
+              skin: '#5d7d7a',
+              hi: '#81a6a2',
+              dark: '#2e4544',
+              rot: '#172626',
+              bruise: '#1f3638',
+              eye: '#5ef2b5',
+              eyeRim: '#167a5c',
+              eyeCore: '#e8fff6',
+              seed: 53,
+            };
 
   for (const [idx, ctx] of [fctx, bctx, sctx, tctx].entries()) {
-    drawPixelRect(ctx, 0, 0, S, S, pal.dark);
-    drawZombieDither(ctx, 0, 0, S, S, pal.skin, pal.hi, pal.dark, pal.seed + idx * 7);
-    // Ambient lower-jaw/crown shading
-    drawPixelRect(ctx, 0, 50, S, 14, pal.dark);
-    drawPixelRect(ctx, 0, 0, S, 6, pal.hi);
+    drawPixelRect(ctx, 0, 0, S, S, pal.skin);
+    paintSoftMottle(ctx, S, S, 28, [pal.dark, pal.hi, pal.rot], 4, 14, 0.36, pal.seed + idx * 7, false);
   }
 
-  // Scalp / rotting cranial patches on back, side, and top
-  drawZombieDither(tctx, 8, 8, 48, 48, pal.dark, pal.skin, pal.rot, pal.seed + 91);
-  drawZombieDither(bctx, 4, 4, 56, 40, pal.dark, pal.skin, pal.rot, pal.seed + 97);
-  drawZombieDither(sctx, 4, 4, 56, 22, pal.dark, pal.skin, pal.rot, pal.seed + 101);
+  // Dedicated 64x32 anatomical lower mandible skin, gumline & dried-gore texture
+  const [cj, jctx] = makePixelCanvas(64, 32);
+  jctx.imageSmoothingEnabled = true;
+  jctx.fillStyle = pal.skin;
+  jctx.fillRect(0, 0, 64, 32);
+  paintSoftMottle(jctx, 64, 32, 34, [pal.dark, pal.hi, pal.bruise, pal.rot], 3, 10, 0.42, pal.seed + 199, false);
+  // Darkened bloodstained gum rim along top edge & deep chin under-shadow
+  const jawGrad = jctx.createLinearGradient(0, 0, 0, 32);
+  jawGrad.addColorStop(0, 'rgba(62, 8, 10, 0.92)');
+  jawGrad.addColorStop(0.22, 'rgba(92, 16, 18, 0.45)');
+  jawGrad.addColorStop(0.5, 'rgba(0, 0, 0, 0)');
+  jawGrad.addColorStop(1, 'rgba(18, 14, 14, 0.65)');
+  jctx.fillStyle = jawGrad;
+  jctx.fillRect(0, 0, 64, 32);
+  // Dried blood/bile drips running down the chin
+  const dripCol = kind === 'bloater' ? '#6c9122' : kind === 'spitter' ? '#2da878' : '#6b1012';
+  jctx.fillStyle = dripCol;
+  jctx.globalAlpha = 0.72;
+  for (let i = 0; i < 6; i++) {
+    const dx = 14 + i * 7 + (i % 2) * 2;
+    const dh = 10 + ((i * 7 + pal.seed) % 14);
+    jctx.fillRect(dx, 2, 2.5, dh);
+  }
+  jctx.globalAlpha = 1;
 
-  // Forehead wrinkles, rot blotches & brow ridge
-  drawZombieDither(fctx, 6, 4, 52, 12, pal.dark, pal.skin, pal.rot, pal.seed + 3);
-  drawPixelRect(fctx, 10, 17, 44, 4, pal.rot); // Heavy brow shadow
-  drawPixelRect(fctx, 12, 15, 18, 3, pal.hi);   // Brow bone highlights
-  drawPixelRect(fctx, 34, 15, 18, 3, pal.hi);
+  // High-detail 256x128 seamless spherical wrap aligned to createSculptedSkullGeometry UVs:
+  // x=128 is +X front face; eyes sit at x=113 & x=143, y=62; brow at y=52; nose at y=69; maxilla y=82..98.
+  const W = 256;
+  const H = 128;
+  const [cw, wctx] = makePixelCanvas(W, H);
+  wctx.imageSmoothingEnabled = true;
+  wctx.fillStyle = pal.skin;
+  wctx.fillRect(0, 0, W, H);
 
-  // Deeply sunken eye sockets + glowing irises + dark nasal cavity
-  drawPixelDisc(fctx, 20, 27, 8.5, '#120d0e');
-  drawPixelDisc(fctx, 44, 27, 8.5, '#120d0e');
-  drawPixelDisc(fctx, 20, 27, 6.0, '#1f1214');
-  drawPixelDisc(fctx, 44, 27, 6.0, '#1f1214');
-  drawPixelDisc(fctx, 20, 27, 3.6, pal.eye);
-  drawPixelDisc(fctx, 44, 27, 3.6, pal.eye);
-  drawPixelRect(fctx, 19, 26, 2, 2, pal.eyeCore);
-  drawPixelRect(fctx, 43, 26, 2, 2, pal.eyeCore);
+  // Organic cadaver skin mottling, subtle bruising, and cranial light/shadow falloff
+  paintSoftMottle(wctx, W, H, 120, [pal.dark, pal.hi, pal.bruise, pal.rot], 5, 22, 0.34, pal.seed + 307, true);
+  const skullVGrad = wctx.createLinearGradient(0, 0, 0, H);
+  skullVGrad.addColorStop(0, 'rgba(24, 28, 22, 0.44)');
+  skullVGrad.addColorStop(0.18, 'rgba(255, 255, 240, 0.08)');
+  skullVGrad.addColorStop(0.70, 'rgba(0, 0, 0, 0.0)');
+  skullVGrad.addColorStop(1, 'rgba(14, 10, 10, 0.78)');
+  wctx.fillStyle = skullVGrad;
+  wctx.fillRect(0, 0, W, H);
 
-  // Desiccated nasal bridge & dark cavity
-  drawPixelRect(fctx, 30, 22, 4, 12, pal.hi);
-  drawPixelRect(fctx, 28, 33, 3, 5, '#160d0f');
-  drawPixelRect(fctx, 33, 33, 3, 5, '#160d0f');
+  // Subtle scalp / nape hair shadow wrapping seamlessly across x=0/256 (-X back)
+  paintSoftMottle(wctx, W, 44, 48, [pal.rot, '#1c1816', pal.dark], 6, 18, 0.42, pal.seed + 313, true);
 
-  // Cheekbones & sunken hollows
-  drawPixelRect(fctx, 8, 32, 10, 4, pal.hi);
-  drawPixelRect(fctx, 46, 32, 10, 4, pal.hi);
-  drawPixelRect(fctx, 10, 36, 8, 8, pal.dark);
-  drawPixelRect(fctx, 46, 36, 8, 8, pal.dark);
+  // Sculpted brow ridge highlight + heavy angry glabella/supraorbital shadow crease
+  wctx.save();
+  wctx.strokeStyle = pal.rot;
+  wctx.lineWidth = 3.5;
+  wctx.globalAlpha = 0.72;
+  wctx.beginPath();
+  wctx.moveTo(104, 52);
+  wctx.quadraticCurveTo(118, 49, 128, 54);
+  wctx.quadraticCurveTo(138, 49, 152, 52);
+  wctx.stroke();
+  // Forehead frown wrinkles
+  wctx.lineWidth = 1.4;
+  wctx.globalAlpha = 0.45;
+  for (let fy = 40; fy <= 46; fy += 3) {
+    wctx.beginPath();
+    wctx.moveTo(112, fy);
+    wctx.quadraticCurveTo(128, fy + 2, 144, fy);
+    wctx.stroke();
+  }
+  // Brow bone & zygomatic cheekbone specular catchlights
+  wctx.globalAlpha = 0.34;
+  wctx.fillStyle = pal.hi;
+  wctx.beginPath();
+  wctx.ellipse(114, 49, 10, 2.5, -0.1, 0, Math.PI * 2);
+  wctx.ellipse(142, 49, 10, 2.5, 0.1, 0, Math.PI * 2);
+  wctx.ellipse(105, 70, 9, 3.5, 0.2, 0, Math.PI * 2);
+  wctx.ellipse(151, 70, 9, 3.5, -0.2, 0, Math.PI * 2);
+  wctx.fill();
+  wctx.restore();
 
-  // Upper gumline, dark wet oral cavity & jagged upper teeth (aligns cleanly with hinged lower jaw)
-  drawPixelRect(fctx, 14, 46, 36, 18, '#1a0506');
-  drawPixelRect(fctx, 16, 46, 32, 8, '#4a0c0e');
-  drawPixelRect(fctx, 20, 48, 24, 5, '#731416');
-  for (let tx = 16; tx <= 44; tx += 5) {
-    drawPixelRect(fctx, tx, 50, 3, 6, '#e8dec9');
-    drawPixelRect(fctx, tx + 1, 55, 2, 2, '#b0a289');
+  // Deeply bruised recessed orbital sockets precisely centered on 3D eyeball sockets (x=113, 143; y=62)
+  for (const ex of [113, 143]) {
+    const outer = wctx.createRadialGradient(ex, 62, 2, ex, 62, 12.5);
+    outer.addColorStop(0, 'rgba(10, 5, 6, 0.96)');
+    outer.addColorStop(0.55, 'rgba(26, 12, 15, 0.85)');
+    outer.addColorStop(0.82, 'rgba(48, 22, 26, 0.45)');
+    outer.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    wctx.fillStyle = outer;
+    wctx.beginPath();
+    wctx.arc(ex, 62, 12.5, 0, Math.PI * 2);
+    wctx.fill();
   }
 
-  // Archetype-specific gore & mutations
+  // Gaunt buccal cheek hollows & desiccated nasal bridge + dark piriform cavity
+  for (const cx of [100, 156]) {
+    const hollow = wctx.createRadialGradient(cx, 80, 2, cx, 80, 14);
+    hollow.addColorStop(0, 'rgba(24, 16, 18, 0.56)');
+    hollow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    wctx.fillStyle = hollow;
+    wctx.beginPath();
+    wctx.arc(cx, 80, 14, 0, Math.PI * 2);
+    wctx.fill();
+  }
+  wctx.fillStyle = pal.hi;
+  wctx.globalAlpha = 0.32;
+  wctx.fillRect(126, 56, 4, 11);
+  wctx.globalAlpha = 1;
+  const noseGrad = wctx.createRadialGradient(128, 70, 1, 128, 70, 6.5);
+  noseGrad.addColorStop(0, '#0f0708');
+  noseGrad.addColorStop(0.65, '#241013');
+  noseGrad.addColorStop(1, 'rgba(0,0,0,0)');
+  wctx.fillStyle = noseGrad;
+  wctx.beginPath();
+  wctx.ellipse(128, 70, 5.5, 6.5, 0, 0, Math.PI * 2);
+  wctx.fill();
+
+  // Narrow bloodied gumline & jagged dried-blood drips (avoids cartoon oval around snout)
+  const mouthGrad = wctx.createRadialGradient(128, 86, 3, 128, 86, 17);
+  mouthGrad.addColorStop(0, kind === 'spitter' ? 'rgba(12, 54, 42, 0.92)' : 'rgba(54, 8, 10, 0.90)');
+  mouthGrad.addColorStop(0.55, kind === 'spitter' ? 'rgba(20, 74, 58, 0.55)' : 'rgba(78, 14, 16, 0.46)');
+  mouthGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  wctx.fillStyle = mouthGrad;
+  wctx.beginPath();
+  wctx.ellipse(128, 86, 17, 7.5, 0, 0, Math.PI * 2);
+  wctx.fill();
+  // Irregular dried gore/bile drips down chin
+  wctx.fillStyle = kind === 'spitter' ? 'rgba(42, 168, 122, 0.45)' : kind === 'bloater' ? 'rgba(116, 152, 34, 0.50)' : 'rgba(84, 12, 14, 0.65)';
+  wctx.fillRect(118, 89, 3, 14);
+  wctx.fillRect(126, 91, 4, 18);
+  wctx.fillRect(136, 89, 3, 12);
+
+  // Archetype-specific facial horror storytelling
   if (kind === 'walker') {
-    // Exposed bone patch on left temple + bloody cheek tear + tattered hair tufts
-    drawPixelDisc(fctx, 14, 12, 5.5, '#d6cbb8');
-    drawPixelDisc(fctx, 14, 12, 3.5, '#b8ab96');
-    drawPixelRect(fctx, 40, 36, 12, 14, '#5c1111');
-    drawPixelRect(fctx, 43, 38, 6, 10, '#8f1d1d');
-    drawPixelRect(sctx, 18, 28, 22, 14, '#3a4734');
-    drawPixelRect(sctx, 24, 32, 10, 6, '#6e1919');
-    drawPixelRect(bctx, 14, 14, 16, 12, '#1f1918');
-    drawPixelRect(bctx, 36, 20, 14, 14, '#471515');
+    // Exposed pale fractured cranial bone on left temple + dark lacerated right cheek
+    const boneGrad = wctx.createRadialGradient(90, 34, 2, 90, 34, 14);
+    boneGrad.addColorStop(0, '#dbd0bb');
+    boneGrad.addColorStop(0.58, '#b0a38b');
+    boneGrad.addColorStop(0.84, '#591616');
+    boneGrad.addColorStop(1, 'rgba(0,0,0,0)');
+    wctx.fillStyle = boneGrad;
+    wctx.beginPath();
+    wctx.arc(90, 34, 14, 0, Math.PI * 2);
+    wctx.fill();
+
+    // Jagged cheek laceration exposing dark bruised tissue
+    wctx.fillStyle = 'rgba(72, 14, 16, 0.80)';
+    wctx.beginPath();
+    wctx.ellipse(150, 79, 9, 5.5, -0.35, 0, Math.PI * 2);
+    wctx.fill();
   } else if (kind === 'runner') {
-    // Flayed crimson muscle striations across cheeks, forehead & sides
-    for (let sy = 8; sy < 56; sy += 4) {
-      drawPixelRect(fctx, 6, sy, 10, 2, '#7d1b1b');
-      drawPixelRect(fctx, 48, sy + 1, 10, 2, '#7d1b1b');
-      drawPixelRect(sctx, 8, sy, 48, 2, '#6e1919');
+    // Organic raw crimson flayed musculature & deep coagulated gore across cheeks & brow (no zebra stripes!)
+    paintSoftMottle(wctx, W, H, 85, ['#661113', '#8a1c1e', '#3d090b', '#753835'], 5, 18, 0.58, 439, true);
+    // Subtle dark bruised brow & sinew crease lines
+    wctx.save();
+    wctx.strokeStyle = 'rgba(44, 6, 8, 0.62)';
+    wctx.lineWidth = 1.6;
+    for (let i = 0; i < 4; i++) {
+      const sy = 56 + i * 9;
+      wctx.beginPath();
+      wctx.moveTo(82, sy + 3);
+      wctx.quadraticCurveTo(96, sy - 2, 108, sy + 2);
+      wctx.stroke();
+      wctx.beginPath();
+      wctx.moveTo(174, sy + 3);
+      wctx.quadraticCurveTo(160, sy - 2, 148, sy + 2);
+      wctx.stroke();
     }
-    // Blood-splatter streaks dripping down mouth/chin
-    drawPixelRect(fctx, 18, 56, 4, 6, '#8f1919');
-    drawPixelRect(fctx, 28, 55, 5, 7, '#6b0f0f');
-    drawPixelRect(fctx, 41, 56, 4, 6, '#8f1919');
-    // Snarling red-rimmed feral eyes
-    drawPixelRect(fctx, 14, 21, 12, 2, '#a82323');
-    drawPixelRect(fctx, 38, 21, 12, 2, '#a82323');
-    drawPixelRect(bctx, 10, 10, 44, 28, '#541515');
+    wctx.restore();
   } else if (kind === 'bloater') {
-    // Bulging bioluminescent toxic pustules across brow, cheek, side & back
-    const pustules: Array<[CanvasRenderingContext2D, number, number, number]> = [
-      [fctx, 12, 12, 6.5],
-      [fctx, 50, 36, 7.5],
-      [fctx, 33, 9, 4.5],
-      [sctx, 22, 24, 9],
-      [sctx, 44, 40, 7],
-      [bctx, 24, 26, 10],
-      [bctx, 46, 36, 7],
-      [tctx, 24, 24, 8],
+    // Deep bruised skin folds & dark necrotic crater rings (no cartoonish lime polka dots!)
+    const craters: Array<[number, number, number]> = [
+      [88, 44, 14],
+      [164, 70, 15],
+      [54, 62, 13],
+      [204, 58, 13],
     ];
-    for (const [ctx, px, py, r] of pustules) {
-      drawPixelDisc(ctx, px, py, r + 1.5, '#2b3d16');
-      drawPixelDisc(ctx, px, py, r, '#9ed93b');
-      drawPixelDisc(ctx, px - 1, py - 1, r * 0.6, '#c8ff59');
-      drawPixelDisc(ctx, px - 1.5, py - 1.5, Math.max(1.2, r * 0.28), '#f5ffd9');
-    }
-    // Dripping lime bile from split jaw
-    drawPixelRect(fctx, 24, 52, 5, 10, '#85c42b');
-    drawPixelRect(fctx, 35, 53, 4, 9, '#b8f244');
-  } else {
-    // Spitter: glowing bioluminescent cyan-mint veins & split venom-oozing jaw
-    drawPixelRect(fctx, 22, 46, 20, 15, '#19473d');
-    drawPixelRect(fctx, 25, 48, 14, 13, '#5ef2b5');
-    drawPixelRect(fctx, 29, 50, 6, 10, '#d9fff0');
-    // Glowing vein network
-    for (let i = 0; i < 12; i++) {
-      drawPixelRect(fctx, 8 + i, 14 + (i % 4) * 3, 2, 2, '#5ef2b5');
-      drawPixelRect(fctx, 54 - i, 14 + (i % 4) * 3, 2, 2, '#5ef2b5');
-      drawPixelRect(sctx, 10 + i * 4, 20 + (i % 3) * 6, 3, 2, '#5ef2b5');
-    }
-    // Dorsal glowing spine nodes down back of skull
-    for (let sy = 10; sy <= 50; sy += 10) {
-      drawPixelDisc(bctx, 32, sy, 5, '#19473d');
-      drawPixelDisc(bctx, 32, sy, 3.2, '#5ef2b5');
-      drawPixelRect(bctx, 31, sy - 1, 2, 2, '#e8fff6');
-    }
-  }
-
-  // Dedicated 32x16 lower mandible skin & dried-gore texture (3D teeth sit cleanly on top!)
-  const [cj, jctx] = makePixelCanvas(32, 16);
-  drawPixelRect(jctx, 0, 0, 32, 16, pal.rot);
-  drawZombieDither(jctx, 0, 0, 32, 16, pal.skin, pal.hi, pal.dark, pal.seed + 199);
-  drawPixelRect(jctx, 0, 0, 32, 3, '#38090b'); // dark gum edge
-  drawPixelRect(jctx, 0, 12, 32, 4, pal.rot); // chin under-shadow
-  if (kind === 'runner') {
-    drawPixelRect(jctx, 7, 3, 4, 10, '#781414');
-    drawPixelRect(jctx, 19, 3, 5, 11, '#590d0d');
-  } else if (kind === 'bloater') {
-    drawPixelRect(jctx, 9, 5, 4, 8, '#6e9929');
-    drawPixelRect(jctx, 18, 6, 3, 7, '#4f731c');
-  } else if (kind === 'spitter') {
-    drawPixelRect(jctx, 10, 4, 12, 9, '#19473d');
-    drawPixelRect(jctx, 13, 5, 6, 7, '#3ab583');
-  } else {
-    drawPixelRect(jctx, 11, 4, 7, 8, '#4f1010');
-  }
-
-  // Seamless 128x64 continuous spherical wrap texture for sculpted organic skulls
-  // u = 0.5 (x = 64) faces +X front; u = 0 / 1 (x = 0 / 128) wraps seamlessly at -X back.
-  const [cw, wctx] = makePixelCanvas(128, 64);
-  drawPixelRect(wctx, 0, 0, 128, 64, pal.dark);
-  drawZombieDither(wctx, 0, 0, 128, 64, pal.skin, pal.hi, pal.dark, pal.seed + 307);
-  // Subtle crown/occiput scalp rot & lower-jaw occlusion
-  drawZombieDither(wctx, 0, 0, 128, 16, pal.dark, pal.skin, pal.rot, pal.seed + 313);
-  drawPixelRect(wctx, 0, 50, 128, 14, pal.rot);
-  // Forehead brow crease + cheekbone highlights (no fake painted sticker eyes!)
-  drawZombieDither(wctx, 42, 16, 44, 8, pal.dark, pal.hi, pal.rot, pal.seed + 331);
-  drawPixelRect(wctx, 48, 22, 32, 3, pal.rot);
-  drawPixelRect(wctx, 46, 20, 16, 2, pal.hi);
-  drawPixelRect(wctx, 66, 20, 16, 2, pal.hi);
-  // Deeply shadowed eye socket rings + torn nasal recess
-  drawPixelDisc(wctx, 54, 30, 6.2, '#170c0e');
-  drawPixelDisc(wctx, 74, 30, 6.2, '#170c0e');
-  drawPixelDisc(wctx, 54, 30, 3.6, '#0b0607');
-  drawPixelDisc(wctx, 74, 30, 3.6, '#0b0607');
-  drawPixelRect(wctx, 62, 26, 4, 8, pal.hi);
-  drawPixelRect(wctx, 61, 34, 6, 5, '#190c0e');
-  // Upper bloody gumline & maxilla stain
-  drawPixelRect(wctx, 48, 43, 32, 12, '#3d090b');
-  drawPixelRect(wctx, 52, 45, 24, 7, '#6b1214');
-
-  if (kind === 'walker') {
-    // Exposed left parietal bone patch + bloody cheek laceration + tattered hair on nape
-    drawPixelDisc(wctx, 42, 14, 7, '#d6cbb8');
-    drawPixelDisc(wctx, 42, 14, 4.5, '#b8ab96');
-    drawPixelRect(wctx, 76, 34, 14, 15, '#5c1111');
-    drawPixelRect(wctx, 79, 36, 8, 11, '#8f1d1d');
-    drawPixelRect(wctx, 4, 10, 18, 22, '#1f1918');
-    drawPixelRect(wctx, 106, 10, 18, 22, '#1f1918');
-  } else if (kind === 'runner') {
-    // Flayed crimson muscle striations wrapping cheeks/temples + blood around snout
-    for (let sy = 14; sy < 52; sy += 4) {
-      drawPixelRect(wctx, 26, sy, 22, 2, '#7d1b1b');
-      drawPixelRect(wctx, 80, sy + 1, 22, 2, '#7d1b1b');
-    }
-    drawPixelRect(wctx, 52, 48, 24, 12, '#7d1414');
-    drawPixelRect(wctx, 48, 24, 12, 2, '#a82323');
-    drawPixelRect(wctx, 68, 24, 12, 2, '#a82323');
-  } else if (kind === 'bloater') {
-    // Tumorous lime pustule clusters wrapping temples, brow, cheeks & occiput
-    const wrapPustules: Array<[number, number, number]> = [
-      [44, 18, 6.5],
-      [82, 34, 7],
-      [28, 30, 8],
-      [100, 28, 7.5],
-      [14, 26, 7],
-      [114, 26, 7],
-    ];
-    for (const [px, py, r] of wrapPustules) {
-      drawPixelDisc(wctx, px, py, r + 1.5, '#2b3d16');
-      drawPixelDisc(wctx, px, py, r, '#9ed93b');
-      drawPixelDisc(wctx, px - 1, py - 1, r * 0.58, '#c8ff59');
-      drawPixelDisc(wctx, px - 1.5, py - 1.5, Math.max(1.2, r * 0.25), '#f5ffd9');
+    for (const [cx, cy, r] of craters) {
+      const cg = wctx.createRadialGradient(cx, cy, r * 0.2, cx, cy, r);
+      cg.addColorStop(0, 'rgba(130, 168, 42, 0.60)');
+      cg.addColorStop(0.55, 'rgba(44, 58, 22, 0.78)');
+      cg.addColorStop(1, 'rgba(0,0,0,0)');
+      wctx.fillStyle = cg;
+      wctx.beginPath();
+      wctx.arc(cx, cy, r, 0, Math.PI * 2);
+      wctx.fill();
     }
   } else {
-    // Spitter: bioluminescent cyan venom veins + glowing cheek sac markings + dorsal skull nodes
-    drawPixelDisc(wctx, 36, 40, 9, '#19473d');
-    drawPixelDisc(wctx, 92, 40, 9, '#19473d');
-    drawPixelDisc(wctx, 36, 40, 5.5, '#4be3a5');
-    drawPixelDisc(wctx, 92, 40, 5.5, '#4be3a5');
-    for (let i = 0; i < 14; i++) {
-      drawPixelRect(wctx, 36 + i, 18 + (i % 4) * 3, 2, 2, '#5ef2b5');
-      drawPixelRect(wctx, 92 - i, 18 + (i % 4) * 3, 2, 2, '#5ef2b5');
+    // Spitter: gaunt corpse-teal mottling + localized bioluminescent venom glands on lower cheeks (no forehead stripes!)
+    paintSoftMottle(wctx, W, H, 65, ['#243b39', '#4a6b68', '#172928', '#335952'], 5, 18, 0.44, 449, true);
+    wctx.save();
+    for (const gx of [86, 170]) {
+      const gg = wctx.createRadialGradient(gx, 78, 2, gx, 78, 16);
+      gg.addColorStop(0, 'rgba(72, 228, 164, 0.52)');
+      gg.addColorStop(0.55, 'rgba(20, 74, 60, 0.65)');
+      gg.addColorStop(1, 'rgba(0,0,0,0)');
+      wctx.fillStyle = gg;
+      wctx.beginPath();
+      wctx.arc(gx, 78, 16, 0, Math.PI * 2);
+      wctx.fill();
     }
-    for (let sy = 14; sy <= 48; sy += 9) {
-      drawPixelDisc(wctx, 4, sy, 3.5, '#5ef2b5');
-      drawPixelDisc(wctx, 124, sy, 3.5, '#5ef2b5');
+    // Delicate lower-jaw glowing veins branching from cheek glands
+    wctx.strokeStyle = 'rgba(76, 232, 170, 0.58)';
+    wctx.lineWidth = 1.4;
+    for (let i = 0; i < 3; i++) {
+      const yStart = 66 + i * 9;
+      wctx.beginPath();
+      wctx.moveTo(80, yStart + 4);
+      wctx.quadraticCurveTo(96, yStart, 108, yStart + 3);
+      wctx.stroke();
+      wctx.beginPath();
+      wctx.moveTo(176, yStart + 4);
+      wctx.quadraticCurveTo(160, yStart, 148, yStart + 3);
+      wctx.stroke();
     }
+    wctx.restore();
   }
 
-  const wrapHeadTex = toNearestTexture(cw);
-  wrapHeadTex.wrapS = THREE.RepeatWrapping;
-  wrapHeadTex.wrapT = THREE.ClampToEdgeWrapping;
+  // Dedicated 64x64 horror eyeball texture (iris/pupil centered at 32,32 -> faces +X on SphereGeometry!)
+  const [ce, ectx] = makePixelCanvas(64, 64);
+  ectx.imageSmoothingEnabled = true;
+  // Dark bloodshot necrotic sclera
+  ectx.fillStyle = kind === 'spitter' ? '#132422' : '#261a1a';
+  ectx.fillRect(0, 0, 64, 64);
+  const scleraGrad = ectx.createRadialGradient(32, 32, 4, 32, 32, 26);
+  scleraGrad.addColorStop(0, kind === 'spitter' ? '#a6ffe0' : '#d6c8b8');
+  scleraGrad.addColorStop(0.55, kind === 'runner' ? '#a85952' : '#857168');
+  scleraGrad.addColorStop(1, '#1a0c0d');
+  ectx.fillStyle = scleraGrad;
+  ectx.beginPath();
+  ectx.arc(32, 32, 24, 0, Math.PI * 2);
+  ectx.fill();
+  // Bloodshot capillaries radiating from outer rim
+  ectx.strokeStyle = kind === 'spitter' ? 'rgba(42, 180, 132, 0.55)' : 'rgba(138, 20, 20, 0.65)';
+  ectx.lineWidth = 1.2;
+  for (let a = 0; a < 10; a++) {
+    const ang = (a / 10) * Math.PI * 2 + 0.2;
+    ectx.beginPath();
+    ectx.moveTo(32 + Math.cos(ang) * 21, 32 + Math.sin(ang) * 21);
+    ectx.lineTo(32 + Math.cos(ang + 0.08) * 12, 32 + Math.sin(ang + 0.08) * 12);
+    ectx.stroke();
+  }
+  // Glowing colored limbal ring + iris
+  const irisGrad = ectx.createRadialGradient(32, 32, 2, 32, 32, 11.5);
+  irisGrad.addColorStop(0, pal.eyeCore);
+  irisGrad.addColorStop(0.48, pal.eye);
+  irisGrad.addColorStop(0.88, pal.eyeRim);
+  irisGrad.addColorStop(1, '#0d0607');
+  ectx.fillStyle = irisGrad;
+  ectx.beginPath();
+  ectx.arc(32, 32, 11.5, 0, Math.PI * 2);
+  ectx.fill();
+  // Razor-sharp contracted horror pupil (vertical feral slit on Spitter/Runner, pinpoint on Walker/Bloater)
+  ectx.fillStyle = '#070405';
+  ectx.beginPath();
+  if (kind === 'spitter' || kind === 'runner') {
+    ectx.ellipse(32, 32, 2.6, 6.2, 0, 0, Math.PI * 2);
+  } else {
+    ectx.arc(32, 32, 3.6, 0, Math.PI * 2);
+  }
+  ectx.fill();
+  // Wet cornea specular glint + subtle upper brow shadow
+  ectx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+  ectx.beginPath();
+  ectx.arc(35.5, 28.5, 2.0, 0, Math.PI * 2);
+  ectx.fill();
+  const lidShadow = ectx.createLinearGradient(0, 14, 0, 30);
+  lidShadow.addColorStop(0, 'rgba(8, 4, 5, 0.72)');
+  lidShadow.addColorStop(1, 'rgba(8, 4, 5, 0)');
+  ectx.fillStyle = lidShadow;
+  ectx.fillRect(0, 0, 64, 30);
 
   return {
-    front: toNearestTexture(cf),
-    back: toNearestTexture(cb),
-    side: toNearestTexture(cs),
-    top: toNearestTexture(ct),
-    jaw: toNearestTexture(cj),
-    wrap: wrapHeadTex,
+    front: toOrganicTexture(cf, false),
+    back: toOrganicTexture(cb, false),
+    side: toOrganicTexture(cs, false),
+    top: toOrganicTexture(ct, false),
+    jaw: toOrganicTexture(cj, false),
+    wrap: toOrganicTexture(cw, true),
+    eye: toOrganicTexture(ce, false),
   };
 }
 
 function buildPustuleTexture(cyan: boolean): THREE.CanvasTexture {
-  const [c, ctx] = makePixelCanvas(16, 16);
-  const rim = cyan ? '#112e27' : '#263812';
-  const base = cyan ? '#29876d' : '#78ad2b';
-  const mid = cyan ? '#5ef2b5' : '#b8f244';
-  const hot = cyan ? '#e0fff3' : '#f2ffd1';
-  drawPixelRect(ctx, 0, 0, 16, 16, rim);
-  drawZombieDither(ctx, 1, 1, 14, 14, base, mid, rim, cyan ? 401 : 409);
-  drawPixelDisc(ctx, 8, 8, 5.2, mid);
-  drawPixelDisc(ctx, 6.5, 6.5, 2.8, hot);
-  drawPixelRect(ctx, 10, 11, 2, 2, rim);
-  drawPixelRect(ctx, 3, 10, 2, 2, rim);
-  return toNearestTexture(c);
+  // 64x64 organic boil texture: y=0 (v=1) is taut glowing apex, y=64 (v=0) is dark necrotic base collar
+  const [c, ctx] = makePixelCanvas(64, 64);
+  ctx.imageSmoothingEnabled = true;
+  const grad = ctx.createLinearGradient(0, 0, 0, 64);
+  if (cyan) {
+    grad.addColorStop(0, '#c8ffeb');
+    grad.addColorStop(0.24, '#56ebb2');
+    grad.addColorStop(0.56, '#1f6e59');
+    grad.addColorStop(0.84, '#132e2a');
+    grad.addColorStop(1, '#0b1918');
+  } else {
+    grad.addColorStop(0, '#ecffb8');
+    grad.addColorStop(0.26, '#a5d63e');
+    grad.addColorStop(0.58, '#536e22');
+    grad.addColorStop(0.84, '#2a3317');
+    grad.addColorStop(1, '#1c1914');
+  }
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 64);
+  paintSoftMottle(
+    ctx,
+    64,
+    64,
+    24,
+    cyan ? ['#245e4f', '#7dffcc', '#122924'] : ['#3d4f1a', '#c9f059', '#2b1e16'],
+    4,
+    12,
+    0.34,
+    cyan ? 401 : 409,
+    true
+  );
+  // Fine inflamed capillaries climbing from dark crater rim toward taut apex
+  ctx.strokeStyle = cyan ? 'rgba(18, 64, 52, 0.55)' : 'rgba(92, 24, 18, 0.45)';
+  ctx.lineWidth = 1.2;
+  for (let i = 0; i < 8; i++) {
+    const bx = i * 8 + 4;
+    ctx.beginPath();
+    ctx.moveTo(bx, 62);
+    ctx.quadraticCurveTo(bx + (i % 2 ? 4 : -4), 38, bx + (i % 2 ? -2 : 2), 18);
+    ctx.stroke();
+  }
+  return toOrganicTexture(c, true);
 }
 
 function buildActorLimbTextures(kind: 'player' | 'walker' | 'runner' | 'bloater' | 'spitter'): {
@@ -1022,61 +1245,130 @@ function buildActorLimbTextures(kind: 'player' | 'walker' | 'runner' | 'bloater'
     return { sleeve: toNearestTexture(cs), leg: toNearestTexture(cl) };
   }
 
-  const [cs, sctx] = makePixelCanvas(32, 48);
-  const [cl, lctx] = makePixelCanvas(32, 48);
+  // Crisp 128x128 organic limb textures: tattered fabric upper sleeve -> gaunt rotting forearm;
+  // weathered stitched trousers with torn knee bone & mud-caked ankle hems.
+  const S = 128;
+  const [cs, sctx] = makePixelCanvas(S, S);
+  const [cl, lctx] = makePixelCanvas(S, S);
+  sctx.imageSmoothingEnabled = true;
+  lctx.imageSmoothingEnabled = true;
 
   const sleevePal =
     kind === 'walker'
-      ? { cloth: '#614a42', clothDark: '#3a2b26', flesh: '#7d9478', hi: '#9db897', dark: '#4c6148', seed: 101 }
+      ? { cloth: '#4f3e37', clothHi: '#6b544b', clothDark: '#2c211d', flesh: '#7c8e74', hi: '#9fb096', dark: '#475742', seed: 101 }
       : kind === 'runner'
-        ? { cloth: '#7f2c2c', clothDark: '#4a1717', flesh: '#996c68', hi: '#b88580', dark: '#5e3533', seed: 107 }
+        ? { cloth: '#612525', clothHi: '#823434', clothDark: '#361212', flesh: '#946864', hi: '#b58680', dark: '#542d2b', seed: 107 }
         : kind === 'bloater'
-          ? { cloth: '#485435', clothDark: '#2a331e', flesh: '#6f8c49', hi: '#96b569', dark: '#415727', seed: 113 }
-          : { cloth: '#38464d', clothDark: '#20292e', flesh: '#58827d', hi: '#78aba5', dark: '#304c49', seed: 127 };
+          ? { cloth: '#454f34', clothHi: '#5e6b48', clothDark: '#262d1c', flesh: '#718554', hi: '#94ab70', dark: '#3f4f2b', seed: 113 }
+          : { cloth: '#313d42', clothHi: '#46575e', clothDark: '#1b2326', flesh: '#5b7b78', hi: '#7ea19d', dark: '#2d4543', seed: 127 };
 
   const pantsPal =
     kind === 'walker'
-      ? { main: '#2b3036', hi: '#3f464f', dark: '#181b1f', seed: 131 }
+      ? { main: '#2c3238', hi: '#414a52', dark: '#171a1e', seed: 131 }
       : kind === 'runner'
-        ? { main: '#202329', hi: '#343a45', dark: '#111317', seed: 137 }
+        ? { main: '#22252b', hi: '#353a44', dark: '#111317', seed: 137 }
         : kind === 'bloater'
-          ? { main: '#2d3326', hi: '#434d39', dark: '#181c14', seed: 149 }
-          : { main: '#21262b', hi: '#343c45', dark: '#121517', seed: 151 };
+          ? { main: '#323828', hi: '#48523a', dark: '#1b1f15', seed: 149 }
+          : { main: '#22282d', hi: '#343e46', dark: '#111518', seed: 151 };
 
-  // Arm / sleeve: tattered upper fabric + rotting forearm + grime/blood/pustules
-  drawPixelRect(sctx, 0, 0, 32, 48, sleevePal.clothDark);
-  drawZombieDither(sctx, 0, 0, 32, 20, sleevePal.cloth, sleevePal.cloth, sleevePal.clothDark, sleevePal.seed);
-  drawZombieDither(sctx, 0, 20, 32, 28, sleevePal.flesh, sleevePal.hi, sleevePal.dark, sleevePal.seed + 5);
-  // Jagged torn fabric fringe
-  for (let x = 2; x < 30; x += 4) {
-    drawPixelRect(sctx, x, 18, 2, 5, sleevePal.clothDark);
+  // Arm sleeve (y=0..56 = v=1.0..0.56 upper arm) + exposed rotting forearm (y=56..128 = v=0.56..0.0)
+  sctx.fillStyle = sleevePal.cloth;
+  sctx.fillRect(0, 0, S, 60);
+  paintSoftMottle(sctx, S, 60, 32, [sleevePal.clothDark, sleevePal.clothHi, '#241b16'], 6, 18, 0.35, sleevePal.seed, true);
+  paintFabricWeave(sctx, 0, 0, S, 58, sleevePal.clothHi, sleevePal.clothDark, sleevePal.seed);
+
+  sctx.fillStyle = sleevePal.flesh;
+  sctx.fillRect(0, 56, S, S - 56);
+  paintSoftMottle(sctx, S, S - 56, 42, [sleevePal.dark, sleevePal.hi, '#3b2424'], 5, 16, 0.38, sleevePal.seed + 5, true);
+  // Subtle forearm tendon lines + wrist grime
+  sctx.strokeStyle = sleevePal.dark;
+  sctx.globalAlpha = 0.42;
+  sctx.lineWidth = 2;
+  for (let tx = 14; tx < S; tx += 22) {
+    sctx.beginPath();
+    sctx.moveTo(tx, 62);
+    sctx.lineTo(tx + 3, 122);
+    sctx.stroke();
   }
+  sctx.globalAlpha = 1;
+
+  // Jagged torn cloth cuff overlapping top of forearm with cast shadow
+  sctx.fillStyle = 'rgba(12, 10, 10, 0.55)';
+  sctx.beginPath();
+  sctx.moveTo(0, 52);
+  for (let x = 0; x <= S; x += 8) {
+    const jag = 54 + ((x * 7 + sleevePal.seed) % 13);
+    sctx.lineTo(x, jag + 4);
+  }
+  sctx.lineTo(S, 52);
+  sctx.closePath();
+  sctx.fill();
+
+  sctx.fillStyle = sleevePal.clothDark;
+  sctx.beginPath();
+  sctx.moveTo(0, 48);
+  for (let x = 0; x <= S; x += 8) {
+    const jag = 52 + ((x * 7 + sleevePal.seed) % 13);
+    sctx.lineTo(x, jag);
+  }
+  sctx.lineTo(S, 48);
+  sctx.closePath();
+  sctx.fill();
+
+  // Archetype forearm stains (blood / necrotic bruise / acid veins)
   if (kind === 'runner') {
-    drawPixelRect(sctx, 8, 22, 6, 22, '#7a1919');
-    drawPixelRect(sctx, 18, 26, 5, 16, '#9c2424');
+    paintSoftMottle(sctx, S, 64, 20, ['#781214', '#4d0a0c'], 5, 14, 0.65, 611, true);
+    sctx.fillStyle = 'rgba(116, 16, 18, 0.55)';
+    sctx.fillRect(0, 96, S, 32);
   } else if (kind === 'bloater') {
-    drawPixelDisc(sctx, 16, 30, 5, '#9ed93b');
-    drawPixelDisc(sctx, 15, 29, 3, '#c8ff59');
+    paintSoftMottle(sctx, S, 70, 16, ['#3a4720', '#7ea82d', '#2b2418'], 5, 14, 0.48, 613, true);
   } else if (kind === 'spitter') {
-    drawPixelRect(sctx, 12, 22, 4, 20, '#5ef2b5');
+    sctx.strokeStyle = 'rgba(80, 232, 170, 0.65)';
+    sctx.lineWidth = 2;
+    for (let i = 0; i < 4; i++) {
+      const vx = 18 + i * 30;
+      sctx.beginPath();
+      sctx.moveTo(vx, 60);
+      sctx.quadraticCurveTo(vx + 6, 90, vx - 4, 124);
+      sctx.stroke();
+    }
   } else {
-    drawPixelRect(sctx, 10, 28, 10, 6, '#5c1414');
+    paintSoftMottle(sctx, S, 60, 12, ['#541214', '#38221d'], 4, 12, 0.52, 607, true);
   }
 
-  // Legs: torn knee + stitching + mud-caked cuffs
-  drawPixelRect(lctx, 0, 0, 32, 48, pantsPal.dark);
-  drawZombieDither(lctx, 0, 0, 32, 48, pantsPal.main, pantsPal.hi, pantsPal.dark, pantsPal.seed);
-  // Vertical seam + knee tear exposing flesh/bone
-  drawPixelRect(lctx, 15, 0, 2, 48, pantsPal.dark);
-  drawPixelRect(lctx, 6, 18, 18, 8, '#161414');
-  drawPixelRect(lctx, 8, 19, 14, 6, sleevePal.dark);
-  drawPixelRect(lctx, 11, 20, 8, 3, '#cfc3ab'); // kneecap bone
-  // Muddy hem
-  drawZombieDither(lctx, 0, 38, 32, 10, '#29211b', '#382e26', '#17120e', pantsPal.seed + 9);
+  // Trousers: weathered woven fabric + side stitching + torn knee hole revealing kneecap + muddy hem
+  lctx.fillStyle = pantsPal.main;
+  lctx.fillRect(0, 0, S, S);
+  paintSoftMottle(lctx, S, S, 55, [pantsPal.dark, pantsPal.hi, '#241e19'], 6, 20, 0.36, pantsPal.seed, true);
+  paintFabricWeave(lctx, 0, 0, S, S, pantsPal.hi, pantsPal.dark, pantsPal.seed);
+  // Outseam stitching along sides
+  lctx.fillStyle = pantsPal.dark;
+  lctx.fillRect(30, 0, 3, S);
+  lctx.fillRect(94, 0, 3, S);
+  // Torn knee opening at front (x=64, y=60) showing bruised flesh & pale patella bone
+  lctx.fillStyle = '#121010';
+  lctx.beginPath();
+  lctx.ellipse(64, 62, 18, 11, -0.08, 0, Math.PI * 2);
+  lctx.fill();
+  lctx.fillStyle = sleevePal.dark;
+  lctx.beginPath();
+  lctx.ellipse(64, 62, 14, 8, -0.08, 0, Math.PI * 2);
+  lctx.fill();
+  lctx.fillStyle = '#cbc0a8';
+  lctx.beginPath();
+  lctx.ellipse(64, 61, 7, 4.5, 0, 0, Math.PI * 2);
+  lctx.fill();
+  // Mud-caked lower cuffs
+  const mudGrad = lctx.createLinearGradient(0, 96, 0, S);
+  mudGrad.addColorStop(0, 'rgba(38, 29, 21, 0)');
+  mudGrad.addColorStop(0.55, 'rgba(38, 29, 21, 0.72)');
+  mudGrad.addColorStop(1, 'rgba(22, 17, 13, 0.94)');
+  lctx.fillStyle = mudGrad;
+  lctx.fillRect(0, 96, S, 32);
 
   return {
-    sleeve: toNearestTexture(cs),
-    leg: toNearestTexture(cl),
+    sleeve: toOrganicTexture(cs, true),
+    leg: toOrganicTexture(cl, true),
   };
 }
 
@@ -1119,161 +1411,187 @@ function buildActorTorsoTextures(kind: 'player' | 'walker' | 'runner' | 'bloater
 
   const palette =
     kind === 'walker'
-      ? { main: '#614a42', hi: '#7d6056', dark: '#3a2b26', seed: 201 }
+      ? { main: '#4f3e37', hi: '#6e574d', dark: '#291f1c', skin: '#7c8e74', seed: 201 }
       : kind === 'runner'
-        ? { main: '#7f2c2c', hi: '#a63d3d', dark: '#4a1717', seed: 211 }
+        ? { main: '#5e2222', hi: '#823232', dark: '#301010', skin: '#946864', seed: 211 }
         : kind === 'bloater'
-          ? { main: '#485435', hi: '#627349', dark: '#2a331e', seed: 223 }
-          : { main: '#38464d', hi: '#4e626b', dark: '#20292e', seed: 229 };
+          ? { main: '#465035', hi: '#606d49', dark: '#242b1b', skin: '#718554', seed: 223 }
+          : { main: '#313d42', hi: '#485961', dark: '#192124', skin: '#5b7b78', seed: 229 };
 
   for (const [idx, ctx] of [fctx, bctx, sctx].entries()) {
-    drawPixelRect(ctx, 0, 0, S, S, palette.dark);
-    drawZombieDither(ctx, 0, 0, S, S, palette.main, palette.hi, palette.dark, palette.seed + idx * 13);
-    drawPixelRect(ctx, 0, 0, S, 7, palette.hi);
-    drawPixelRect(ctx, 0, 52, S, 12, palette.dark);
+    drawPixelRect(ctx, 0, 0, S, S, palette.main);
+    paintSoftMottle(ctx, S, S, 24, [palette.dark, palette.hi], 5, 16, 0.35, palette.seed + idx * 13, false);
   }
+
+  // High-detail 256x128 seamless cylindrical wrap aligned to createSculptedTorsoGeometry:
+  // x=128 is +X front chest, x=0/256 is -X spine/back, y=0 top shoulders, y=128 pelvis.
+  const W = 256;
+  const H = 128;
+  const [cwt, wtctx] = makePixelCanvas(W, H);
+  wtctx.imageSmoothingEnabled = true;
+  wtctx.fillStyle = palette.main;
+  wtctx.fillRect(0, 0, W, H);
+  paintSoftMottle(wtctx, W, H, 110, [palette.dark, palette.hi, '#1e1915'], 6, 24, 0.38, palette.seed + 503, true);
+  paintFabricWeave(wtctx, 0, 0, W, H, palette.hi, palette.dark, palette.seed + 509);
+
+  // Top shoulder dirt/highlight & lower waist shadow
+  const torsoGrad = wtctx.createLinearGradient(0, 0, 0, H);
+  torsoGrad.addColorStop(0, 'rgba(255, 250, 235, 0.10)');
+  torsoGrad.addColorStop(0.25, 'rgba(0, 0, 0, 0)');
+  torsoGrad.addColorStop(0.82, 'rgba(12, 10, 9, 0.32)');
+  torsoGrad.addColorStop(1, 'rgba(8, 7, 7, 0.68)');
+  wtctx.fillStyle = torsoGrad;
+  wtctx.fillRect(0, 0, W, H);
 
   if (kind === 'walker') {
-    // Torn jacket lapels + deep chest cavity + 4 pairs of ivory ribs + dripping blood
-    drawPixelRect(fctx, 14, 10, 36, 36, '#380b0b');
-    drawPixelRect(fctx, 18, 12, 28, 32, '#6e1616');
-    drawPixelRect(fctx, 29, 12, 6, 32, '#420c0c'); // sternum gap
-    for (let ry = 15; ry <= 39; ry += 7) {
-      drawPixelRect(fctx, 17, ry, 11, 4, '#e6dcc8');
-      drawPixelRect(fctx, 36, ry, 11, 4, '#e6dcc8');
-      drawPixelRect(fctx, 18, ry + 3, 9, 1, '#b0a38e');
-      drawPixelRect(fctx, 37, ry + 3, 9, 1, '#b0a38e');
-    }
-    // Blood drips + tattered belt + back wound
-    drawPixelRect(fctx, 22, 46, 5, 14, '#7a1616');
-    drawPixelRect(fctx, 36, 45, 6, 15, '#590d0d');
-    drawPixelRect(fctx, 2, 50, 60, 6, '#211914');
-    drawPixelRect(bctx, 22, 16, 20, 26, '#4a1b1b');
-    for (let vy = 18; vy <= 38; vy += 5) {
-      drawPixelRect(bctx, 29, vy, 6, 3, '#cfc3ab');
-    }
+    // Torn civilian jacket parting unevenly over grime-stained undershirt & jagged ribcage tear
+    wtctx.fillStyle = '#3b352d';
+    wtctx.fillRect(102, 10, 52, 92);
+    paintSoftMottle(wtctx, 52, 92, 22, ['#26211c', '#4d443a', '#4a1717'], 4, 12, 0.45, 251, false);
+    // Jagged torn chest gore cavity framed by shredded shirt edges (3D ivory ribs arch cleanly across!)
+    wtctx.fillStyle = '#38090b';
+    wtctx.beginPath();
+    wtctx.moveTo(108, 30);
+    wtctx.lineTo(124, 24);
+    wtctx.lineTo(146, 33);
+    wtctx.lineTo(150, 58);
+    wtctx.lineTo(141, 74);
+    wtctx.lineTo(122, 78);
+    wtctx.lineTo(106, 64);
+    wtctx.closePath();
+    wtctx.fill();
+    const cavity = wtctx.createRadialGradient(128, 52, 4, 128, 52, 22);
+    cavity.addColorStop(0, '#1f0304');
+    cavity.addColorStop(0.68, '#540d0f');
+    cavity.addColorStop(1, 'rgba(54, 10, 10, 0)');
+    wtctx.fillStyle = cavity;
+    wtctx.fillRect(104, 24, 48, 56);
+    // Jacket lapel seams + tattered fabric strips + dried blood drips
+    wtctx.strokeStyle = '#1b1411';
+    wtctx.lineWidth = 3;
+    wtctx.beginPath();
+    wtctx.moveTo(98, 8);
+    wtctx.lineTo(103, 102);
+    wtctx.moveTo(158, 8);
+    wtctx.lineTo(153, 102);
+    wtctx.stroke();
+    wtctx.fillStyle = '#5c0e10';
+    wtctx.globalAlpha = 0.72;
+    wtctx.fillRect(114, 72, 6, 28);
+    wtctx.fillRect(128, 76, 8, 24);
+    wtctx.fillRect(140, 68, 5, 30);
+    wtctx.globalAlpha = 1;
+    // Worn dark leather belt band & torn spine patch on back (x=0/256)
+    wtctx.fillStyle = '#1f1712';
+    wtctx.fillRect(0, 100, W, 12);
+    wtctx.fillStyle = '#3d1515';
+    wtctx.fillRect(0, 26, 16, 56);
+    wtctx.fillRect(240, 26, 16, 56);
   } else if (kind === 'runner') {
-    // Shredded blood-soaked athletic vest + exposed striated pecs & abs + claw slashes
-    drawPixelRect(fctx, 10, 10, 44, 42, '#4d1111');
-    drawPixelRect(fctx, 14, 14, 36, 32, '#8a1e1e');
-    for (let sx = 16; sx <= 44; sx += 5) {
-      drawPixelRect(fctx, sx, 16, 2, 28, '#5e1111');
+    // Shredded blood-drenched tank/hoodie over flayed crimson musculature & diagonal claw gashes
+    const chest = wtctx.createRadialGradient(128, 54, 8, 128, 54, 46);
+    chest.addColorStop(0, '#851b1d');
+    chest.addColorStop(0.65, '#591113');
+    chest.addColorStop(1, 'rgba(48, 14, 14, 0)');
+    wtctx.fillStyle = chest;
+    wtctx.beginPath();
+    wtctx.ellipse(128, 56, 44, 42, 0, 0, Math.PI * 2);
+    wtctx.fill();
+    // Anatomical muscle striations across chest & abs
+    wtctx.strokeStyle = '#400a0b';
+    wtctx.lineWidth = 2;
+    for (let sx = 98; sx <= 158; sx += 8) {
+      wtctx.beginPath();
+      wtctx.moveTo(sx, 26);
+      wtctx.lineTo(sx + (sx < 128 ? 3 : -3), 88);
+      wtctx.stroke();
     }
-    // Pectoral highlights & sinew
-    drawPixelRect(fctx, 15, 16, 14, 10, '#ad2d2d');
-    drawPixelRect(fctx, 35, 16, 14, 10, '#ad2d2d');
-    // Diagonal claw scars on back and sides
-    for (let i = 0; i < 28; i++) {
-      drawPixelRect(bctx, 14 + i, 14 + i, 3, 3, '#400c0c');
-      drawPixelRect(bctx, 24 + i, 12 + i, 2, 2, '#9c2424');
-      drawPixelRect(sctx, 14 + i, 22 + (i >> 1), 3, 3, '#591616');
+    // Diagonal predatory claw scars across flanks & back
+    wtctx.strokeStyle = '#9e2123';
+    wtctx.lineWidth = 2.6;
+    for (let i = 0; i < 3; i++) {
+      wtctx.beginPath();
+      wtctx.moveTo(32 + i * 9, 32 + i * 5);
+      wtctx.lineTo(74 + i * 9, 64 + i * 5);
+      wtctx.stroke();
+      wtctx.beginPath();
+      wtctx.moveTo(182 + i * 9, 64 + i * 5);
+      wtctx.lineTo(224 + i * 9, 32 + i * 5);
+      wtctx.stroke();
     }
   } else if (kind === 'bloater') {
-    // Split swollen necrotic belly + clustered glowing lime pustules
-    drawPixelRect(fctx, 10, 16, 44, 42, '#5a6e39');
-    drawZombieDither(fctx, 14, 20, 36, 34, '#6f8c49', '#87a85b', '#415727', 239);
-    const bodyPustules: Array<[CanvasRenderingContext2D, number, number, number]> = [
-      [fctx, 20, 24, 9],
-      [fctx, 44, 38, 10],
-      [fctx, 26, 44, 6],
-      [bctx, 22, 24, 10],
-      [bctx, 42, 34, 8],
-      [sctx, 30, 32, 9],
+    // Bursting hazmat/work overalls torn open across massive mottled necrotic gut (no cartoon polka dots!)
+    wtctx.fillStyle = palette.skin;
+    wtctx.beginPath();
+    wtctx.ellipse(128, 66, 54, 52, 0, 0, Math.PI * 2);
+    wtctx.fill();
+    paintSoftMottle(wtctx, 110, 96, 46, ['#46592c', '#8fa866', '#4a3d28', '#2a3619'], 5, 18, 0.44, 239, false);
+    // Horizontal belly fat-fold shadows & vertical ruptured scar tissue
+    wtctx.strokeStyle = 'rgba(28, 36, 16, 0.65)';
+    wtctx.lineWidth = 3;
+    for (const fy of [48, 72, 92]) {
+      wtctx.beginPath();
+      wtctx.moveTo(86, fy);
+      wtctx.quadraticCurveTo(128, fy + 8, 170, fy);
+      wtctx.stroke();
+    }
+    // Inflamed bruised skin craters anchoring the 3D boils naturally into the flesh
+    const craters: Array<[number, number, number]> = [
+      [104, 46, 16],
+      [152, 74, 18],
+      [126, 82, 14],
+      [48, 56, 16],
+      [206, 62, 15],
     ];
-    for (const [ctx, px, py, r] of bodyPustules) {
-      drawPixelDisc(ctx, px, py, r + 2, '#283814');
-      drawPixelDisc(ctx, px, py, r, '#9ed93b');
-      drawPixelDisc(ctx, px - 1.5, py - 1.5, r * 0.62, '#c8ff59');
-      drawPixelDisc(ctx, px - 2, py - 2, Math.max(2, r * 0.3), '#f3ffd4');
+    for (const [cx, cy, r] of craters) {
+      const cg = wtctx.createRadialGradient(cx, cy, r * 0.25, cx, cy, r);
+      cg.addColorStop(0, 'rgba(128, 168, 40, 0.55)');
+      cg.addColorStop(0.55, 'rgba(42, 54, 20, 0.72)');
+      cg.addColorStop(1, 'rgba(0,0,0,0)');
+      wtctx.fillStyle = cg;
+      wtctx.beginPath();
+      wtctx.arc(cx, cy, r, 0, Math.PI * 2);
+      wtctx.fill();
     }
+    // Straining heavy industrial waistband
+    wtctx.fillStyle = '#24211b';
+    wtctx.fillRect(0, 102, W, 11);
   } else {
-    // Spitter: pulsing glowing teal-mint acid sac across sternum + glowing dorsal spine vents
-    drawPixelDisc(fctx, 32, 32, 18, '#173830');
-    drawPixelDisc(fctx, 32, 32, 14, '#24735e');
-    drawPixelDisc(fctx, 32, 31, 10, '#4be3a5');
-    drawPixelDisc(fctx, 32, 30, 5.5, '#c4ffea');
-    // Glowing capillary veins
-    for (let i = 0; i < 18; i++) {
-      drawPixelRect(fctx, 8 + i, 12 + i, 2, 2, '#4be3a5');
-      drawPixelRect(fctx, 54 - i, 12 + i, 2, 2, '#4be3a5');
-      drawPixelRect(sctx, 14 + i * 2, 24 + (i % 5) * 4, 3, 2, '#4be3a5');
+    // Spitter: gaunt torn dark coat over recessed glowing emerald-cyan acid sternum cavity
+    const acidGlow = wtctx.createRadialGradient(128, 54, 4, 128, 54, 34);
+    acidGlow.addColorStop(0, '#96ffd8');
+    acidGlow.addColorStop(0.35, '#2db385');
+    acidGlow.addColorStop(0.72, '#133d33');
+    acidGlow.addColorStop(1, 'rgba(19, 44, 40, 0)');
+    wtctx.fillStyle = acidGlow;
+    wtctx.beginPath();
+    wtctx.ellipse(128, 54, 30, 34, 0, 0, Math.PI * 2);
+    wtctx.fill();
+    // Delicate glowing bioluminescent veins radiating onto chest & flanks
+    wtctx.strokeStyle = 'rgba(84, 240, 178, 0.58)';
+    wtctx.lineWidth = 1.6;
+    for (let i = 0; i < 6; i++) {
+      const y = 26 + i * 10;
+      wtctx.beginPath();
+      wtctx.moveTo(106, y);
+      wtctx.quadraticCurveTo(84, y + 6, 64, y - 2);
+      wtctx.stroke();
+      wtctx.beginPath();
+      wtctx.moveTo(150, y);
+      wtctx.quadraticCurveTo(172, y + 6, 192, y - 2);
+      wtctx.stroke();
     }
-    // Glowing spinal socket vents on back
-    drawPixelRect(bctx, 26, 6, 12, 50, '#14332b');
-    for (let sy = 10; sy <= 48; sy += 9) {
-      drawPixelDisc(bctx, 32, sy, 5, '#5ef2b5');
-      drawPixelDisc(bctx, 32, sy, 2.5, '#e8fff6');
-    }
+    // Dark recessed dorsal spinal channel (3D bone spines sit along x=0/256)
+    wtctx.fillStyle = '#112924';
+    wtctx.fillRect(0, 10, 14, 96);
+    wtctx.fillRect(242, 10, 14, 96);
   }
-
-  // Seamless 128x64 continuous cylindrical wrap texture for sculpted organic zombie torsos
-  const [cwt, wtctx] = makePixelCanvas(128, 64);
-  drawPixelRect(wtctx, 0, 0, 128, 64, palette.dark);
-  drawZombieDither(wtctx, 0, 0, 128, 64, palette.main, palette.hi, palette.dark, palette.seed + 503);
-  drawPixelRect(wtctx, 0, 0, 128, 7, palette.hi);
-  drawPixelRect(wtctx, 0, 52, 128, 12, palette.dark);
-
-  if (kind === 'walker') {
-    // Torn jacket parting at x=46..82 over deep chest wound + blood drips onto belt + spine gap
-    drawPixelRect(wtctx, 46, 10, 36, 36, '#380b0b');
-    drawPixelRect(wtctx, 50, 12, 28, 32, '#6e1616');
-    drawPixelRect(wtctx, 61, 12, 6, 32, '#420c0c');
-    drawPixelRect(wtctx, 54, 46, 5, 12, '#7a1616');
-    drawPixelRect(wtctx, 69, 45, 6, 13, '#590d0d');
-    drawPixelRect(wtctx, 0, 50, 128, 6, '#211914');
-    drawPixelRect(wtctx, 0, 16, 12, 26, '#4a1b1b');
-    drawPixelRect(wtctx, 116, 16, 12, 26, '#4a1b1b');
-  } else if (kind === 'runner') {
-    // Shredded crimson athletic vest + striated chest sinew + diagonal claw slashes on sides/back
-    drawPixelRect(wtctx, 44, 10, 40, 42, '#4d1111');
-    drawPixelRect(wtctx, 48, 14, 32, 32, '#8a1e1e');
-    for (let sx = 50; sx <= 76; sx += 5) {
-      drawPixelRect(wtctx, sx, 16, 2, 28, '#5e1111');
-    }
-    for (let i = 0; i < 24; i++) {
-      drawPixelRect(wtctx, 20 + i, 20 + (i >> 1), 3, 2, '#591616');
-      drawPixelRect(wtctx, 84 + i, 28 - (i >> 1), 3, 2, '#591616');
-    }
-  } else if (kind === 'bloater') {
-    drawPixelRect(wtctx, 44, 16, 40, 40, '#5a6e39');
-    drawZombieDither(wtctx, 48, 20, 32, 34, '#6f8c49', '#87a85b', '#415727', 239);
-    const tPust: Array<[number, number, number]> = [
-      [50, 24, 8],
-      [76, 36, 9],
-      [26, 30, 8],
-      [100, 32, 8],
-      [12, 24, 7],
-      [116, 28, 7],
-    ];
-    for (const [px, py, r] of tPust) {
-      drawPixelDisc(wtctx, px, py, r + 2, '#283814');
-      drawPixelDisc(wtctx, px, py, r, '#9ed93b');
-      drawPixelDisc(wtctx, px - 1.5, py - 1.5, r * 0.58, '#c8ff59');
-    }
-  } else {
-    drawPixelDisc(wtctx, 64, 30, 16, '#173830');
-    drawPixelDisc(wtctx, 64, 30, 12, '#24735e');
-    drawPixelDisc(wtctx, 64, 29, 8, '#4be3a5');
-    drawPixelDisc(wtctx, 64, 28, 4, '#c4ffea');
-    for (let i = 0; i < 16; i++) {
-      drawPixelRect(wtctx, 36 + i, 14 + i, 2, 2, '#4be3a5');
-      drawPixelRect(wtctx, 92 - i, 14 + i, 2, 2, '#4be3a5');
-    }
-    for (let sy = 12; sy <= 48; sy += 9) {
-      drawPixelDisc(wtctx, 4, sy, 4, '#5ef2b5');
-      drawPixelDisc(wtctx, 124, sy, 4, '#5ef2b5');
-    }
-  }
-
-  const wrapTorsoTex = toNearestTexture(cwt);
-  wrapTorsoTex.wrapS = THREE.RepeatWrapping;
-  wrapTorsoTex.wrapT = THREE.ClampToEdgeWrapping;
 
   return {
-    front: toNearestTexture(cf),
-    back: toNearestTexture(cb),
-    side: toNearestTexture(cs),
-    wrap: wrapTorsoTex,
+    front: toOrganicTexture(cf, false),
+    back: toOrganicTexture(cb, false),
+    side: toOrganicTexture(cs, false),
+    wrap: toOrganicTexture(cwt, true),
   };
 }
 
@@ -2289,8 +2607,8 @@ export class ThreePixelAtlas {
   public readonly decalTex: Record<'blood' | 'scorch' | 'acid' | 'tire', THREE.CanvasTexture>;
   public readonly bulletImpactTex: Record<'stone' | 'wood' | 'metal' | 'blood_wall', THREE.CanvasTexture>;
 
-  // Pixel-art model surface textures
-  public readonly actorHeadTex: Record<'player' | 'walker' | 'runner' | 'bloater' | 'spitter', { front: THREE.CanvasTexture; back: THREE.CanvasTexture; side: THREE.CanvasTexture; top: THREE.CanvasTexture; jaw?: THREE.CanvasTexture; wrap?: THREE.CanvasTexture }>;
+  // Pixel-art & organic sculpted model surface textures
+  public readonly actorHeadTex: Record<'player' | 'walker' | 'runner' | 'bloater' | 'spitter', { front: THREE.CanvasTexture; back: THREE.CanvasTexture; side: THREE.CanvasTexture; top: THREE.CanvasTexture; jaw?: THREE.CanvasTexture; wrap?: THREE.CanvasTexture; eye?: THREE.CanvasTexture }>;
   public readonly actorTorsoTex: Record<'player' | 'walker' | 'runner' | 'bloater' | 'spitter', { front: THREE.CanvasTexture; back: THREE.CanvasTexture; side: THREE.CanvasTexture; wrap?: THREE.CanvasTexture }>;
   public readonly actorLimbTex: Record<'player' | 'walker' | 'runner' | 'bloater' | 'spitter', { sleeve: THREE.CanvasTexture; leg: THREE.CanvasTexture }>;
   public readonly pustuleTex: { lime: THREE.CanvasTexture; cyan: THREE.CanvasTexture };
@@ -2397,6 +2715,7 @@ export class ThreePixelAtlas {
       this.track(h.top);
       if (h.jaw) this.track(h.jaw);
       if (h.wrap) this.track(h.wrap);
+      if (h.eye) this.track(h.eye);
       this.track(t.front);
       this.track(t.back);
       this.track(t.side);

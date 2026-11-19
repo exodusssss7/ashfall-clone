@@ -2139,46 +2139,115 @@ export class ThreeIsometricRenderer {
             m.opacity = 1;
           }
         }
+        const isRunner = z.archetype === 'runner';
+        const isBloater = z.archetype === 'bloater';
+        const isSpitter = z.archetype === 'spitter';
+
+        // Archetype-distinct predatory undead arm reach & hunched posture (zero stiff T-pose!)
+        const baseTorsoLean = isRunner ? -0.26 : isSpitter ? -0.22 : isBloater ? -0.10 : -0.15;
+        const baseArmL = isRunner ? -0.88 : isSpitter ? -0.62 : isBloater ? -0.96 : -0.34;
+        const baseArmR = isRunner ? -0.82 : isSpitter ? -0.78 : isBloater ? -1.04 : -0.94; // Asymmetric shambling Walker reach!
+        const baseElbowL = isRunner ? 0.96 : isSpitter ? 0.36 : isBloater ? 0.48 : 0.36;
+        const baseElbowR = isRunner ? 0.90 : isSpitter ? 0.48 : isBloater ? 0.44 : 0.56;
+
         if (animState === 'walk') {
-          const phase = z.walkCycle * 1.1;
+          const phase = z.walkCycle * (isRunner ? 1.35 : 1.1);
           const s = Math.sin(phase);
-          rig.leftLegPivot.rotation.z = s * 0.58;
-          rig.rightLegPivot.rotation.z = -s * 0.58;
-          rig.leftArmPivot.rotation.z = Math.sin(phase + 0.5) * 0.16 + jawPose.armTwitchL;
-          rig.rightArmPivot.rotation.z = -Math.sin(phase + 0.5) * 0.16 + jawPose.armTwitchR;
-          rig.bodyPivot.position.y = Math.abs(Math.cos(phase)) * 0.05;
-          rig.torso.rotation.z = (z.archetype === 'runner' ? -0.26 : -0.08) + jawPose.torsoTwitchZ;
+          const limpBias = z.archetype === 'walker' ? 0.14 : 0;
+          rig.leftLegPivot.rotation.z = s * (isBloater ? 0.44 : 0.56) + 0.12;
+          rig.rightLegPivot.rotation.z = -s * (isBloater ? 0.44 : 0.56) + 0.12 - limpBias;
+          if (rig.leftKneePivot && rig.rightKneePivot) {
+            rig.leftKneePivot.rotation.z = -0.16 - Math.max(0, -s) * (isRunner ? 0.72 : 0.52);
+            rig.rightKneePivot.rotation.z = -0.16 - Math.max(0, s) * (isRunner ? 0.72 : 0.52);
+          }
+          rig.leftArmPivot.rotation.z = baseArmL + Math.sin(phase + 0.5) * 0.20 + jawPose.armTwitchL;
+          rig.rightArmPivot.rotation.z = baseArmR - Math.sin(phase + 0.5) * 0.20 + jawPose.armTwitchR;
+          if (rig.leftElbowPivot && rig.rightElbowPivot) {
+            rig.leftElbowPivot.rotation.z = baseElbowL + Math.cos(phase) * 0.14;
+            rig.rightElbowPivot.rotation.z = baseElbowR - Math.cos(phase) * 0.14;
+          }
+          rig.bodyPivot.position.y = Math.abs(Math.cos(phase)) * (isBloater ? 0.035 : 0.05) - 0.025;
+          rig.torso.rotation.z = baseTorsoLean + jawPose.torsoTwitchZ;
+          rig.torso.rotation.y = Math.sin(phase) * 0.08;
+          rig.torso.rotation.x = Math.sin(phase) * (z.archetype === 'walker' ? 0.09 : isBloater ? 0.08 : 0.05);
         } else if (animState === 'windup') {
-          rig.leftLegPivot.rotation.z = 0.2;
-          rig.rightLegPivot.rotation.z = -0.2;
-          rig.leftArmPivot.rotation.z = 0.24 + jawPose.armTwitchL;
-          rig.rightArmPivot.rotation.z = -0.18 + jawPose.armTwitchR;
-          rig.torso.rotation.z = 0.2 + jawPose.torsoTwitchZ;
-          rig.bodyPivot.position.y = -0.04;
+          rig.leftLegPivot.rotation.z = 0.24;
+          rig.rightLegPivot.rotation.z = -0.18;
+          if (rig.leftKneePivot && rig.rightKneePivot) {
+            rig.leftKneePivot.rotation.z = -0.36;
+            rig.rightKneePivot.rotation.z = -0.26;
+          }
+          if (isSpitter) {
+            // Spitter hunches forward and pulls claws down-back while heaving acid from glowing throat sac
+            rig.leftArmPivot.rotation.z = -1.08 + jawPose.armTwitchL;
+            rig.rightArmPivot.rotation.z = -1.04 + jawPose.armTwitchR;
+            if (rig.leftElbowPivot && rig.rightElbowPivot) {
+              rig.leftElbowPivot.rotation.z = 0.56;
+              rig.rightElbowPivot.rotation.z = 0.52;
+            }
+            rig.torso.rotation.z = -0.30 + jawPose.torsoTwitchZ;
+            rig.torso.rotation.y = 0;
+            rig.torso.rotation.x = 0;
+          } else {
+            // Predatory asymmetric slash coil: right claw cocked back/up, left claw braced low-forward (NO surrender hands-up!)
+            rig.leftArmPivot.rotation.z = -0.78 + jawPose.armTwitchL;
+            rig.rightArmPivot.rotation.z = 0.12 + jawPose.armTwitchR;
+            if (rig.leftElbowPivot && rig.rightElbowPivot) {
+              rig.leftElbowPivot.rotation.z = 0.54;
+              rig.rightElbowPivot.rotation.z = 0.58;
+            }
+            rig.torso.rotation.z = -0.06 + jawPose.torsoTwitchZ;
+            rig.torso.rotation.y = -0.24;
+            rig.torso.rotation.x = 0.06;
+          }
+          rig.bodyPivot.position.y = -0.055;
         } else if (animState === 'attack') {
-          rig.leftArmPivot.rotation.z = -0.55 + jawPose.armTwitchL;
-          rig.rightArmPivot.rotation.z = -0.55 + jawPose.armTwitchR;
-          rig.torso.rotation.z = -0.35 + jawPose.torsoTwitchZ;
-          rig.bodyPivot.position.y = 0.03;
+          rig.leftLegPivot.rotation.z = 0.32;
+          rig.rightLegPivot.rotation.z = -0.28;
+          if (rig.leftKneePivot && rig.rightKneePivot) {
+            rig.leftKneePivot.rotation.z = -0.40;
+            rig.rightKneePivot.rotation.z = -0.22;
+          }
+          rig.leftArmPivot.rotation.z = -0.42 + jawPose.armTwitchL;
+          rig.rightArmPivot.rotation.z = -0.58 + jawPose.armTwitchR;
+          if (rig.leftElbowPivot && rig.rightElbowPivot) {
+            rig.leftElbowPivot.rotation.z = 0.34;
+            rig.rightElbowPivot.rotation.z = 0.24;
+          }
+          rig.torso.rotation.z = -0.36 + jawPose.torsoTwitchZ;
+          rig.torso.rotation.y = 0.26;
+          rig.torso.rotation.x = -0.05;
+          rig.bodyPivot.position.y = -0.025;
         } else {
-          rig.leftLegPivot.rotation.z = 0;
-          rig.rightLegPivot.rotation.z = 0;
-          rig.leftArmPivot.rotation.z = Math.sin(elapsedClock * 2.5 + z.id) * 0.08 + jawPose.armTwitchL;
-          rig.rightArmPivot.rotation.z = -Math.sin(elapsedClock * 2.5 + z.id) * 0.08 + jawPose.armTwitchR;
-          rig.torso.rotation.z = (z.archetype === 'runner' ? -0.15 : 0) + jawPose.torsoTwitchZ;
-          rig.bodyPivot.position.y = Math.sin(elapsedClock * 3 + z.id) * 0.02;
+          const sway = Math.sin(elapsedClock * 2.2 + z.id);
+          rig.leftLegPivot.rotation.z = 0.10;
+          rig.rightLegPivot.rotation.z = 0.04;
+          if (rig.leftKneePivot && rig.rightKneePivot) {
+            rig.leftKneePivot.rotation.z = -0.18;
+            rig.rightKneePivot.rotation.z = -0.12;
+          }
+          rig.leftArmPivot.rotation.z = baseArmL + sway * 0.08 + jawPose.armTwitchL;
+          rig.rightArmPivot.rotation.z = baseArmR - sway * 0.08 + jawPose.armTwitchR;
+          if (rig.leftElbowPivot && rig.rightElbowPivot) {
+            rig.leftElbowPivot.rotation.z = baseElbowL + sway * 0.06;
+            rig.rightElbowPivot.rotation.z = baseElbowR - sway * 0.06;
+          }
+          rig.torso.rotation.z = baseTorsoLean * 0.85 + jawPose.torsoTwitchZ;
+          rig.torso.rotation.y = sway * 0.05;
+          rig.torso.rotation.x = sway * 0.04;
+          rig.bodyPivot.position.y = -0.02 + Math.sin(elapsedClock * 2.6 + z.id) * 0.014;
         }
       }
 
-      const baseHeadTiltX = z.archetype === 'walker' ? 0.1 : 0;
-      const headCounterZ = animState === 'dying' ? 0 : -rig.torso.rotation.z * 0.85;
+      const baseHeadTiltX = z.archetype === 'walker' ? 0.12 : z.archetype === 'spitter' ? -0.06 : 0;
+      const headCounterZ = animState === 'dying' ? 0 : -rig.torso.rotation.z * 0.82;
       rig.headPivot.rotation.set(
         baseHeadTiltX + jawPose.headTwitchX,
         jawPose.headTwitchY,
         headCounterZ + jawPose.headTwitchZ
       );
 
-      // Macro blister swell, pulse, wobble & contraction (pairs with GLSL membrane vertex anim)
+      // Macro blister swell, pulse & contraction (preserving surface-normal orientation!)
       if (rig.blisters && rig.blisters.length > 0) {
         if (lod.enableBlisterAnim && animState !== 'dying') {
           for (let bi = 0; bi < rig.blisters.length; bi++) {
@@ -2190,20 +2259,18 @@ export class ThreeIsometricRenderer {
               state: z.state,
               blisterIndex: bi,
             });
-            const rScale = 1 + (pulse.radialScale - 1) * 0.55;
-            const aScale = 1 + (pulse.axialStretch - 1) * 0.6;
+            const rScale = 1 + (pulse.radialScale - 1) * 0.45;
+            const aScale = 1 + (pulse.axialStretch - 1) * 0.55;
             b.mesh.scale.set(
               b.baseScale.x * rScale,
               b.baseScale.y * aScale,
               b.baseScale.z * rScale
             );
-            b.mesh.rotation.set(pulse.wobbleX, 0, pulse.wobbleZ);
           }
         } else {
           for (let bi = 0; bi < rig.blisters.length; bi++) {
             const b = rig.blisters[bi];
             b.mesh.scale.copy(b.baseScale);
-            b.mesh.rotation.set(0, 0, 0);
           }
         }
       }

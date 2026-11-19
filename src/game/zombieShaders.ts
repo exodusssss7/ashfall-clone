@@ -6,9 +6,9 @@ import type { ZombieArchetype } from './types';
  * Surface role controls how strongly procedural wetness, veins, blister
  * swelling, and vertex skin deformation affect each zombie sub-mesh:
  *  -  0.0: Exposed infected skin (head, neck, jaw, torso wounds, forearms)
- *  -  0.35: Tattered damp clothing / boots
- *  -  1.0: Animated skin blister / pustule / venom sac
- *  - -1.0: Glossy wet mouth cavity / gums / saliva strand
+ *  -  0.35: Tattered damp clothing / leather / boots / hair / bone (ZERO glowing veins)
+ *  -  1.0: Animated skin blister / pustule / venom sac (dark necrotic base -> taut glowing apex)
+ *  - -1.0: Glossy wet eyes / mouth cavity / gums / saliva strand
  */
 export type ZombieSurfaceRole = 0.0 | 0.35 | 1.0 | -1.0;
 
@@ -81,10 +81,10 @@ float zmbNoise3(vec3 p) {
 
 float zmbVeinRidge(vec3 p) {
   float n1 = zmbNoise3(p);
-  float n2 = zmbNoise3(p * 2.15 + vec3(4.2, 1.7, 8.9));
+  float n2 = zmbNoise3(p * 2.25 + vec3(4.2, 1.7, 8.9));
   float r1 = 1.0 - abs(n1 * 2.0 - 1.0);
   float r2 = 1.0 - abs(n2 * 2.0 - 1.0);
-  return pow(max(r1 * 0.72 + r2 * 0.34, 0.0), 9.0);
+  return pow(max(r1 * 0.72 + r2 * 0.34, 0.0), 11.0);
 }
 
 vec3 zmbSmoothGrad3(vec3 p) {
@@ -118,16 +118,19 @@ export function createZombieInfectedMaterial(opts: {
   const isBlister = opts.role > 0.75;
   const isMouth = opts.role < -0.5;
 
+  // Deliberate PBR material contrast (>= 0.25 roughness spread across cloth, flesh, bone, boils, wet eyes)
   const mat = new THREE.MeshPhysicalMaterial({
     color: opts.map ? 0xffffff : (opts.color ?? 0xffffff),
     map: opts.map ?? null,
-    roughness: opts.roughness ?? (isMouth ? 0.18 : isBlister ? 0.26 : isCloth ? 0.86 : Math.max(0.46, preset.roughnessBase)),
-    metalness: opts.metalness ?? 0.02,
-    clearcoat: isMouth ? 0.82 : isBlister ? 0.65 : isCloth ? 0.06 : preset.clearcoat * 0.34,
-    clearcoatRoughness: isMouth ? 0.14 : isBlister ? 0.18 : isCloth ? 0.56 : Math.max(0.28, preset.clearcoatRoughness * 1.9),
-    ior: isMouth || isBlister ? 1.38 : 1.33,
-    specularIntensity: isCloth ? 0.22 : isBlister || isMouth ? 0.72 : 0.48,
-    envMapIntensity: isMouth || isBlister ? 0.35 : isCloth ? 0.2 : 0.24,
+    roughness:
+      opts.roughness ??
+      (isMouth ? 0.14 : isBlister ? 0.22 : isCloth ? 0.88 : Math.max(0.50, preset.roughnessBase + 0.08)),
+    metalness: opts.metalness ?? (isCloth ? 0.03 : 0.02),
+    clearcoat: isMouth ? 0.90 : isBlister ? 0.78 : isCloth ? 0.02 : preset.clearcoat * 0.28,
+    clearcoatRoughness: isMouth ? 0.10 : isBlister ? 0.16 : isCloth ? 0.78 : Math.max(0.32, preset.clearcoatRoughness * 2.1),
+    ior: isMouth || isBlister ? 1.40 : 1.33,
+    specularIntensity: isCloth ? 0.18 : isBlister || isMouth ? 0.78 : 0.44,
+    envMapIntensity: isMouth || isBlister ? 0.36 : isCloth ? 0.18 : 0.24,
     emissive: opts.emissive ?? 0x000000,
     emissiveIntensity: opts.emissiveIntensity ?? 0,
     transparent: opts.transparent ?? false,
@@ -185,24 +188,24 @@ export function createZombieInfectedMaterial(opts: {
         if (uZDetail > 0.05) {
           float seedOff = uZSeed * 1.731;
           if (uZRole > 0.75) {
-            // Animated blister: phase-shifted swell, pulse, wobble, and contraction
-            float bPhase = uZTime * uZBlisterSpeed + seedOff + dot(position, vec3(23.0, 31.0, 19.0));
+            // Animated blister / venom sac: base stays anchored in flesh while apex pulses organically
+            float apexMask = clamp((position.y + 0.03) / 0.065, 0.15, 1.0);
+            float bPhase = uZTime * uZBlisterSpeed + seedOff + dot(position, vec3(21.0, 29.0, 17.0));
             float swellWave = sin(bPhase) * 0.72 + sin(bPhase * 2.07 + 0.9) * 0.28;
-            float swell = swellWave * uZBlisterAmp * (0.45 + 0.55 * uZDetail);
-            vZSwell = clamp((swellWave + 1.0) * 0.5, 0.0, 1.0);
+            float swell = swellWave * uZBlisterAmp * 0.72 * apexMask * (0.45 + 0.55 * uZDetail);
+            vZSwell = clamp((swellWave + 1.0) * 0.5, 0.0, 1.0) * apexMask;
             transformed += normal * (length(position) * swell);
-            // Asymmetric organic membrane wobble
-            float wobT = uZTime * uZBlisterSpeed * 1.55 + seedOff;
-            transformed.x += sin(wobT + position.y * 28.0) * 0.015 * uZBlisterWobble * uZDetail;
-            transformed.z += cos(wobT * 0.89 + position.x * 26.0) * 0.015 * uZBlisterWobble * uZDetail;
+            float wobT = uZTime * uZBlisterSpeed * 1.45 + seedOff;
+            transformed.x += sin(wobT + position.y * 24.0) * 0.011 * uZBlisterWobble * apexMask * uZDetail;
+            transformed.z += cos(wobT * 0.89 + position.x * 22.0) * 0.011 * uZBlisterWobble * apexMask * uZDetail;
           } else if (uZRole > -0.5) {
-            // Subtle skin deformation during breathing, movement, and attacks (exclude eyes/mouth/saliva)
+            // Subtle living-corpse breathing & flesh tremor (gentle enough to never break eye/joint alignment)
             float detailMask = smoothstep(0.05, 0.55, uZDetail);
-            float breath = sin(uZTime * 2.7 + seedOff) * uZBreathAmp * detailMask;
-            float fleshWave = sin(uZTime * 7.5 + position.y * 13.0 + position.x * 9.0 + uZWalkPhase * 2.0 + seedOff);
-            float clothDamp = (uZRole > 0.2 && uZRole < 0.6) ? 0.52 : 1.0;
-            float attackTense = max(0.0, uZLunge) * 0.006 * clothDamp * detailMask;
-            transformed += normal * ((breath + fleshWave * uZDeformAmp) * clothDamp * detailMask + attackTense);
+            float breath = sin(uZTime * 2.7 + seedOff) * uZBreathAmp * 0.45 * detailMask;
+            float fleshWave = sin(uZTime * 7.2 + position.y * 12.0 + position.x * 8.5 + uZWalkPhase * 2.0 + seedOff);
+            float clothDamp = (uZRole > 0.2 && uZRole < 0.6) ? 0.28 : 0.48;
+            float attackTense = max(0.0, uZLunge) * 0.004 * clothDamp * detailMask;
+            transformed += normal * ((breath + fleshWave * uZDeformAmp * 0.5) * clothDamp * detailMask + attackTense);
           }
         }`
       );
@@ -232,35 +235,37 @@ export function createZombieInfectedMaterial(opts: {
         float zWetFilmOut = 0.0;
         vec3 zWetGrad = vec3(0.0);
         if (uZDetail > 0.08) {
-          vec3 sampleP = vZLocalPos * 7.2 + vec3(uZSeed * 1.37, 0.0, uZSeed * 0.71);
-          // Animated creeping moisture & slick fluid streaks (never flat/chalky)
-          vec3 flowPos = sampleP * 1.05 + vec3(0.0, uZTime * 0.24, 0.0);
+          vec3 sampleP = vZLocalPos * 7.6 + vec3(uZSeed * 1.37, 0.0, uZSeed * 0.71);
+          vec3 flowPos = sampleP * 1.05 + vec3(0.0, uZTime * 0.16, 0.0);
           float wetFlow = zmbNoise3(flowPos);
-          float wetFine = uZDetail > 0.62 ? zmbNoise3(sampleP * 2.1 - vec3(0.0, uZTime * 0.38, 0.0)) : 0.5;
-          zWetFilmOut = clamp(smoothstep(0.36, 0.82, wetFlow * 0.7 + wetFine * 0.3) * uZWetness, 0.0, 1.0);
+          float wetFine = uZDetail > 0.62 ? zmbNoise3(sampleP * 2.2 - vec3(0.0, uZTime * 0.24, 0.0)) : 0.5;
+          zWetFilmOut = clamp(smoothstep(0.42, 0.84, wetFlow * 0.7 + wetFine * 0.3) * uZWetness, 0.0, 1.0);
           if (uZDetail > 0.62 && uZRole > -0.8) {
             zWetGrad = zmbSmoothGrad3(flowPos);
           }
 
           if (uZRole > 0.75) {
-            // Blister tension: dark necrotic base rim, taut translucent core at peak swell
-            float rimShade = mix(0.68, 1.08, vZSwell);
-            diffuseColor.rgb = mix(diffuseColor.rgb * rimShade, uZBlisterColor, vZSwell * 0.38 * uZDetail);
-            zWetFilmOut = max(zWetFilmOut, 0.85);
+            // Necrotic boil: dark inflamed rim near flesh anchor, taut glowing fluid dome at apex
+            float apexTone = smoothstep(0.05, 0.85, vZSwell);
+            float rimShade = mix(0.56, 1.05, apexTone);
+            diffuseColor.rgb = mix(diffuseColor.rgb * rimShade, uZBlisterColor, apexTone * 0.34 * uZDetail);
+            zWetFilmOut = max(zWetFilmOut, 0.88);
           } else if (uZRole < -0.5) {
-            // Wet mouth / saliva moisture sheen
-            diffuseColor.rgb *= mix(0.8, 1.06, wetFlow);
-            zWetFilmOut = 1.0;
+            // Wet eyes / oral mucosa: crisp wet highlight without distorting painted iris/pupil
+            zWetFilmOut = 0.95;
+          } else if (uZRole > 0.2 && uZRole < 0.6) {
+            // Tattered cloth, leather, boots, bone: subtle damp grime mottling ONLY (ZERO glowing veins!)
+            float grimeShift = (wetFlow - 0.5) * 0.10;
+            diffuseColor.rgb *= (1.0 + grimeShift * uZDetail) * mix(1.0, 0.88, zWetFilmOut * 0.35);
+            zVeinPulseOut = 0.0;
           } else {
-            // Wet skin darkens & deepens tissue contrast rather than washing out white
-            float skinMask = (uZRole > 0.2 && uZRole < 0.6) ? 0.3 : 1.0;
-            float rotShift = (wetFlow - 0.5) * 0.14;
-            diffuseColor.rgb *= (1.0 + rotShift * uZDetail) * mix(1.0, 0.72, zWetFilmOut * skinMask * 0.75);
-            // Branching pulsing sub-dermal veins
-            float veinMask = zmbVeinRidge(sampleP * 1.45);
-            float pulseWave = 0.32 + 0.68 * (0.5 + 0.5 * sin(uZTime * uZVeinPulseSpeed - vZLocalPos.y * 8.5 + uZSeed * 2.1));
-            zVeinPulseOut = veinMask * pulseWave * skinMask * uZDetail;
-            diffuseColor.rgb = mix(diffuseColor.rgb, uZVeinColor * 0.3, clamp(veinMask * 0.72 * skinMask * uZDetail, 0.0, 0.72));
+            // Exposed rotting flesh: clammy tissue sheen + subtle dark sub-dermal veins (never neon graffiti)
+            float rotShift = (wetFlow - 0.5) * 0.10;
+            diffuseColor.rgb *= (1.0 + rotShift * uZDetail) * mix(1.0, 0.82, zWetFilmOut * 0.58);
+            float veinMask = zmbVeinRidge(sampleP * 1.55);
+            float pulseWave = 0.25 + 0.75 * (0.5 + 0.5 * sin(uZTime * uZVeinPulseSpeed - vZLocalPos.y * 8.0 + uZSeed * 2.1));
+            zVeinPulseOut = veinMask * pulseWave * uZDetail;
+            diffuseColor.rgb = mix(diffuseColor.rgb, uZVeinColor * 0.24, clamp(veinMask * 0.56 * uZDetail, 0.0, 0.56));
           }
         }`
       )
@@ -268,17 +273,16 @@ export function createZombieInfectedMaterial(opts: {
         '#include <roughnessmap_fragment>',
         `#include <roughnessmap_fragment>
         if (uZDetail > 0.08) {
-          float targetWetRough = (uZRole > 0.75 || uZRole < -0.5) ? 0.16 : (uZRole > 0.2 && uZRole < 0.6) ? 0.52 : 0.26;
-          roughnessFactor = mix(roughnessFactor, targetWetRough, zWetFilmOut * (0.55 + 0.35 * uZDetail));
+          float targetWetRough = (uZRole > 0.75 || uZRole < -0.5) ? 0.14 : (uZRole > 0.2 && uZRole < 0.6) ? 0.72 : 0.30;
+          roughnessFactor = mix(roughnessFactor, targetWetRough, zWetFilmOut * (0.45 + 0.35 * uZDetail));
         }`
       )
       .replace(
         '#include <normal_fragment_maps>',
         `#include <normal_fragment_maps>
         if (uZDetail > 0.62 && uZRole > -0.8) {
-          // Smooth analytic 3D noise gradient normal perturbation (zero 2x2 quad aliasing)
           vec3 surfGrad = zWetGrad - normal * dot(zWetGrad, normal);
-          float bumpAmp = (uZRole > 0.75 ? 0.24 : (uZRole > 0.2 && uZRole < 0.6) ? 0.08 : 0.16) * uZWetness * smoothstep(0.62, 1.0, uZDetail);
+          float bumpAmp = (uZRole > 0.75 ? 0.20 : (uZRole > 0.2 && uZRole < 0.6) ? 0.07 : 0.13) * uZWetness * smoothstep(0.62, 1.0, uZDetail);
           normal = normalize(normal - surfGrad * bumpAmp);
         }`
       )
@@ -287,7 +291,7 @@ export function createZombieInfectedMaterial(opts: {
         `#include <clearcoat_normal_fragment_maps>
         #ifdef USE_CLEARCOAT
         if (uZDetail > 0.62) {
-          clearcoatNormal = normalize(mix(clearcoatNormal, normal, 0.48));
+          clearcoatNormal = normalize(mix(clearcoatNormal, normal, 0.42));
         }
         #endif`
       )
@@ -295,14 +299,15 @@ export function createZombieInfectedMaterial(opts: {
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
         if (uZDetail > 0.08) {
-          totalEmissiveRadiance += uZVeinColor * (zVeinPulseOut * uZVeinIntensity * 0.38);
+          // Subtle sub-dermal vein glow on exposed infected flesh only
+          totalEmissiveRadiance += uZVeinColor * (zVeinPulseOut * uZVeinIntensity * 0.24);
           if (uZRole > 0.75) {
-            totalEmissiveRadiance += uZBlisterColor * (vZSwell * 0.34 * uZDetail);
+            totalEmissiveRadiance += uZBlisterColor * (vZSwell * 0.28 * uZDetail);
           }
         }`
       );
   };
 
-  mat.customProgramCacheKey = () => 'ashfall_zombie_infected_pbr_v3';
+  mat.customProgramCacheKey = () => 'ashfall_zombie_infected_pbr_v4';
   return mat;
 }

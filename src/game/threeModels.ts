@@ -23,15 +23,21 @@ import { ZOMBIE_VISUAL_PRESETS } from './zombieVisuals';
 import {
   createCurvedTeethRowGeometry,
   createOrganicLoftGeometry,
+  createSculptedBoilGeometry,
   createSculptedBootGeometry,
   createSculptedClawHandGeometry,
+  createSculptedHairCrownGeometry,
   createSculptedJawGeometry,
   createSculptedLimbSegmentGeometry,
   createSculptedMouthCavityGeometry,
   createSculptedNeckGeometry,
   createSculptedRibArchGeometry,
   createSculptedSkullGeometry,
+  createSculptedSpineFinGeometry,
+  createSculptedThroatSacGeometry,
   createSculptedTorsoGeometry,
+  createTatteredHemGeometry,
+  createTornCollarGeometry,
   getSkullMetrics,
 } from './zombieSculpt';
 import type { ItemId, PropKind, StructureKind, WeaponId, ZombieArchetype } from './types';
@@ -94,8 +100,12 @@ export interface ActorRig3D {
   zombieUniforms?: ZombieRigSharedUniforms;
   leftArmPivot: THREE.Group;
   rightArmPivot: THREE.Group;
+  leftElbowPivot?: THREE.Group;
+  rightElbowPivot?: THREE.Group;
   leftLegPivot: THREE.Group;
   rightLegPivot: THREE.Group;
+  leftKneePivot?: THREE.Group;
+  rightKneePivot?: THREE.Group;
   weaponGroup?: THREE.Group;
   weapons?: Record<WeaponId, THREE.Group>;
   muzzleFlash?: THREE.Group;
@@ -2374,25 +2384,35 @@ export class ThreeModelFactory {
       return m;
     };
 
-    const skinMat = makeActorMat(skinHex, isPlayer ? 0.85 : zPreset!.roughnessBase, 0.05, undefined, undefined, 0, 0.0, !isPlayer);
-    const sleeveTexMat = makeActorMat(0xffffff, isPlayer ? 0.88 : 0.72, 0.05, lTex.sleeve, undefined, 0, 0.35, !isPlayer);
-    const pantsTexMat = makeActorMat(0xffffff, isPlayer ? 0.88 : 0.76, 0.05, lTex.leg, undefined, 0, 0.35, !isPlayer);
-    const bootMat = makeActorMat('#1b1614', 0.72, 0.08, undefined, undefined, 0, 0.35, !isPlayer);
+    const skinMat = makeActorMat(skinHex, isPlayer ? 0.85 : zPreset!.roughnessBase + 0.08, 0.04, undefined, undefined, 0, 0.0, !isPlayer);
+    const sleeveTexMat = makeActorMat(0xffffff, isPlayer ? 0.88 : 0.82, 0.04, lTex.sleeve, undefined, 0, 0.35, !isPlayer);
+    const pantsTexMat = makeActorMat(0xffffff, isPlayer ? 0.88 : 0.86, 0.04, lTex.leg, undefined, 0, 0.35, !isPlayer);
+    const bootMat = makeActorMat('#1c1714', 0.84, 0.06, undefined, undefined, 0, 0.35, !isPlayer);
 
     const headFrontMat = makeActorMat(0xffffff, isPlayer ? 0.84 : zPreset!.roughnessBase, 0.04, hTex.front, undefined, 0, 0.0);
     const headBackMat = makeActorMat(0xffffff, isPlayer ? 0.84 : zPreset!.roughnessBase, 0.04, hTex.back, undefined, 0, 0.0);
     const headSideMat = makeActorMat(0xffffff, isPlayer ? 0.84 : zPreset!.roughnessBase, 0.04, hTex.side, undefined, 0, 0.0);
-    const headTopMat = makeActorMat(0xffffff, isPlayer ? 0.84 : 0.72, 0.02, hTex.top, undefined, 0, isPlayer ? 0.0 : 0.35);
+    const headTopMat = makeActorMat(0xffffff, isPlayer ? 0.84 : 0.78, 0.02, hTex.top, undefined, 0, isPlayer ? 0.0 : 0.35);
 
     const torsoFrontMat = makeActorMat(0xffffff, isPlayer ? 0.88 : zPreset!.roughnessBase + 0.06, 0.05, tTex.front, undefined, 0, 0.0);
     const torsoBackMat = makeActorMat(0xffffff, isPlayer ? 0.88 : zPreset!.roughnessBase + 0.08, 0.05, tTex.back, undefined, 0, 0.0);
     const torsoSideMat = makeActorMat(0xffffff, isPlayer ? 0.88 : zPreset!.roughnessBase + 0.1, 0.05, tTex.side, undefined, 0, 0.35);
 
     const skullWrapMat = !isPlayer
-      ? makeActorMat(0xffffff, zPreset!.roughnessBase, 0.04, hTex.wrap ?? hTex.front, undefined, 0, 0.0, true)
+      ? makeActorMat(0xffffff, Math.max(0.50, zPreset!.roughnessBase + 0.08), 0.03, hTex.wrap ?? hTex.front, undefined, 0, 0.0, true)
       : headFrontMat;
+    // Bloater's torso is mostly exposed ruptured flesh; other archetypes wear tattered cloth over torso
     const torsoWrapMat = !isPlayer
-      ? makeActorMat(0xffffff, zPreset!.roughnessBase + 0.06, 0.05, tTex.wrap ?? tTex.front, undefined, 0, 0.0, true)
+      ? makeActorMat(
+          0xffffff,
+          isBloater ? 0.56 : 0.84,
+          0.04,
+          tTex.wrap ?? tTex.front,
+          undefined,
+          0,
+          isBloater ? 0.0 : 0.35,
+          true
+        )
       : torsoFrontMat;
 
     const flashMaterials: THREE.MeshStandardMaterial[] = [
@@ -2424,10 +2444,14 @@ export class ThreeModelFactory {
       sx: number,
       sy: number,
       sz: number,
+      rx = 0,
+      ry = 0,
+      rz = 0,
       castShadow = true
     ) => {
       const m = new THREE.Mesh(geo, mat);
       m.position.set(px, py, pz);
+      m.rotation.set(rx, ry, rz);
       m.scale.set(sx, sy, sz);
       m.castShadow = castShadow;
       m.receiveShadow = true;
@@ -2448,24 +2472,27 @@ export class ThreeModelFactory {
     };
 
     const root = new THREE.Group();
-    this.addContactShadow(root, isBloater ? 0.96 : 0.68, isBloater ? 0.96 : 0.68);
+    this.addContactShadow(root, isBloater ? 0.94 : 0.66, isBloater ? 0.94 : 0.66);
 
     const bodyPivot = new THREE.Group();
     root.add(bodyPivot);
 
-    // Legs with sculpted tapered calves/thighs + cuffed combat boots
-    const legH = isRunner ? 0.34 : 0.32;
-    const legSpread = isBloater ? 0.18 : 0.11;
+    // Legs: player keeps classic silhouette; zombies get taller anatomical two-segment articulated legs (thigh + knee + calf + boot)
+    const legH = isPlayer ? 0.32 : isSpitter ? 0.49 : isRunner ? 0.48 : isBloater ? 0.43 : 0.45;
+    const legSpread = isPlayer ? 0.11 : isBloater ? 0.145 : isRunner ? 0.088 : isSpitter ? 0.082 : 0.092;
     const leftLegPivot = new THREE.Group();
     leftLegPivot.position.set(0, legH, -legSpread);
     const rightLegPivot = new THREE.Group();
     rightLegPivot.position.set(0, legH, legSpread);
 
-    const bootHiMat = makeActorMat('#382d28', 0.76, 0.06, undefined, undefined, 0, 0.35, !isPlayer);
+    let leftKneePivot: THREE.Group | undefined;
+    let rightKneePivot: THREE.Group | undefined;
+
+    const bootHiMat = makeActorMat('#362c26', 0.82, 0.05, undefined, undefined, 0, 0.35, !isPlayer);
     allMaterials.push(bootHiMat);
     flashMaterials.push(bootHiMat);
 
-    const makeLeg = (pivot: THREE.Group) => {
+    const makeLeg = (pivot: THREE.Group, isLeft: boolean) => {
       if (isPlayer) {
         const l = this.box(0.13, 0.22, 0.13, pantsTexMat, 0, -0.11, 0);
         const cuff = this.box(0.15, 0.03, 0.14, bootHiMat, 0.01, -0.21, 0);
@@ -2473,56 +2500,99 @@ export class ThreeModelFactory {
         pivot.add(l, cuff, b);
         flashMeshes.push(l, cuff, b);
       } else {
-        const topR = isBloater ? 0.095 : isRunner ? 0.066 : 0.072;
-        const midR = isBloater ? 0.088 : isRunner ? 0.058 : 0.064;
-        const botR = isBloater ? 0.072 : isRunner ? 0.044 : 0.05;
-        const legLen = legH - 0.085;
+        const bootH = 0.082;
+        const limbSpan = legH - bootH;
+        const thighLen = limbSpan * 0.52;
+        const shinLen = limbSpan * 0.48;
+        const topR = isBloater ? 0.086 : isSpitter ? 0.048 : isRunner ? 0.056 : 0.058;
+        const kneeR = isBloater ? 0.072 : isSpitter ? 0.039 : isRunner ? 0.045 : 0.047;
+        const ankleR = isBloater ? 0.058 : isSpitter ? 0.031 : isRunner ? 0.036 : 0.038;
 
-        const legGeo = this.getCachedGeo(`z_leg_${kind}`, () =>
+        const thighGeo = this.getCachedGeo(`z_thigh_${kind}`, () =>
           createSculptedLimbSegmentGeometry({
             topRadius: topR,
-            midRadius: midR,
-            botRadius: botR,
-            length: legLen,
+            midRadius: topR * 0.94,
+            botRadius: kneeR,
+            length: thighLen,
             horizontalX: false,
             radialSegments: 8,
-            vStart: 1,
-            vEnd: 0,
+            vStart: 1.0,
+            vEnd: 0.52,
           })
         );
-        const legMesh = new THREE.Mesh(legGeo, pantsTexMat);
-        legMesh.castShadow = true;
-        legMesh.receiveShadow = true;
+        const thighMesh = new THREE.Mesh(thighGeo, pantsTexMat);
+        thighMesh.castShadow = true;
+        thighMesh.receiveShadow = true;
+
+        const kneeCapGeo = this.getCachedGeo(`z_kneecap_${kind}`, () => {
+          const g = new THREE.SphereGeometry(kneeR * 0.96, 8, 6);
+          const pos = g.getAttribute('position') as THREE.BufferAttribute;
+          const cols = new Float32Array(pos.count * 3);
+          for (let i = 0; i < pos.count; i++) {
+            const s = 0.84;
+            cols[i * 3] = s;
+            cols[i * 3 + 1] = s;
+            cols[i * 3 + 2] = s;
+          }
+          g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+          return g;
+        });
+        const kneeCap = new THREE.Mesh(kneeCapGeo, pantsTexMat);
+        kneeCap.position.set(0.005, -thighLen, 0);
+        kneeCap.castShadow = true;
+        kneeCap.receiveShadow = true;
+
+        const kneePivot = new THREE.Group();
+        kneePivot.position.set(0, -thighLen, 0);
+        if (isLeft) leftKneePivot = kneePivot;
+        else rightKneePivot = kneePivot;
+
+        const shinGeo = this.getCachedGeo(`z_shin_${kind}`, () =>
+          createSculptedLimbSegmentGeometry({
+            topRadius: kneeR * 0.96,
+            midRadius: kneeR * 0.92,
+            botRadius: ankleR,
+            length: shinLen,
+            horizontalX: false,
+            radialSegments: 8,
+            vStart: 0.52,
+            vEnd: 0.0,
+          })
+        );
+        const shinMesh = new THREE.Mesh(shinGeo, pantsTexMat);
+        shinMesh.castShadow = true;
+        shinMesh.receiveShadow = true;
 
         const cuffGeo = this.getCachedGeo(`z_cuff_${kind}`, () =>
           createOrganicLoftGeometry(
             [
-              { y: -0.028, rx: botR * 1.18, rz: botR * 1.14, ao: 0.78 },
-              { y: 0, rx: botR * 1.08, rz: botR * 1.04, ao: 0.96 },
+              { y: -0.024, rx: ankleR * 1.24, rz: ankleR * 1.18, ao: 0.74 },
+              { y: 0, rx: ankleR * 1.12, rz: ankleR * 1.08, ao: 0.95 },
             ],
             8,
             true
           )
         );
         const cuff = new THREE.Mesh(cuffGeo, bootHiMat);
-        cuff.position.set(0.008, -(legH - 0.095), 0);
+        cuff.position.set(0.006, -shinLen + 0.016, 0);
         cuff.castShadow = true;
         cuff.receiveShadow = true;
 
         const bootGeo = this.getCachedGeo(`z_boot_${kind}`, () =>
-          createSculptedBootGeometry(botR * 2.15, botR * 2.95, 0.088)
+          createSculptedBootGeometry(ankleR * 2.25, ankleR * 3.15, bootH)
         );
         const boot = new THREE.Mesh(bootGeo, bootMat);
-        boot.position.set(0.015, -legLen, 0);
+        boot.position.set(0.014, -shinLen, 0);
         boot.castShadow = true;
         boot.receiveShadow = true;
 
-        pivot.add(legMesh, cuff, boot);
-        flashMeshes.push(legMesh, cuff, boot);
+        kneePivot.add(shinMesh, cuff, boot);
+        pivot.add(thighMesh, kneeCap, kneePivot);
+        flashMeshes.push(thighMesh, kneeCap, shinMesh, cuff, boot);
       }
     };
-    makeLeg(leftLegPivot);
-    makeLeg(rightLegPivot);
+    makeLeg(leftLegPivot, true);
+    makeLeg(rightLegPivot, false);
     bodyPivot.add(leftLegPivot, rightLegPivot);
 
     // Torso
@@ -2530,9 +2600,9 @@ export class ThreeModelFactory {
     torso.position.set(0, legH, 0);
     bodyPivot.add(torso);
 
-    const torsoW = isBloater ? 0.42 : isRunner ? 0.26 : isSpitter ? 0.25 : 0.28;
-    const torsoD = isBloater ? 0.56 : isRunner ? 0.41 : isSpitter ? 0.35 : 0.38;
-    const torsoH = isBloater ? 0.45 : isRunner ? 0.38 : isSpitter ? 0.39 : 0.38;
+    const torsoW = isPlayer ? 0.28 : isBloater ? 0.40 : isRunner ? 0.23 : isSpitter ? 0.22 : 0.24;
+    const torsoD = isPlayer ? 0.38 : isBloater ? 0.46 : isRunner ? 0.33 : isSpitter ? 0.28 : 0.32;
+    const torsoH = isPlayer ? 0.38 : isBloater ? 0.47 : isRunner ? 0.365 : isSpitter ? 0.39 : 0.38;
 
     let zombieBlisterMat: THREE.MeshStandardMaterial | null = null;
     if (isPlayer) {
@@ -2560,7 +2630,7 @@ export class ThreeModelFactory {
         this.box(0.07, 0.1, 0.07, canteenMat, -torsoW * 0.5 - 0.08, 0.13, 0.13)
       );
     } else {
-      // Sculpted rounded organic anatomical torso (pelvis -> waist -> ribcage/gut -> shoulders)
+      // Sculpted anatomical zombie torso + layered 3D tattered clothing, bones, gear & integrated boils
       const torsoGeo = this.getCachedGeo(`z_torso_${kind}`, () => createSculptedTorsoGeometry(kind));
       const torsoCore = new THREE.Mesh(torsoGeo, torsoWrapMat);
       torsoCore.castShadow = true;
@@ -2568,119 +2638,256 @@ export class ThreeModelFactory {
       torso.add(torsoCore);
       flashMeshes.push(torsoCore);
 
+      const clothTrimMat = makeActorMat(
+        kind === 'walker' ? '#3d2f29' : kind === 'runner' ? '#4a1c1c' : kind === 'bloater' ? '#363f28' : '#242e33',
+        0.92,
+        0.02,
+        undefined,
+        undefined,
+        0,
+        0.35,
+        true
+      );
+      clothTrimMat.side = THREE.DoubleSide;
+      allMaterials.push(clothTrimMat);
+      flashMaterials.push(clothTrimMat);
+
+      const boneMat = makeActorMat('#cfc2aa', 0.50, 0.04, undefined, undefined, 0, 0.35, true);
+      allMaterials.push(boneMat);
+      flashMaterials.push(boneMat);
+
+      const boilGeoA = this.getCachedGeo('z_boil_a', () => createSculptedBoilGeometry(1));
+      const boilGeoB = this.getCachedGeo('z_boil_b', () => createSculptedBoilGeometry(3));
+
       if (kind === 'walker') {
-        // Asymmetric rounded shoulder hump + curved anatomical ivory rib arches + necrotic blisters
-        const humpGeo = this.getCachedGeo('z_walker_hump', () => new THREE.IcosahedronGeometry(0.11, 1));
-        const hunch = new THREE.Mesh(humpGeo, torsoWrapMat);
-        hunch.position.set(-0.06, 0.29, 0.035);
-        hunch.scale.set(0.85, 0.72, 1.05);
-        hunch.castShadow = true;
-        hunch.receiveShadow = true;
+        // 3D Torn jacket collar/lapels + ragged hanging jacket hem + belt & metal buckle
+        const collarGeo = this.getCachedGeo('z_walker_collar', () =>
+          createTornCollarGeometry({ rx: 0.086, rz: 0.115, height: 0.056, seed: 3 })
+        );
+        const collar = new THREE.Mesh(collarGeo, clothTrimMat);
+        collar.position.set(0.018, torsoH - 0.04, 0);
+        collar.castShadow = true;
 
-        const ribMat = makeActorMat('#968773', 0.68, 0.05, undefined, undefined, 0, 0.0);
-        allMaterials.push(ribMat);
-        flashMaterials.push(ribMat);
-        const ribGeo = this.getCachedGeo('z_walker_rib', () => createSculptedRibArchGeometry(0.122, 0.088, 0.0065));
-        const rib1 = new THREE.Mesh(ribGeo, ribMat);
-        rib1.position.set(0.012, 0.265, 0);
-        const rib2 = new THREE.Mesh(ribGeo, ribMat);
-        rib2.position.set(0.008, 0.215, 0);
+        const hemGeo = this.getCachedGeo('z_walker_hem', () =>
+          createTatteredHemGeometry({ topRx: 0.095, topRz: 0.134, length: 0.145, flare: 1.24, seed: 5, frontGap: 0.34 })
+        );
+        const hem = new THREE.Mesh(hemGeo, clothTrimMat);
+        hem.position.set(-0.004, 0.032, 0);
+        hem.castShadow = true;
+
+        const beltMat = makeActorMat('#221a14', 0.82, 0.06, undefined, undefined, 0, 0.35, false);
+        const buckleMat = makeActorMat('#8c7f64', 0.38, 0.68, undefined, undefined, 0, 0.35, false);
+        allMaterials.push(beltMat, buckleMat);
+        flashMaterials.push(beltMat, buckleMat);
+
+        const beltGeo = this.getCachedGeo('z_walker_belt', () =>
+          createOrganicLoftGeometry(
+            [
+              { y: 0, rx: 0.094, rz: 0.130, ao: 0.78 },
+              { y: 0.034, rx: 0.095, rz: 0.131, ao: 0.94 },
+            ],
+            10,
+            false
+          )
+        );
+        const belt = new THREE.Mesh(beltGeo, beltMat);
+        belt.position.set(-0.004, 0.015, 0);
+        const buckle = new THREE.Mesh(this.unitBox, buckleMat);
+        buckle.position.set(0.092, 0.032, 0);
+        buckle.scale.set(0.014, 0.036, 0.044);
+
+        // 3 Curved anatomical ivory ribs bridging the torn chest cavity
+        const ribGeo = this.getCachedGeo('z_walker_rib', () => createSculptedRibArchGeometry(0.112, 0.076, 0.006));
+        const rib1 = new THREE.Mesh(ribGeo, boneMat);
+        rib1.position.set(0.012, 0.258, 0);
+        const rib2 = new THREE.Mesh(ribGeo, boneMat);
+        rib2.position.set(0.009, 0.212, 0);
         rib2.scale.set(0.95, 0.95, 0.92);
-        const rib3 = new THREE.Mesh(ribGeo, ribMat);
-        rib3.position.set(0.004, 0.165, 0);
-        rib3.scale.set(0.88, 0.9, 0.84);
-        torso.add(hunch, rib1, rib2, rib3);
-        flashMeshes.push(hunch, rib1, rib2, rib3);
+        const rib3 = new THREE.Mesh(ribGeo, boneMat);
+        rib3.position.set(0.006, 0.168, 0);
+        rib3.scale.set(0.88, 0.90, 0.84);
 
-        zombieBlisterMat = makeActorMat('#8b962e', 0.24, 0.04, undefined, '#4a5212', 0.16, 1.0);
+        torso.add(collar, hem, belt, buckle, rib1, rib2, rib3);
+        flashMeshes.push(collar, hem, belt, buckle, rib1, rib2, rib3);
+
+        zombieBlisterMat = makeActorMat('#7c8730', 0.24, 0.03, undefined, '#3f4711', 0.14, 1.0, true);
         allMaterials.push(zombieBlisterMat);
         flashMaterials.push(zombieBlisterMat);
-        addBlister(torso, this.blisterGeo, zombieBlisterMat, 0.112, 0.30, -0.09, 0.82, 0.76, 0.82);
-        addBlister(torso, this.blisterGeo, zombieBlisterMat, 0.102, 0.17, 0.10, 0.74, 0.88, 0.74);
-        addBlister(torso, this.blisterGeo, zombieBlisterMat, -0.10, 0.32, 0.062, 0.9, 0.74, 0.86);
-        addOozeAnchor(torso, 0.13, 0.24, -0.06);
-        addOozeAnchor(torso, 0.12, 0.16, 0.10);
+        addBlister(torso, boilGeoA, zombieBlisterMat, 0.092, 0.295, -0.098, 0.56, 0.52, 0.56, -0.5, 0, -1.1);
+        addBlister(torso, boilGeoB, zombieBlisterMat, -0.088, 0.305, 0.068, 0.62, 0.54, 0.60, 0.35, 0, 1.1);
+        addOozeAnchor(torso, 0.11, 0.22, -0.05);
+        addOozeAnchor(torso, 0.10, 0.16, 0.08);
       } else if (kind === 'runner') {
-        // Sculpted ovoid pectoral muscle relief + inflamed crimson blood blisters
-        const pecMat = makeActorMat('#591414', 0.38, 0.04, undefined, '#320606', 0.06, 0.0);
+        // Exposed striated crimson pectoral relief + ragged athletic shreds + dorsal spinal bone ridge
+        const pecMat = makeActorMat('#611416', 0.40, 0.04, undefined, '#290506', 0.05, 0.0, false);
         allMaterials.push(pecMat);
         flashMaterials.push(pecMat);
-        const pecGeo = this.getCachedGeo('z_runner_pec', () => new THREE.SphereGeometry(0.056, 8, 6));
+        const pecGeo = this.getCachedGeo('z_runner_pec', () => new THREE.SphereGeometry(0.050, 8, 6));
         const pecL = new THREE.Mesh(pecGeo, pecMat);
-        pecL.position.set(0.092, 0.27, -0.072);
-        pecL.scale.set(0.32, 0.68, 0.88);
+        pecL.position.set(0.094, 0.255, -0.064);
+        pecL.scale.set(0.32, 0.66, 0.88);
         const pecR = new THREE.Mesh(pecGeo, pecMat);
-        pecR.position.set(0.092, 0.27, 0.072);
-        pecR.scale.set(0.32, 0.68, 0.88);
-        torso.add(pecL, pecR);
-        flashMeshes.push(pecL, pecR);
+        pecR.position.set(0.094, 0.255, 0.064);
+        pecR.scale.set(0.32, 0.66, 0.88);
 
-        zombieBlisterMat = makeActorMat('#b32020', 0.20, 0.04, undefined, '#6b0f0f', 0.22, 1.0);
+        const hemGeo = this.getCachedGeo('z_runner_hem', () =>
+          createTatteredHemGeometry({ topRx: 0.086, topRz: 0.124, length: 0.11, flare: 1.18, seed: 11, frontGap: 0.52 })
+        );
+        const hem = new THREE.Mesh(hemGeo, clothTrimMat);
+        hem.position.set(-0.008, 0.036, 0);
+
+        const spineGeo = this.getCachedGeo('z_runner_spine', () => createSculptedSpineFinGeometry(5, 0.82));
+        const spine = new THREE.Mesh(spineGeo, boneMat);
+        spine.position.set(-0.086, 0.11, 0);
+        spine.castShadow = true;
+
+        torso.add(pecL, pecR, hem, spine);
+        flashMeshes.push(pecL, pecR, hem, spine);
+
+        zombieBlisterMat = makeActorMat('#a81f22', 0.22, 0.04, undefined, '#5c0c0e', 0.18, 1.0, true);
         allMaterials.push(zombieBlisterMat);
         flashMaterials.push(zombieBlisterMat);
-        addBlister(torso, this.blisterGeo, zombieBlisterMat, 0.102, 0.325, 0.096, 0.76, 0.82, 0.76);
-        addBlister(torso, this.blisterGeo, zombieBlisterMat, -0.092, 0.25, -0.11, 0.76, 0.72, 0.8);
-        addOozeAnchor(torso, 0.125, 0.24, 0.06);
-        addOozeAnchor(torso, -0.06, 0.25, -0.12);
+        addBlister(torso, boilGeoA, zombieBlisterMat, 0.096, 0.305, 0.088, 0.48, 0.46, 0.48, 0.45, 0, -1.15);
+        addBlister(torso, boilGeoB, zombieBlisterMat, -0.082, 0.235, -0.095, 0.50, 0.46, 0.50, -0.45, 0, 1.15);
+        addOozeAnchor(torso, 0.115, 0.23, 0.05);
+        addOozeAnchor(torso, -0.06, 0.24, -0.10);
       } else if (kind === 'bloater') {
-        // Rounded asymmetrical tumor lobe + heavy organic gut dome + glowing animated pustules
-        const lumpGeo = this.getCachedGeo('z_bloater_lump', () => new THREE.IcosahedronGeometry(0.115, 1));
+        // Heavy asymmetrical sagging gut + left shoulder tumor + bursting hazmat straps + integrated boils
+        const lumpGeo = this.getCachedGeo('z_bloater_lump', () => {
+          const g = new THREE.IcosahedronGeometry(0.105, 1);
+          const pos = g.getAttribute('position') as THREE.BufferAttribute;
+          const cols = new Float32Array(pos.count * 3);
+          for (let i = 0; i < pos.count; i++) {
+            const s = 0.88;
+            cols[i * 3] = s;
+            cols[i * 3 + 1] = s;
+            cols[i * 3 + 2] = s;
+          }
+          g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+          return g;
+        });
         const bellyDome = new THREE.Mesh(lumpGeo, torsoWrapMat);
-        bellyDome.position.set(0.14, 0.14, 0.015);
-        bellyDome.scale.set(1.05, 1.22, 1.48);
+        bellyDome.position.set(0.135, 0.135, 0.015);
+        bellyDome.scale.set(0.95, 1.12, 1.38);
         bellyDome.castShadow = true;
         bellyDome.receiveShadow = true;
 
         const shoulderTumor = new THREE.Mesh(lumpGeo, torsoWrapMat);
-        shoulderTumor.position.set(-0.08, 0.34, -0.14);
-        shoulderTumor.scale.set(0.95, 0.85, 0.98);
+        shoulderTumor.position.set(-0.072, 0.355, -0.125);
+        shoulderTumor.scale.set(0.88, 0.80, 0.92);
         shoulderTumor.castShadow = true;
         shoulderTumor.receiveShadow = true;
-        torso.add(bellyDome, shoulderTumor);
-        flashMeshes.push(bellyDome, shoulderTumor);
 
-        zombieBlisterMat = makeActorMat(0xffffff, 0.28, 0.02, this.atlas.pustuleTex.lime, '#78b828', 0.55, 1.0);
+        // Bursting industrial/hazmat overalls straps & torn lower work-hem
+        const strapMat = makeActorMat('#2a3022', 0.88, 0.04, undefined, undefined, 0, 0.35, false);
+        allMaterials.push(strapMat);
+        flashMaterials.push(strapMat);
+
+        const strapGeo = this.getCachedGeo('z_bloater_strap', () =>
+          createSculptedRibArchGeometry(0.175, 0.025, 0.015)
+        );
+        const strapL = new THREE.Mesh(strapGeo, strapMat);
+        strapL.rotation.z = Math.PI * 0.5;
+        strapL.position.set(0.015, 0.31, -0.115);
+        const strapR = new THREE.Mesh(strapGeo, strapMat);
+        strapR.rotation.z = Math.PI * 0.5;
+        strapR.position.set(0.015, 0.31, 0.115);
+
+        const hemGeo = this.getCachedGeo('z_bloater_hem', () =>
+          createTatteredHemGeometry({ topRx: 0.165, topRz: 0.215, length: 0.11, flare: 1.14, seed: 19, frontGap: 0.65 })
+        );
+        const hem = new THREE.Mesh(hemGeo, clothTrimMat);
+        hem.position.set(0.008, 0.025, 0);
+
+        torso.add(bellyDome, shoulderTumor, strapL, strapR, hem);
+        flashMeshes.push(bellyDome, shoulderTumor, strapL, strapR, hem);
+
+        zombieBlisterMat = makeActorMat(0xffffff, 0.22, 0.02, this.atlas.pustuleTex.lime, '#6da822', 0.42, 1.0, true);
         allMaterials.push(zombieBlisterMat);
-        const pustulePositions: Array<[number, number, number, number, number, number]> = [
-          [0.185, 0.29, 0.115, 0.82, 0.90, 0.82],
-          [0.22, 0.14, -0.105, 0.92, 0.80, 0.84],
-          [0.23, 0.18, 0.04, 0.65, 0.68, 0.65],
-          [0.185, 0.07, 0.088, 0.58, 0.62, 0.58],
-          [-0.165, 0.33, -0.125, 0.80, 0.76, 0.74],
-          [-0.185, 0.18, 0.115, 0.74, 0.76, 0.74],
-          [0.01, 0.39, -0.185, 0.74, 0.66, 0.74],
-          [-0.075, 0.38, 0.155, 0.62, 0.66, 0.62],
+        // Multi-scale irregular boils oriented flush along local surface normals (no floating ping-pong balls!)
+        const boilSpecs: Array<[number, number, number, number, number, number, number, number, number, boolean]> = [
+          [0.210, 0.255, 0.095, 1.05, 0.92, 1.05, 0.25, 0, -1.45, true],
+          [0.228, 0.145, -0.088, 1.18, 0.98, 1.12, -0.25, 0, -1.55, false],
+          [0.232, 0.190, 0.028, 0.72, 0.68, 0.72, 0.08, 0, -1.52, true],
+          [0.195, 0.082, 0.075, 0.64, 0.58, 0.64, 0.22, 0, -1.78, false],
+          [-0.145, 0.365, -0.115, 0.96, 0.86, 0.94, -0.45, 0, 1.05, true],
+          [-0.165, 0.195, 0.105, 0.84, 0.78, 0.84, 0.35, 0, 1.48, false],
+          [-0.015, 0.420, -0.165, 0.82, 0.72, 0.82, -0.82, 0, 0.25, true],
         ];
-        for (const [px, py, pz, sx, sy, sz] of pustulePositions) {
-          addBlister(torso, this.pustuleGeo, zombieBlisterMat, px, py, pz, sx, sy, sz);
+        for (const [px, py, pz, sx, sy, sz, rx, ry, rz, useA] of boilSpecs) {
+          addBlister(torso, useA ? boilGeoA : boilGeoB, zombieBlisterMat, px, py, pz, sx, sy, sz, rx, ry, rz);
         }
-        addOozeAnchor(torso, 0.24, 0.18, 0.05);
-        addOozeAnchor(torso, 0.21, 0.13, -0.11);
-        addOozeAnchor(torso, -0.16, 0.28, 0.10);
+        addOozeAnchor(torso, 0.235, 0.18, 0.04);
+        addOozeAnchor(torso, 0.215, 0.14, -0.095);
+        addOozeAnchor(torso, -0.155, 0.28, 0.09);
       } else if (kind === 'spitter') {
-        zombieBlisterMat = makeActorMat(0xffffff, 0.24, 0.06, this.atlas.pustuleTex.cyan, '#39cf98', 0.60, 1.0);
+        // Gaunt torn coat collar & tattered tails + glowing acid core CAGED BEHIND 3D skeletal ribs + curved dorsal spines
+        const collarGeo = this.getCachedGeo('z_spitter_collar', () =>
+          createTornCollarGeometry({ rx: 0.078, rz: 0.102, height: 0.052, seed: 29 })
+        );
+        const collar = new THREE.Mesh(collarGeo, clothTrimMat);
+        collar.position.set(0.036, torsoH - 0.04, 0);
+
+        const hemGeo = this.getCachedGeo('z_spitter_hem', () =>
+          createTatteredHemGeometry({ topRx: 0.084, topRz: 0.116, length: 0.155, flare: 1.28, seed: 31, frontGap: 0.42 })
+        );
+        const hem = new THREE.Mesh(hemGeo, clothTrimMat);
+        hem.position.set(-0.008, 0.028, 0);
+
+        zombieBlisterMat = makeActorMat(0xffffff, 0.20, 0.04, this.atlas.pustuleTex.cyan, '#36c992', 0.55, 1.0, true);
         allMaterials.push(zombieBlisterMat);
 
-        addBlister(torso, this.pustuleGeo, zombieBlisterMat, 0.11, 0.26, 0, 0.82, 1.05, 0.90);
-        addBlister(torso, this.pustuleGeo, zombieBlisterMat, 0.115, 0.165, -0.045, 0.58, 0.66, 0.62);
-        addBlister(torso, this.blisterGeo, zombieBlisterMat, 0.045, 0.355, 0.10, 0.74, 0.66, 0.74);
-        addBlister(torso, this.blisterGeo, zombieBlisterMat, 0.045, 0.355, -0.10, 0.72, 0.65, 0.72);
+        // Recessed pulsating bioluminescent acid organ cradled inside the chest cavity behind bone ribs
+        const coreGeo = this.getCachedGeo('z_spit_core', () => {
+          const g = new THREE.IcosahedronGeometry(0.068, 1);
+          const pos = g.getAttribute('position') as THREE.BufferAttribute;
+          const cols = new Float32Array(pos.count * 3);
+          for (let i = 0; i < pos.count; i++) {
+            cols[i * 3] = 0.92;
+            cols[i * 3 + 1] = 1.0;
+            cols[i * 3 + 2] = 0.92;
+          }
+          g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+          return g;
+        });
+        addBlister(torso, coreGeo, zombieBlisterMat, 0.072, 0.228, 0, 0.85, 1.15, 0.92, 0, 0, 0);
+        // Smaller asymmetric venom glands tucked into clavicles
+        addBlister(torso, boilGeoA, zombieBlisterMat, 0.062, 0.340, 0.088, 0.52, 0.46, 0.52, 0.65, 0, -0.65);
+        addBlister(torso, boilGeoB, zombieBlisterMat, 0.062, 0.340, -0.088, 0.50, 0.44, 0.50, -0.65, 0, -0.65);
 
-        for (let i = 0; i < 4; i++) {
-          const spine = new THREE.Mesh(this.spineConeGeo, zombieBlisterMat);
-          spine.position.set(-0.115 - i * 0.005, 0.10 + i * 0.082, 0);
-          spine.rotation.z = 1.15;
-          torso.add(spine);
-        }
-        addOozeAnchor(torso, 0.135, 0.24, 0.02);
-        addOozeAnchor(torso, 0.06, 0.33, 0.11);
-        addOozeAnchor(torso, -0.115, 0.25, 0);
+        // 3 Curved skeletal ribs caging the glowing acid organ
+        const spitRibGeo = this.getCachedGeo('z_spitter_rib', () => createSculptedRibArchGeometry(0.118, 0.080, 0.0065));
+        const sr1 = new THREE.Mesh(spitRibGeo, boneMat);
+        sr1.position.set(0.018, 0.275, 0);
+        const sr2 = new THREE.Mesh(spitRibGeo, boneMat);
+        sr2.position.set(0.015, 0.228, 0);
+        sr2.scale.set(0.96, 0.96, 0.92);
+        const sr3 = new THREE.Mesh(spitRibGeo, boneMat);
+        sr3.position.set(0.010, 0.180, 0);
+        sr3.scale.set(0.88, 0.88, 0.84);
+
+        // Curved protruding dorsal vertebral spines along hunched back
+        const spineGeo = this.getCachedGeo('z_spitter_spine', () => createSculptedSpineFinGeometry(5, 1.12));
+        const spine = new THREE.Mesh(spineGeo, boneMat);
+        spine.position.set(-0.098, 0.10, 0);
+        spine.castShadow = true;
+
+        torso.add(collar, hem, sr1, sr2, sr3, spine);
+        flashMeshes.push(collar, hem, sr1, sr2, sr3, spine);
+
+        addOozeAnchor(torso, 0.13, 0.23, 0.02);
+        addOozeAnchor(torso, 0.07, 0.32, 0.09);
+        addOozeAnchor(torso, -0.105, 0.24, 0);
       }
     }
 
-    // Head + Articulated Lower Mandible + Wet Mouth Cavity + Saliva Strand
+    // Head + Corded Neck + Textured Recessed Eyeballs + Ragged 3D Hair + Articulated Jaw + Teeth
     const headPivot = new THREE.Group();
-    headPivot.position.set(isSpitter ? 0.08 : isRunner ? 0.05 : isBloater ? 0.04 : 0.02, isBloater ? torsoH - 0.04 : torsoH, 0);
+    headPivot.position.set(
+      isPlayer ? 0.02 : isSpitter ? 0.066 : isRunner ? 0.044 : isBloater ? 0.020 : 0.030,
+      isPlayer ? torsoH : isBloater ? torsoH - 0.032 : torsoH - 0.008,
+      0
+    );
     torso.add(headPivot);
 
     let jawPivot: THREE.Group | undefined;
@@ -2708,12 +2915,10 @@ export class ThreeModelFactory {
         this.box(0.08, 0.03, headSize + 0.02, brimMat, headSize * 0.5 + 0.035, headSize - 0.075, 0)
       );
     } else {
-      // Sculpted organic rounded skull (brow, cheekbones, orbital hollows, nasal recess, maxilla)
-      // + recessed 3D glowing eyeballs + 3D curved teeth + articulated U-shaped mandible
       const sm = getSkullMetrics(kind);
       const neckGeo = this.getCachedGeo(`z_neck_${kind}`, () => createSculptedNeckGeometry(kind));
       const neck = new THREE.Mesh(neckGeo, skullWrapMat);
-      neck.position.set(-0.015, 0.01, 0);
+      neck.position.set(-0.012, 0.012, 0);
       neck.castShadow = true;
       neck.receiveShadow = true;
       headPivot.add(neck);
@@ -2726,32 +2931,54 @@ export class ThreeModelFactory {
       headPivot.add(skull);
       flashMeshes.push(skull);
 
-      // Recessed glowing wet eyeballs inside sculpted concave orbital sockets
-      const eyeColor =
+      // Clinging matted 3D hair cap on Walker & Runner skulls
+      if (kind === 'walker' || kind === 'runner') {
+        const hairMat = makeActorMat(
+          kind === 'runner' ? '#2e1414' : '#241c17',
+          0.94,
+          0.02,
+          undefined,
+          undefined,
+          0,
+          0.35,
+          true
+        );
+        hairMat.side = THREE.DoubleSide;
+        allMaterials.push(hairMat);
+        flashMaterials.push(hairMat);
+        const hairGeo = this.getCachedGeo(`z_hair_${kind}`, () => createSculptedHairCrownGeometry(kind));
+        const hair = new THREE.Mesh(hairGeo, hairMat);
+        hair.castShadow = true;
+        headPivot.add(hair);
+        flashMeshes.push(hair);
+      }
+
+      // Textured recessed wet horror eyeballs (bloodshot sclera + glowing colored iris + sharp dark pupil)
+      const eyeEmissive =
         kind === 'runner'
-          ? '#ff472b'
+          ? '#d93218'
           : kind === 'bloater'
-            ? '#c4f24b'
+            ? '#8eb82c'
             : kind === 'spitter'
-              ? '#6ef7be'
-              : '#ff4d42';
-      const eyeMat = makeActorMat(eyeColor, 0.12, 0.02, undefined, eyeColor, 1.15, -1.0);
+              ? '#42e0a0'
+              : '#c93a24';
+      const eyeMat = makeActorMat(0xffffff, 0.10, 0.02, hTex.eye, eyeEmissive, 0.42, -1.0, false);
       allMaterials.push(eyeMat);
-      const eyeGeo = this.getCachedGeo(`z_eye_${kind}`, () => new THREE.SphereGeometry(sm.eyeRadius, 8, 6));
+      const eyeGeo = this.getCachedGeo(`z_eye_${kind}`, () => new THREE.SphereGeometry(sm.eyeRadius, 12, 8));
       const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
       eyeL.position.set(sm.eyeX, sm.eyeY, -sm.eyeZ);
       const eyeR = new THREE.Mesh(eyeGeo, eyeMat);
       eyeR.position.set(sm.eyeX, sm.eyeY, sm.eyeZ);
       headPivot.add(eyeL, eyeR);
 
-      // Glossy wet dark oral cavity inside upper palate & behind jaw arch
+      // Glossy dark oral cavity inside upper palate & behind jaw arch
       const mouthInteriorMat = makeActorMat(
-        isSpitter ? '#103b2d' : isBloater ? '#24300c' : '#330507',
+        isSpitter ? '#0d3327' : isBloater ? '#1f2b0b' : '#2e0507',
         0.12,
         0.03,
         undefined,
-        isSpitter ? '#239e70' : '#140101',
-        isSpitter ? 0.35 : 0.08,
+        isSpitter ? '#1e8c64' : '#120101',
+        isSpitter ? 0.32 : 0.06,
         -1.0,
         true
       );
@@ -2760,22 +2987,22 @@ export class ThreeModelFactory {
 
       const cavityGeo = this.getCachedGeo(`z_cavity_${kind}`, () => createSculptedMouthCavityGeometry(kind));
       const palate = new THREE.Mesh(cavityGeo, mouthInteriorMat);
-      palate.position.set(0.048, sm.mouthUpperY + 0.012, 0);
+      palate.position.set(0.032, sm.mouthUpperY + 0.010, 0);
       headPivot.add(palate);
       flashMeshes.push(palate);
 
-      // 3D curved jagged teeth (upper maxilla arc + lower mandible arc)
-      const teethMat = makeActorMat('#dfd4bc', 0.36, 0.04, undefined, undefined, 0, 0.0, false);
+      // 3D curved jagged yellowed ivory teeth (role=0.35 so teeth stay bone-ivory with zero pulsing green veins!)
+      const teethMat = makeActorMat('#ebe0c8', 0.38, 0.04, undefined, undefined, 0, 0.35, true);
       allMaterials.push(teethMat);
       flashMaterials.push(teethMat);
 
       const upperTeethGeo = this.getCachedGeo(`z_uteeth_${kind}`, () =>
         createCurvedTeethRowGeometry({
-          radiusX: sm.jawLength * 0.72,
+          radiusX: sm.jawLength * 0.74,
           radiusZ: sm.jawWidth * 0.38,
-          count: 6,
-          toothHeight: isRunner ? 0.022 : 0.017,
-          toothRadius: 0.0085,
+          count: 7,
+          toothHeight: isRunner ? 0.022 : 0.019,
+          toothRadius: 0.0082,
           upper: true,
         })
       );
@@ -2784,12 +3011,12 @@ export class ThreeModelFactory {
       headPivot.add(upperTeeth);
       flashMeshes.push(upperTeeth);
 
-      // Articulated U-shaped lower mandible hinged at jawPivot
+      // Articulated U-shaped lower mandible with ascending rami seated tightly beneath cheeks
       jawPivot = new THREE.Group();
-      jawPivot.position.set(0.014, 0.086, 0);
+      jawPivot.position.set(sm.jawPivotX, sm.jawPivotY, 0);
       headPivot.add(jawPivot);
 
-      const jawMat = makeActorMat(0xffffff, zPreset!.roughnessBase, 0.04, hTex.jaw ?? hTex.side, undefined, 0, 0.0, true);
+      const jawMat = makeActorMat(0xffffff, Math.max(0.50, zPreset!.roughnessBase + 0.08), 0.03, hTex.jaw ?? hTex.side, undefined, 0, 0.0, true);
       allMaterials.push(jawMat);
       flashMaterials.push(jawMat);
 
@@ -2802,76 +3029,82 @@ export class ThreeModelFactory {
 
       const lowerTeethGeo = this.getCachedGeo(`z_lteeth_${kind}`, () =>
         createCurvedTeethRowGeometry({
-          radiusX: sm.jawLength * 0.66,
+          radiusX: sm.jawLength * 0.68,
           radiusZ: sm.jawWidth * 0.35,
-          count: 5,
-          toothHeight: isRunner ? 0.019 : 0.015,
-          toothRadius: 0.0078,
+          count: 6,
+          toothHeight: isRunner ? 0.019 : 0.016,
+          toothRadius: 0.0076,
           upper: false,
         })
       );
       const lowerTeeth = new THREE.Mesh(lowerTeethGeo, teethMat);
-      lowerTeeth.position.set(0.014, -0.022, 0);
+      lowerTeeth.position.set(0.014, -0.020, 0);
       jawPivot.add(lowerTeeth);
       flashMeshes.push(lowerTeeth);
 
-      // Spitter twin lateral distended cheek/throat venom sacs pulsing on jaw & cheeks
+      // Spitter distended pulsing bioluminescent throat/gular venom pouch tucked cleanly under mandible
       if (kind === 'spitter' && zombieBlisterMat) {
-        const sacGeo = this.getCachedGeo('z_spit_sac', () => new THREE.IcosahedronGeometry(0.042, 1));
-        addBlister(jawPivot, sacGeo, zombieBlisterMat, 0.042, -0.008, 0.068, 0.62, 0.52, 0.45);
-        addBlister(jawPivot, sacGeo, zombieBlisterMat, 0.042, -0.008, -0.068, 0.62, 0.52, 0.45);
+        const throatGeo = this.getCachedGeo('z_spit_throat', () => createSculptedThroatSacGeometry());
+        addBlister(jawPivot, throatGeo, zombieBlisterMat, 0.024, -0.016, 0, 1.0, 1.0, 1.0, 0, 0, 0);
       }
 
       // Wet glistening saliva/drool strand hanging from upper gumline + mouth droplet emitter anchor
       const salivaMat = makeActorMat(
         zPreset!.salivaColorHex,
-        0.14,
+        0.12,
         0.02,
         undefined,
         isSpitter || isBloater ? zPreset!.salivaColorHex : 0x000000,
-        isSpitter ? 0.38 : isBloater ? 0.24 : 0,
+        isSpitter ? 0.36 : isBloater ? 0.22 : 0,
         -1.0
       );
       salivaMat.transparent = true;
-      salivaMat.opacity = 0.56;
+      salivaMat.opacity = 0.54;
       allMaterials.push(salivaMat);
 
       salivaStrand = new THREE.Mesh(this.salivaStrandGeo, salivaMat);
-      salivaStrand.position.set(sm.mouthFrontX - 0.015, sm.mouthUpperY + 0.004, 0.01);
+      salivaStrand.position.set(sm.mouthFrontX - 0.014, sm.mouthUpperY + 0.004, 0.008);
       salivaStrand.castShadow = false;
       salivaStrand.receiveShadow = false;
       headPivot.add(salivaStrand);
 
       mouthAnchor = new THREE.Object3D();
-      mouthAnchor.position.set(sm.mouthFrontX, sm.mouthUpperY - 0.022, 0);
+      mouthAnchor.position.set(sm.mouthFrontX, sm.mouthUpperY - 0.020, 0);
       headPivot.add(mouthAnchor);
 
-      // Head blisters seated tightly onto rounded cranial contours
+      // Subtle localized cranial boils embedded flush into skull surface
       if (zombieBlisterMat) {
+        const boilHeadGeo = this.getCachedGeo('z_boil_a', () => createSculptedBoilGeometry(1));
         if (kind === 'walker') {
-          headPivot.rotation.x = 0.10;
-          addBlister(headPivot, this.blisterGeo, zombieBlisterMat, 0.02, 0.22, 0.095, 0.58, 0.58, 0.54);
-        } else if (kind === 'runner') {
-          addBlister(headPivot, this.blisterGeo, zombieBlisterMat, -0.02, 0.19, -0.088, 0.55, 0.60, 0.52);
+          headPivot.rotation.x = 0.08;
         } else if (kind === 'bloater') {
-          addBlister(headPivot, this.pustuleGeo, zombieBlisterMat, 0.05, 0.24, -0.105, 0.68, 0.64, 0.68);
-          addBlister(headPivot, this.blisterGeo, zombieBlisterMat, 0.06, 0.13, 0.13, 0.68, 0.68, 0.68);
-        } else if (kind === 'spitter') {
-          addBlister(headPivot, this.blisterGeo, zombieBlisterMat, -0.05, 0.23, 0, 0.62, 0.60, 0.56);
+          addBlister(headPivot, boilHeadGeo, zombieBlisterMat, 0.048, 0.175, -0.092, 0.44, 0.36, 0.44, -0.95, 0, -0.35);
+          addBlister(headPivot, boilHeadGeo, zombieBlisterMat, 0.062, 0.112, 0.104, 0.42, 0.34, 0.42, 1.38, 0, -0.38);
         }
       }
     }
 
-    // Arms (tucked into shoulder socket with rounded deltoid sphere & organic limb segments)
+    // Arms: player keeps classic silhouette; zombies get tucked deltoids, articulated elbow pivots & forward-reaching claw hands (ZERO T-pose!)
     const leftArmPivot = new THREE.Group();
-    leftArmPivot.position.set(0, torsoH - 0.06, isPlayer ? -(torsoD * 0.5 + 0.055) : -(torsoD * 0.48 + 0.01));
+    leftArmPivot.position.set(
+      isPlayer ? 0 : isSpitter ? 0.025 : isRunner ? 0.018 : 0.010,
+      torsoH - 0.055,
+      isPlayer ? -(torsoD * 0.5 + 0.055) : -(torsoD * 0.48 + 0.008)
+    );
     const rightArmPivot = new THREE.Group();
-    rightArmPivot.position.set(0, torsoH - 0.06, isPlayer ? torsoD * 0.5 + 0.055 : torsoD * 0.48 + 0.01);
+    rightArmPivot.position.set(
+      isPlayer ? 0 : isSpitter ? 0.025 : isRunner ? 0.018 : 0.010,
+      torsoH - 0.055,
+      isPlayer ? torsoD * 0.5 + 0.055 : torsoD * 0.48 + 0.008
+    );
+
+    let leftElbowPivot: THREE.Group | undefined;
+    let rightElbowPivot: THREE.Group | undefined;
 
     const clawMat = makeActorMat(
-      isSpitter ? '#2f5c4e' : isRunner ? '#5c1818' : isBloater ? '#4e6334' : '#4a3a35',
-      isPlayer ? 0.65 : 0.34,
-      0.05,
+      isSpitter ? '#365e54' : isRunner ? '#631d1d' : isBloater ? '#536638' : '#586350',
+      isPlayer ? 0.65 : 0.46,
+      0.04,
       undefined,
       undefined,
       0,
@@ -2883,33 +3116,45 @@ export class ThreeModelFactory {
 
     const makeArm = (pivot: THREE.Group, isZombie: boolean, sideSign: number) => {
       if (isZombie) {
-        const thick = isBloater ? 0.14 : isRunner ? 0.095 : 0.105;
-        const rBase = thick * 0.55;
-        const len1 = isRunner ? 0.21 : 0.18;
-        const len2 = isRunner ? 0.22 : 0.18;
+        const thick = isBloater ? 0.128 : isSpitter ? 0.072 : isRunner ? 0.082 : 0.086;
+        const rBase = thick * 0.52;
+        const len1 = isSpitter ? 0.22 : isRunner ? 0.21 : isBloater ? 0.22 : 0.19;
+        const len2 = isSpitter ? 0.24 : isRunner ? 0.22 : isBloater ? 0.21 : 0.195;
 
-        // Flare arms slightly outward from shoulders so claws never scissor across the face
-        pivot.rotation.y = -sideSign * 0.12;
-        pivot.rotation.z = isBloater ? -0.22 : isRunner ? -0.08 : -0.16;
+        // Angle shoulders slightly inward toward prey (sideSign * 0.12 rotates +X inward toward center!)
+        pivot.rotation.y = sideSign * (isBloater ? 0.06 : 0.14);
+        pivot.rotation.z = isBloater ? -0.78 : isRunner ? -0.68 : isSpitter ? -0.82 : -0.62;
 
-        // Smooth ellipsoidal deltoid shoulder cap bridging torso seamlessly into upper arm
-        const jointGeo = this.getCachedGeo(`z_joint_${kind}`, () => new THREE.SphereGeometry(rBase * 1.12, 8, 6));
+        // Smooth contoured deltoid & elbow joint caps with proper vertex colors (never pitch-black!)
+        const jointGeo = this.getCachedGeo(`z_joint_${kind}`, () => {
+          const g = new THREE.SphereGeometry(rBase * 1.10, 8, 6);
+          const pos = g.getAttribute('position') as THREE.BufferAttribute;
+          const cols = new Float32Array(pos.count * 3);
+          for (let i = 0; i < pos.count; i++) {
+            const s = 0.86;
+            cols[i * 3] = s;
+            cols[i * 3 + 1] = s;
+            cols[i * 3 + 2] = s;
+          }
+          g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+          return g;
+        });
         const shoulderCap = new THREE.Mesh(jointGeo, sleeveTexMat);
-        shoulderCap.position.set(0.008, -0.004, -sideSign * 0.018);
-        shoulderCap.scale.set(1.06, 0.96, 1.08);
+        shoulderCap.position.set(0.006, -0.004, -sideSign * 0.014);
+        shoulderCap.scale.set(1.06, 0.96, 1.06);
         shoulderCap.castShadow = true;
         shoulderCap.receiveShadow = true;
 
         const upperGeo = this.getCachedGeo(`z_uarm_${kind}`, () =>
           createSculptedLimbSegmentGeometry({
             topRadius: rBase,
-            midRadius: rBase * 1.04,
-            botRadius: rBase * 0.88,
+            midRadius: rBase * 1.02,
+            botRadius: rBase * 0.84,
             length: len1,
             horizontalX: true,
             radialSegments: 8,
             vStart: 1.0,
-            vEnd: 0.58,
+            vEnd: 0.56,
           })
         );
         const upper = new THREE.Mesh(upperGeo, sleeveTexMat);
@@ -2917,24 +3162,27 @@ export class ThreeModelFactory {
         upper.receiveShadow = true;
 
         const forearmGroup = new THREE.Group();
-        forearmGroup.position.set(len1 - 0.015, 0, 0);
-        forearmGroup.rotation.z = isRunner ? -0.32 : isSpitter ? -0.26 : -0.22;
-        forearmGroup.rotation.y = -sideSign * 0.06;
+        forearmGroup.position.set(len1 - 0.012, 0, 0);
+        // Natural predatory elbow bend hooked slightly inward toward prey
+        forearmGroup.rotation.z = isRunner ? 0.72 : isSpitter ? 0.42 : isBloater ? 0.45 : 0.48;
+        forearmGroup.rotation.y = sideSign * 0.22;
+        if (sideSign < 0) leftElbowPivot = forearmGroup;
+        else rightElbowPivot = forearmGroup;
 
         const elbowCap = new THREE.Mesh(jointGeo, sleeveTexMat);
-        elbowCap.scale.setScalar(0.84);
+        elbowCap.scale.setScalar(0.80);
         elbowCap.castShadow = true;
         elbowCap.receiveShadow = true;
 
         const forearmGeo = this.getCachedGeo(`z_farm_${kind}`, () =>
           createSculptedLimbSegmentGeometry({
-            topRadius: rBase * 0.9,
-            midRadius: rBase * 0.84,
-            botRadius: rBase * 0.64,
+            topRadius: rBase * 0.84,
+            midRadius: rBase * 0.78,
+            botRadius: rBase * 0.58,
             length: len2,
             horizontalX: true,
             radialSegments: 8,
-            vStart: 0.58,
+            vStart: 0.56,
             vEnd: 0.0,
           })
         );
@@ -2942,11 +3190,14 @@ export class ThreeModelFactory {
         forearm.castShadow = true;
         forearm.receiveShadow = true;
 
-        const clawGeo = this.getCachedGeo(`z_claw_${isRunner ? 'r' : 's'}`, () =>
-          createSculptedClawHandGeometry(isRunner)
+        const clawGeo = this.getCachedGeo(`z_claw_${isRunner || isSpitter ? 'r' : 's'}`, () =>
+          createSculptedClawHandGeometry(isRunner || isSpitter)
         );
         const claw = new THREE.Mesh(clawGeo, clawMat);
         claw.position.set(len2 - 0.008, 0, 0);
+        // Mirror thumb on right hand cleanly + slight sinister wrist droop
+        if (sideSign > 0) claw.scale.z = -1;
+        claw.rotation.z = -0.18;
         claw.castShadow = true;
         claw.receiveShadow = true;
 
@@ -2954,18 +3205,22 @@ export class ThreeModelFactory {
         pivot.add(shoulderCap, upper, forearmGroup);
         flashMeshes.push(shoulderCap, upper, elbowCap, forearm, claw);
 
-        // Forearm blisters on infected limbs (one per arm or dominant side)
-        if (zombieBlisterMat && sideSign > 0) {
+        // Localized organic boil on dominant forearm for Bloater/Walker
+        if (zombieBlisterMat && sideSign > 0 && (kind === 'bloater' || kind === 'walker')) {
+          const boilArmGeo = this.getCachedGeo('z_boil_b', () => createSculptedBoilGeometry(3));
           addBlister(
             forearmGroup,
-            kind === 'bloater' ? this.pustuleGeo : this.blisterGeo,
+            boilArmGeo,
             zombieBlisterMat,
-            len2 * 0.54,
-            rBase * 0.72,
+            len2 * 0.50,
+            rBase * 0.62,
             0,
-            kind === 'bloater' ? 0.72 : 0.75,
-            kind === 'bloater' ? 0.68 : 0.7,
-            kind === 'bloater' ? 0.72 : 0.75
+            kind === 'bloater' ? 0.62 : 0.44,
+            kind === 'bloater' ? 0.52 : 0.38,
+            kind === 'bloater' ? 0.62 : 0.44,
+            0,
+            0,
+            0
           );
         }
       } else {
@@ -2992,8 +3247,12 @@ export class ThreeModelFactory {
       zombieUniforms: zombieShared ?? undefined,
       leftArmPivot,
       rightArmPivot,
+      leftElbowPivot,
+      rightElbowPivot,
       leftLegPivot,
       rightLegPivot,
+      leftKneePivot,
+      rightKneePivot,
       flashMeshes,
       flashMaterials,
       allMaterials,
