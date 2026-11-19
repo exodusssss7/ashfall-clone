@@ -53,6 +53,10 @@ class SurvivalSoundEngine {
   private engineSubOsc: OscillatorNode | null = null;
   private engineFilter: BiquadFilterNode | null = null;
   private engineGain: GainNode | null = null;
+  private rainSource: AudioBufferSourceNode | null = null;
+  private rainFilter: BiquadFilterNode | null = null;
+  private rainGain: GainNode | null = null;
+  private lastThunderTime = -20;
 
   private sprintBreathing: SprintBreathingState = { sprintSeconds: 0, wasSprinting: false };
   private breathingVoice: AudioBufferSourceNode | null = null;
@@ -393,6 +397,7 @@ class SurvivalSoundEngine {
   stop(): void {
     this.updateAmbience(false, this.timeMinutes);
     this.updateEngineSound(false, 0, false);
+    this.updateWeatherAudio(false, 0, 0, false, 0);
     this.stopEffects();
   }
 
@@ -703,6 +708,97 @@ class SurvivalSoundEngine {
     this.engineSubOsc.frequency.setTargetAtTime(revHz * 0.5, now, 0.05);
     this.engineFilter.frequency.setTargetAtTime(160 + clamped * 340, now, 0.06);
     this.engineGain.gain.setTargetAtTime(0.055 + clamped * 0.07, now, 0.06);
+  }
+
+  /**
+   * Continuous filtered rainstorm bed: crisp rainfall outdoors, warm muffled low-pass inside
+   * caves, road tunnels, buildings, or vehicle cabins, plus occasional distant thunder rolls.
+   */
+  updateWeatherAudio(
+    active: boolean,
+    rainIntensity: number,
+    windStrength: number,
+    sheltered: boolean,
+    lightningFlash: number
+  ): void {
+    if (!this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const shouldPlay = active && !this.muted && !document.hidden && this.ctx.state === 'running' && rainIntensity > 0.04;
+
+    if (!shouldPlay) {
+      if (this.rainGain) {
+        this.rainGain.gain.setTargetAtTime(0.0001, now, 0.25);
+      }
+      return;
+    }
+
+    if (!this.rainSource || !this.rainFilter || !this.rainGain) {
+      // Generate a 2.5-second soft pink-weighted noise loop once
+      const sr = this.ctx.sampleRate;
+      const len = Math.floor(sr * 2.5);
+      const buf = this.ctx.createBuffer(2, len, sr);
+      for (let ch = 0; ch < 2; ch++) {
+        const data = buf.getChannelData(ch);
+        let b0 = 0;
+        let b1 = 0;
+        let b2 = 0;
+        for (let i = 0; i < len; i++) {
+          const white = Math.random() * 2 - 1;
+          b0 = 0.997 * b0 + white * 0.029;
+          b1 = 0.985 * b1 + white * 0.032;
+          b2 = 0.95 * b2 + white * 0.048;
+          data[i] = (b0 + b1 + b2 + white * 0.18) * 0.65;
+        }
+      }
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 1800;
+      filter.Q.value = 0.6;
+
+      const gain = this.ctx.createGain();
+      gain.gain.value = 0.0001;
+
+      src.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.masterGain);
+      src.start(now);
+
+      this.rainSource = src;
+      this.rainFilter = filter;
+      this.rainGain = gain;
+    }
+
+    const r = Math.max(0, Math.min(1, rainIntensity));
+    const w = Math.max(0, Math.min(1, windStrength));
+    const targetCutoff = sheltered ? 460 + r * 140 : 1850 + r * 1450 + w * 400;
+    const targetGain = (0.045 + r * 0.13) * (sheltered ? 0.44 : 1.0);
+    this.rainFilter.frequency.setTargetAtTime(targetCutoff, now, 0.22);
+    this.rainGain.gain.setTargetAtTime(targetGain, now, 0.25);
+
+    // Occasional deep distant thunder rumble on storm lightning
+    if (lightningFlash > 0.42 && now - this.lastThunderTime > 8.5) {
+      this.lastThunderTime = now;
+      const osc = this.ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(64, now + 0.35);
+      osc.frequency.exponentialRampToValueAtTime(28, now + 2.1);
+      const tFilter = this.ctx.createBiquadFilter();
+      tFilter.type = 'lowpass';
+      tFilter.frequency.value = sheltered ? 110 : 190;
+      const tGain = this.ctx.createGain();
+      tGain.gain.setValueAtTime(0.0001, now + 0.35);
+      tGain.gain.linearRampToValueAtTime(sheltered ? 0.11 : 0.18, now + 0.65);
+      tGain.gain.exponentialRampToValueAtTime(0.0001, now + 2.3);
+      osc.connect(tFilter);
+      tFilter.connect(tGain);
+      tGain.connect(this.masterGain);
+      osc.start(now + 0.35);
+      osc.stop(now + 2.35);
+    }
   }
 
 }

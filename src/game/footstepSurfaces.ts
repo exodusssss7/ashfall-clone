@@ -5,8 +5,9 @@ const SURFACES: Record<TileKind, FootstepSurface | null> = {
   road: 'concrete', sidewalk: 'concrete', crosswalk: 'concrete', asphalt_cracked: 'concrete',
   grass: 'grass', forest_floor: 'grass',
   dirt: 'dirt', gravel: 'dirt', mud: 'dirt', sand: 'dirt',
-  floor: 'planks', floor_porch: 'planks', pier: 'planks',
+  floor: 'planks', floor_porch: 'planks', pier: 'planks', bridge_deck: 'planks',
   floor_rug: 'carpet', floor_bath: 'tile', tile_clinic: 'tile', tile_diner: 'tile',
+  cave_floor: 'concrete', cliff_stone: 'concrete',
   water: 'water', // Water is wadeable in the 3D world; footsteps splash.
 };
 export const footstepSurfaceForTile = (tile: TileKind): FootstepSurface | null => SURFACES[tile];

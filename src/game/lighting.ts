@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { clamp } from './isometric';
 import { getDaylightInfo } from './survivalLogic';
+import type { WeatherSnapshot } from './types';
 
 export interface AtmosphereLightingState {
   phaseLabel: 'DAWN' | 'DAYLIGHT' | 'DUSK' | 'NIGHTFALL';
@@ -227,6 +228,92 @@ export function computeAtmosphereLighting(
     out.skyHorizon.lerp(HORIZ_DUSK, duskT * 0.96);
     out.cloudTop.lerp(CLOUD_DUSK_TOP, duskT * 0.88);
     out.cloudBottom.lerp(CLOUD_DUSK_BOT, duskT * 0.88);
+  }
+
+  return out;
+}
+
+const STORM_ISO_FOG = new THREE.Color('#1a2430');
+const STORM_FPS_FOG = new THREE.Color('#4a5c6c');
+const FOG_ISO_COLOR = new THREE.Color('#3c4c57');
+const FOG_FPS_COLOR = new THREE.Color('#8ea0ac');
+const STORM_SKY_ZENITH = new THREE.Color('#1d2a38');
+const STORM_SKY_HORIZ = new THREE.Color('#4d5f6e');
+const STORM_CLOUD_TOP = new THREE.Color('#6a7782');
+const STORM_CLOUD_BOT = new THREE.Color('#2c3844');
+const LIGHTNING_WHITE = new THREE.Color('#d8ebff');
+const CAVE_ISO_FOG = new THREE.Color('#0c1015');
+
+/**
+ * Applies regional rainstorm, dense fog, storm lightning, and dark cave/tunnel interior shading
+ * on top of the diurnal lighting state (in-place, zero GC).
+ */
+export function applyWeatherAndShelterLighting(
+  out: AtmosphereLightingState,
+  weather: WeatherSnapshot,
+  shelterKind: 'cave' | 'tunnel' | 'building' | 'vehicle' | null,
+  isFps = false
+): AtmosphereLightingState {
+  const rain = clamp(weather.rainIntensity, 0, 1);
+  const fog = clamp(weather.fogIntensity, 0, 1);
+  const flash = clamp(weather.lightningFlash, 0, 1);
+  const overcast = clamp(rain * 0.85 + fog * 0.45, 0, 1);
+
+  if (overcast > 0.01) {
+    // Mute direct sunlight during storms/fog and shift sky/fog to cool brooding storm tones
+    out.sunIntensity *= 1 - rain * 0.56 - fog * 0.25;
+    out.hemiIntensity *= 1 - rain * 0.22;
+    out.envIntensity *= 1 - overcast * 0.42;
+    out.exposure *= 1 - rain * 0.08;
+
+    // Thick fog in fog zones & rainstorms
+    out.fogDensityScale *= 1 + fog * 1.45 + rain * 0.65;
+
+    if (fog > 0.05) {
+      out.isoFogColor.lerp(FOG_ISO_COLOR, fog * 0.42 * (1 - out.nightT * 0.65));
+      out.fpsFogColor.lerp(FOG_FPS_COLOR, fog * 0.58 * (1 - out.nightT * 0.65));
+      out.skyHorizon.lerp(FOG_FPS_COLOR, fog * 0.55 * (1 - out.nightT * 0.6));
+    }
+    if (rain > 0.05) {
+      out.isoFogColor.lerp(STORM_ISO_FOG, rain * 0.68);
+      out.fpsFogColor.lerp(STORM_FPS_FOG, rain * 0.65 * (1 - out.nightT * 0.55));
+      out.skyZenith.lerp(STORM_SKY_ZENITH, rain * 0.78);
+      out.skyMid.lerp(STORM_SKY_HORIZ, rain * 0.74);
+      out.skyHorizon.lerp(STORM_SKY_HORIZ, rain * 0.72);
+      out.cloudTop.lerp(STORM_CLOUD_TOP, rain * 0.82);
+      out.cloudBottom.lerp(STORM_CLOUD_BOT, rain * 0.85);
+      out.sunColor.lerp(STORM_CLOUD_TOP, rain * 0.65);
+    }
+  }
+
+  // Moody underground atmosphere inside rocky caves and road tunnels:
+  // Full enclosed darkness in FPS; moderated atmospheric contrast in ISO so crisp cutaway stone rims
+  // & flashlight cones stand out cleanly without blacking out the surrounding hillside.
+  if (shelterKind === 'cave' || shelterKind === 'tunnel') {
+    const dim = isFps
+      ? shelterKind === 'cave'
+        ? 0.72
+        : 0.58
+      : shelterKind === 'cave'
+        ? 0.36
+        : 0.30;
+    out.sunIntensity *= 1 - dim;
+    out.hemiIntensity *= 1 - dim * (isFps ? 0.62 : 0.44);
+    out.envIntensity *= 1 - dim * (isFps ? 0.68 : 0.46);
+    if (!isFps) {
+      // Preserve cool rim contrast on isometric cutaway rock lips
+      out.rimIntensity = Math.max(out.rimIntensity, 0.34);
+    }
+    out.isoFogColor.lerp(CAVE_ISO_FOG, isFps ? 0.58 : 0.36);
+    out.fpsFogColor.lerp(CAVE_ISO_FOG, 0.62);
+  }
+
+  // Brief storm lightning illumination (muted while sheltered deep inside a cave/tunnel)
+  if (flash > 0.01 && shelterKind !== 'cave' && shelterKind !== 'tunnel') {
+    out.sunIntensity += flash * 1.25;
+    out.hemiIntensity += flash * 0.45;
+    out.sunColor.lerp(LIGHTNING_WHITE, flash * 0.7);
+    out.skyHorizon.lerp(LIGHTNING_WHITE, flash * 0.45);
   }
 
   return out;

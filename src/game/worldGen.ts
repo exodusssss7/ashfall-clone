@@ -1,5 +1,13 @@
 import { CHUNK_SIZE, MAP_SIZE, clamp } from './isometric';
 import { STRUCTURES } from './recipes';
+import {
+  findRockyCaveAt,
+  getMacroRegionCave,
+  isTunnelSideWallTile,
+  sampleBridgeInfo,
+  sampleRoadTunnelInfo,
+  sampleTerrainSurface,
+} from './terrainSystem';
 import type {
   BiomeKind,
   DoorEntity,
@@ -544,6 +552,8 @@ export function createOuterBaseCell(seed: number, gx: number, gy: number): TileC
   }
 
   let solid = false;
+  let blocksSight = false;
+  let prop: PropKind = 'none';
   let variant = h % 4;
 
   // Carve winding river & banks first (water is wadeable)
@@ -556,10 +566,15 @@ export function createOuterBaseCell(seed: number, gx: number, gy: number): TileC
     tile = patch < 0.58 ? 'mud' : tile;
   }
 
-  // Overlay winding highways, country roads, and full-span wooden bridges across rivers!
-  if (road.isMainHighway) {
+  // Overlay winding highways, country roads, and elevated bridges across rivers!
+  const bridge = sampleBridgeInfo(seed, gx + 0.5, gy + 0.5);
+  if (bridge.isBridge) {
+    tile = 'bridge_deck';
+    solid = false;
+    variant = bridge.axis === 'ns' ? 2 + (h % 2) : h % 2;
+  } else if (road.isMainHighway) {
     if (river.inWater || river.riverBand < 0.033) {
-      tile = 'pier';
+      tile = 'bridge_deck';
       solid = false;
     } else {
       const crackedThreshold = biome === 'scorched_barrens' ? 0.44 : 0.56;
@@ -573,7 +588,7 @@ export function createOuterBaseCell(seed: number, gx: number, gy: number): TileC
     }
   } else if (road.isCountryRoad) {
     if (river.inWater || river.riverBand < 0.033) {
-      tile = 'pier';
+      tile = 'bridge_deck';
       solid = false;
     } else {
       tile = wear < 0.65 ? 'gravel' : 'dirt';
@@ -583,13 +598,50 @@ export function createOuterBaseCell(seed: number, gx: number, gy: number): TileC
     tile = wear < 0.62 ? 'gravel' : 'dirt';
   }
 
+  // Stamp hidden Rocky Cliff Caves, solid tunnel retaining shoulders & impassable steep cliff escarpments
+  const caveHit = findRockyCaveAt(seed, gx + 0.5, gy + 0.5);
+  if (caveHit && (caveHit.inInterior || caveHit.inMouth)) {
+    tile = 'cave_floor';
+    prop = 'none';
+    solid = false;
+    blocksSight = false;
+  } else if (caveHit && caveHit.inWallRing) {
+    tile = 'cliff_stone';
+    // Only stamp tall cliff_rock props on the NW back cliff massif; SE foreground cutaway rim
+    // is rendered by the custom isometric cutaway stone shell in threeRenderer!
+    prop = caveHit.isFrontCutawayWall ? 'none' : 'cliff_rock';
+    solid = true;
+    blocksSight = true;
+  } else if (!bridge.isBridge && !river.inWater && isTunnelSideWallTile(seed, gx, gy)) {
+    tile = 'cliff_stone';
+    const tunNorth = sampleRoadTunnelInfo(seed, gx + 0.5, gy - 0.5).isTunnel;
+    const tunWest = sampleRoadTunnelInfo(seed, gx - 0.5, gy + 0.5).isTunnel;
+    // Camera-facing (+Z/+X) tunnel retaining wall stays low in ISO (rendered by threeRenderer cutaway curb + FPS upper wall)
+    prop = tunNorth || tunWest ? 'none' : 'cliff_rock';
+    solid = true;
+    blocksSight = true;
+  } else if (!bridge.isBridge && !river.inWater) {
+    const surf = sampleTerrainSurface(seed, gx + 0.5, gy + 0.5);
+    if (surf.isCliff) {
+      const touchesBridge =
+        sampleBridgeInfo(seed, gx + 1.5, gy + 0.5).isBridge ||
+        sampleBridgeInfo(seed, gx - 0.5, gy + 0.5).isBridge ||
+        sampleBridgeInfo(seed, gx + 0.5, gy + 1.5).isBridge ||
+        sampleBridgeInfo(seed, gx + 0.5, gy - 0.5).isBridge;
+      tile = 'cliff_stone';
+      prop = touchesBridge ? 'none' : 'cliff_rock';
+      solid = true;
+      blocksSight = !touchesBridge;
+    }
+  }
+
   return {
     gx,
     gy,
     tile,
-    prop: 'none',
+    prop,
     solid,
-    blocksSight: false,
+    blocksSight,
     variant,
     explored: false,
   };
@@ -627,13 +679,18 @@ function getMacroRegionPOI(seed: number, rx: number, ry: number): RegionPOIPlan 
   let riverSpot: { gx: number; gy: number } | null = null;
   let drySpot: { gx: number; gy: number } | null = null;
 
+  const regionCave = getMacroRegionCave(seed, rx, ry);
+
   const isFootprintDryAndRoadFree = (cx: number, cy: number, pad = 6): boolean => {
+    if (regionCave && Math.hypot(cx - regionCave.gx, cy - regionCave.gy) < 12) return false;
     for (let dy = -pad; dy <= pad; dy += 2) {
       for (let dx = -pad; dx <= pad; dx += 2) {
         const tx = cx + dx;
         const ty = cy + dy;
         if (sampleRoadInfo(seed, tx, ty).isAnyRoad) return false;
         if (sampleRiverInfo(seed, tx, ty).inWater) return false;
+        const surf = sampleTerrainSurface(seed, tx + 0.5, ty + 0.5);
+        if (surf.isCliff || surf.slope > 0.44) return false;
       }
     }
     return true;
@@ -646,8 +703,9 @@ function getMacroRegionPOI(seed: number, rx: number, ry: number): RegionPOIPlan 
 
       const road = sampleRoadInfo(seed, gx, gy);
       const river = sampleRiverInfo(seed, gx, gy);
+      const tunnel = sampleRoadTunnelInfo(seed, gx + 0.5, gy + 0.5);
 
-      if (road.isMainHighway && !river.inWater && river.riverBand > 0.04) {
+      if (road.isMainHighway && !river.inWater && river.riverBand > 0.04 && !tunnel.isTunnel && !tunnel.isPortal) {
         if (!highwaySpot || Math.abs(road.centerOffset) < highwaySpot.dist) {
           highwaySpot = { gx, gy, dist: Math.abs(road.centerOffset) };
         }
@@ -1032,6 +1090,130 @@ export function generateOuterChunk(
     });
   }
 
+  // Register & furnish hidden Rocky Cliff Cave shelter in this macro-region
+  const cavePlan = getMacroRegionCave(store.seed, rx, ry);
+  if (cavePlan) {
+    const caveHash = hashCoords(store.seed + 5309, cavePlan.gx, cavePlan.gy);
+    if (!store.landmarks.has(cavePlan.id)) {
+      store.landmarks.set(cavePlan.id, {
+        id: cavePlan.id,
+        kind: 'cave',
+        name: cavePlan.name,
+        biome: sampleBiomeAt(store.seed, cavePlan.gx, cavePlan.gy),
+        gx: cavePlan.gx,
+        gy: cavePlan.gy,
+        radius: Math.ceil(cavePlan.chamberRadius) + 2,
+        threatLevel: 'low',
+        discovered: false,
+        hotspotSpawned: false,
+        hotspotCleared: false,
+        // Occasional sleepers inside rocky cliff caves; once cleared, zombies NEVER spawn here again
+        hotspotPacks: caveHash % 3 === 0 ? ['walker', 'walker'] : ['walker'],
+        shelterBounds: { ...cavePlan.shelterBounds },
+      });
+    }
+
+    // Furnish cave interior with dry survival crates & natural cave stalagmites
+    const crate1X = cavePlan.gx - 1;
+    const crate1Y = cavePlan.gy - 1;
+    setLocal(crate1X, crate1Y, (cell) => {
+      if (cell.tile === 'cave_floor') {
+        cell.prop = 'crate_wood';
+        cell.solid = true;
+        cell.blocksSight = false;
+        containers.push({
+          id: `c_${crate1X}_${crate1Y}`,
+          gx: crate1X,
+          gy: crate1Y,
+          kind: 'crate_wood',
+          items: { wood: 4, cloth: 2, food: 2, fuel: 1, bandage: 1 },
+          searched: false,
+          searchProgress: 0,
+          openAnim: 0,
+        });
+      }
+    });
+
+    const crate2X = cavePlan.gx + 1;
+    const crate2Y = cavePlan.gy - 1;
+    setLocal(crate2X, crate2Y, (cell) => {
+      if (cell.tile === 'cave_floor' && caveHash % 2 === 0) {
+        cell.prop = 'crate_wood';
+        cell.solid = true;
+        cell.blocksSight = false;
+        containers.push({
+          id: `c_${crate2X}_${crate2Y}`,
+          gx: crate2X,
+          gy: crate2Y,
+          kind: 'crate_wood',
+          items: { water: 2, scrap: 3, ammo_9mm: 6, hot_rations: 1 },
+          searched: false,
+          searchProgress: 0,
+          openAnim: 0,
+        });
+      }
+    });
+
+    const stalOffsets: Array<[number, number]> =
+      cavePlan.mouthDir === 's'
+        ? [
+            [-2, -1],
+            [2, -1],
+          ]
+        : [
+            [-1, -2],
+            [-1, 2],
+          ];
+    for (const [sdx, sdy] of stalOffsets) {
+      setLocal(cavePlan.gx + sdx, cavePlan.gy + sdy, (cell) => {
+        if (cell.tile === 'cave_floor' && cell.prop === 'none') {
+          cell.prop = 'cave_stalagmite';
+          cell.solid = true;
+          cell.blocksSight = false;
+        }
+      });
+    }
+  }
+
+  // Detect & register Highway Road Tunnels passing through tall hills in this chunk
+  let tunnelSumX = 0;
+  let tunnelSumY = 0;
+  let tunnelCount = 0;
+  for (let ly = 0; ly < CHUNK_SIZE; ly += 2) {
+    for (let lx = 0; lx < CHUNK_SIZE; lx += 2) {
+      const gx = startGX + lx;
+      const gy = startGY + ly;
+      const tun = sampleRoadTunnelInfo(store.seed, gx + 0.5, gy + 0.5);
+      if (tun.isTunnel) {
+        tunnelSumX += gx;
+        tunnelSumY += gy;
+        tunnelCount++;
+      }
+    }
+  }
+  if (tunnelCount >= 3) {
+    const tunnelId = `tunnel_${rx}_${ry}`;
+    if (!store.landmarks.has(tunnelId)) {
+      const tgx = Math.round(tunnelSumX / tunnelCount);
+      const tgy = Math.round(tunnelSumY / tunnelCount);
+      const th = hashCoords(store.seed + 7919, rx, ry);
+      store.landmarks.set(tunnelId, {
+        id: tunnelId,
+        kind: 'tunnel',
+        name: `Ridge Tunnel #${(th % 19) + 1}`,
+        biome: sampleBiomeAt(store.seed, tgx, tgy),
+        gx: tgx,
+        gy: tgy,
+        radius: 8,
+        threatLevel: 'medium',
+        discovered: false,
+        hotspotSpawned: false,
+        hotspotCleared: false,
+        hotspotPacks: ['walker', 'runner'],
+      });
+    }
+  }
+
   // Stamp Landmark POI inside this chunk
   let protectedBounds: { x0: number; y0: number; x1: number; y1: number } | null = null;
   if (poi) {
@@ -1411,6 +1593,9 @@ export function generateOuterChunk(
         cell.tile === 'crosswalk' ||
         cell.tile === 'sidewalk' ||
         cell.tile === 'pier' ||
+        cell.tile === 'bridge_deck' ||
+        cell.tile === 'cave_floor' ||
+        cell.tile === 'cliff_stone' ||
         cell.tile === 'water' ||
         cell.tile === 'floor' ||
         cell.tile === 'floor_porch' ||
@@ -1419,6 +1604,12 @@ export function generateOuterChunk(
         cell.tile === 'tile_clinic' ||
         cell.tile === 'tile_diner'
       ) {
+        continue;
+      }
+      if (cavePlan && Math.hypot(cell.gx - cavePlan.gx, cell.gy - cavePlan.gy) <= 6.5) {
+        continue;
+      }
+      if (sampleRoadTunnelInfo(store.seed, cell.gx + 0.5, cell.gy + 0.5).isTunnel) {
         continue;
       }
 

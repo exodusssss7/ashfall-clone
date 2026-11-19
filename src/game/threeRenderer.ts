@@ -38,7 +38,20 @@ import {
   syncPixelWaterUniforms,
   type PixelWaterMaterialUniforms,
 } from './waterSystem';
-import { computeAtmosphereLighting, createAtmosphereLightingState } from './lighting';
+import {
+  applyWeatherAndShelterLighting,
+  computeAtmosphereLighting,
+  createAtmosphereLightingState,
+} from './lighting';
+import {
+  getMacroRegionCave,
+  sampleBridgeInfo,
+  sampleRoadTunnelInfo,
+  sampleTerrainHeight,
+  sampleTerrainMeshHeight,
+  sampleTerrainSurface,
+} from './terrainSystem';
+import { sampleRiverInfo } from './worldGen';
 import { getBuildTargetTile, getDaylightInfo } from './survivalLogic';
 import { getSettings } from './settings';
 import { STRUCTURES } from './recipes';
@@ -67,6 +80,7 @@ import type {
   SurfaceImpactDecal,
   TileCell,
   Vehicle,
+  WeatherSnapshot,
   WorldStore,
   WorldStructure,
   Zombie,
@@ -145,6 +159,9 @@ export interface RenderFrameState {
   mouseWorldY: number;
   usingVirtualAim: boolean;
   nearInteractTile: { gx: number; gy: number } | null;
+  weather: WeatherSnapshot;
+  sheltered: boolean;
+  shelterKind: 'cave' | 'tunnel' | 'building' | 'vehicle' | null;
 }
 
 interface ChunkVisual {
@@ -164,9 +181,20 @@ interface ChunkVisual {
   mergedWallsGroup?: THREE.Group;
   dynamicWallsGroup?: THREE.Group;
   fpsUpperGroup?: THREE.Group;
+  shelterRoofs: Array<{
+    kind: 'cave' | 'tunnel';
+    group: THREE.Group;
+    fpsWallGroup?: THREE.Group;
+    fadeMaterials: THREE.MeshStandardMaterial[];
+    minX: number;
+    maxX: number;
+    minZ: number;
+    maxZ: number;
+    currentOpacity: number;
+  }>;
   burnBarrelFlames: THREE.Group[];
   burnBarrelCoords: Array<{ x: number; z: number }>;
-  lightAnchors: Array<{ x: number; z: number; color: number; intensity: number; distance: number; flicker: boolean }>;
+  lightAnchors: Array<{ x: number; y: number; z: number; color: number; intensity: number; distance: number; flicker: boolean }>;
   fpsRoofMesh?: THREE.InstancedMesh;
   grassMesh?: THREE.InstancedMesh | null;
   waterMesh?: THREE.Mesh;
@@ -237,6 +265,10 @@ export class ThreeIsometricRenderer {
   private chunkPlaneGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
   private ceilingBoxGeo = new THREE.BoxGeometry(1, 0.08, 1);
   private ceilingMat: THREE.MeshStandardMaterial;
+  private activeSeed = 1994;
+  private smoothedTargetY = 0;
+  private rainInstanced!: THREE.InstancedMesh;
+  private rainDrops: Array<{ ox: number; oy: number; oz: number; speed: number; len: number }> = [];
   private lastIsFps: boolean | null = null;
   private lastOccludedWalls: Array<{ solidGroup: THREE.Group; fadedGroup: THREE.Group }> = [];
   private lastFallbackWallChunks: ChunkVisual[] = [];
@@ -540,6 +572,30 @@ export class ThreeIsometricRenderer {
     this.ashInstanced.frustumCulled = false;
     this.ashInstanced.count = 0;
     this.scene.add(this.ashInstanced);
+
+    // Pooled instanced 3D rain streaks for cold rainstorms
+    const maxRain = this.isSoftwareGl ? 150 : 340;
+    const rainGeo = new THREE.BoxGeometry(0.017, 0.62, 0.017);
+    const rainMat = new THREE.MeshBasicMaterial({
+      color: 0xbcd6e8,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+    });
+    this.rainInstanced = new THREE.InstancedMesh(rainGeo, rainMat, maxRain);
+    this.rainInstanced.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.rainInstanced.frustumCulled = false;
+    this.rainInstanced.count = 0;
+    this.scene.add(this.rainInstanced);
+    for (let i = 0; i < maxRain; i++) {
+      this.rainDrops.push({
+        ox: (Math.random() - 0.5) * 32,
+        oy: Math.random() * 14,
+        oz: (Math.random() - 0.5) * 32,
+        speed: 15 + Math.random() * 6,
+        len: 0.78 + Math.random() * 0.55,
+      });
+    }
 
     // Pooled instanced infection droplets (saliva, oozing pus & bile) and toxic spore/miasma puffs
     const dropGeo = new THREE.OctahedronGeometry(0.022, 0);
@@ -874,23 +930,43 @@ export class ThreeIsometricRenderer {
     return this.burnBarrelCoordsCache;
   }
 
+  private groundY(wx: number, wy: number): number {
+    return sampleTerrainHeight(this.activeSeed, wx, wy);
+  }
+
   public screenToWorld(screenX: number, screenY: number, camX?: number, camY?: number): { wx: number; wy: number } {
+    const baseY = this.smoothedTargetY;
     if (camX !== undefined && camY !== undefined) {
       const cw = isoToWorld(camX, camY);
+      const cy = this.groundY(cw.wx, cw.wy);
       this.camera.position.set(
         cw.wx + _camOffsetDir.x * 28,
-        _camOffsetDir.y * 28,
+        cy + _camOffsetDir.y * 28,
         cw.wy + _camOffsetDir.z * 28
       );
-      this.camera.lookAt(cw.wx, 0, cw.wy);
+      this.camera.lookAt(cw.wx, cy, cw.wy);
       this.camera.updateMatrixWorld();
     }
     _ndc.set((screenX / this.viewW) * 2 - 1, -(screenY / this.viewH) * 2 + 1);
     _raycaster.setFromCamera(_ndc, this.camera);
-    if (_raycaster.ray.intersectPlane(_groundPlane, _vec3A)) {
-      return { wx: _vec3A.x, wy: _vec3A.z };
+    _groundPlane.constant = -baseY;
+    if (!_raycaster.ray.intersectPlane(_groundPlane, _vec3A)) {
+      _groundPlane.constant = 0;
+      return { wx: 28.5, wy: 28.5 };
     }
-    return { wx: 28.5, wy: 28.5 };
+    // Refine intersection onto undulating hills (damped 4-step iteration prevents jitter on steep cliffs)
+    let wx = _vec3A.x;
+    let wy = _vec3A.z;
+    for (let it = 0; it < 4; it++) {
+      const h = this.groundY(wx, wy);
+      _groundPlane.constant = -h;
+      if (_raycaster.ray.intersectPlane(_groundPlane, _vec3A)) {
+        wx += (_vec3A.x - wx) * 0.65;
+        wy += (_vec3A.z - wy) * 0.65;
+      }
+    }
+    _groundPlane.constant = 0;
+    return { wx, wy };
   }
 
   public addWaterRipple(x: number, z: number, elapsedClock: number, strength = 1.0): void {
@@ -904,6 +980,11 @@ export class ThreeIsometricRenderer {
     chunk.fpsRoofMesh?.dispose();
     chunk.grassMesh?.dispose();
     chunk.waterMesh?.geometry.dispose();
+    for (const sr of chunk.shelterRoofs) {
+      for (const mat of sr.fadeMaterials) {
+        mat.dispose();
+      }
+    }
     for (const geo of chunk.mergedGeos) {
       geo.dispose();
     }
@@ -1014,6 +1095,8 @@ export class ThreeIsometricRenderer {
     const group = new THREE.Group();
     const startX = cx * CHUNK_SIZE;
     const startY = cy * CHUNK_SIZE;
+    const seed = this.activeSeed;
+    const isFlatOrigin = cx >= 0 && cx <= 3 && cy >= 0 && cy <= 3;
 
     const terrainTex = this.atlas.createChunkTerrainTexture(getCell, cx, cy, CHUNK_SIZE);
     const terrainMat = new THREE.MeshStandardMaterial({
@@ -1021,30 +1104,96 @@ export class ThreeIsometricRenderer {
       roughness: 0.94,
       metalness: 0.02,
     });
-    const terrainPlane = new THREE.Mesh(this.chunkPlaneGeo, terrainMat);
-    terrainPlane.rotation.x = -Math.PI * 0.5;
-    terrainPlane.position.set(startX + CHUNK_SIZE * 0.5, 0, startY + CHUNK_SIZE * 0.5);
-    terrainPlane.receiveShadow = true;
-    terrainPlane.castShadow = false;
-    group.add(terrainPlane);
+
+    const mergedGeos: THREE.BufferGeometry[] = [];
+    if (isFlatOrigin) {
+      const terrainPlane = new THREE.Mesh(this.chunkPlaneGeo, terrainMat);
+      terrainPlane.rotation.x = -Math.PI * 0.5;
+      terrainPlane.position.set(startX + CHUNK_SIZE * 0.5, 0, startY + CHUNK_SIZE * 0.5);
+      terrainPlane.receiveShadow = true;
+      terrainPlane.castShadow = false;
+      group.add(terrainPlane);
+    } else {
+      // Displaced 3D contoured terrain mesh (depresses riverbeds under elevated bridges so water flows continuously underneath)
+      const terrainGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
+      terrainGeo.rotateX(-Math.PI * 0.5);
+      const posAttr = terrainGeo.attributes.position as THREE.BufferAttribute;
+      const normAttr = terrainGeo.attributes.normal as THREE.BufferAttribute;
+      const centerX = startX + CHUNK_SIZE * 0.5;
+      const centerZ = startY + CHUNK_SIZE * 0.5;
+      for (let i = 0; i < posAttr.count; i++) {
+        const wx = centerX + posAttr.getX(i);
+        const wz = centerZ + posAttr.getZ(i);
+        const meshY = sampleTerrainMeshHeight(seed, wx, wz);
+        posAttr.setY(i, meshY);
+        if (meshY < -0.02) {
+          normAttr.setXYZ(i, 0, 1, 0);
+        } else {
+          const surf = sampleTerrainSurface(seed, wx, wz);
+          normAttr.setXYZ(i, surf.normalX, surf.normalY, surf.normalZ);
+        }
+      }
+      posAttr.needsUpdate = true;
+      normAttr.needsUpdate = true;
+      terrainGeo.computeBoundingBox();
+      terrainGeo.computeBoundingSphere();
+      mergedGeos.push(terrainGeo);
+
+      const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
+      terrainMesh.position.set(centerX, 0, centerZ);
+      terrainMesh.receiveShadow = true;
+      terrainMesh.castShadow = false;
+      group.add(terrainMesh);
+    }
 
     const wallEntries: ChunkVisual['wallEntries'] = [];
     const solidWallRoots: THREE.Object3D[] = [];
     const fpsUpperRoots: THREE.Object3D[] = [];
     const staticPropRoots: THREE.Object3D[] = [];
+    const shelterRoofs: ChunkVisual['shelterRoofs'] = [];
     const burnBarrelFlames: THREE.Group[] = [];
     const burnBarrelCoords: Array<{ x: number; z: number }> = [];
     const lightAnchors: ChunkVisual['lightAnchors'] = [];
-    const indoorRoofCells: Array<{ gx: number; gy: number }> = [];
-    const mergedGeos: THREE.BufferGeometry[] = [];
+    const indoorRoofCells: Array<{ gx: number; gy: number; gyElev: number }> = [];
     const dynamicWallsGroup = new THREE.Group();
     dynamicWallsGroup.visible = false;
+
+    const tunnelRoofRoots: THREE.Object3D[] = [];
+    const tunnelFpsWallRoots: THREE.Object3D[] = [];
+    let tunMinX = Infinity;
+    let tunMaxX = -Infinity;
+    let tunMinZ = Infinity;
+    let tunMaxZ = -Infinity;
+
+    // Shared materials for bridge decks/rails/pilings, road tunnels, and rocky cliff cave architecture
+    const bridgeDeckMat = this.factory.getMat(0xffffff, { map: this.atlas.woodOakTex, roughness: 0.88, metalness: 0.04 });
+    const bridgeGirderMat = this.factory.getMat('#353b42', { roughness: 0.62, metalness: 0.45 });
+    const bridgeRailMat = this.factory.getMat('#5a646e', { roughness: 0.68, metalness: 0.38 });
+    const bridgeWoodMat = this.factory.getMat(0xffffff, { map: this.atlas.woodDarkTex, roughness: 0.9 });
+    const tunnelConcreteMat = this.factory.getMat('#3b4047', { roughness: 0.94, metalness: 0.05 });
+    const tunnelRimMat = this.factory.getMat('#8f99a6', { roughness: 0.78, metalness: 0.08 });
+    const tunnelDarkMat = this.factory.getMat('#22262c', { roughness: 0.98 });
+    const tunnelLampMat = this.factory.getMat('#ffbe55', { emissive: '#ffaa33', emissiveIntensity: 2.1 });
+    const caveRockMat = this.factory.getMat(0xffffff, { map: this.atlas.rockTex, roughness: 0.96 });
+    const caveDarkMat = this.factory.getMat('#222730', { roughness: 0.98 });
+    const caveFloorLinerMat = this.factory.getMat('#171b22', {
+      roughness: 0.99,
+      metalness: 0.02,
+    });
+    caveFloorLinerMat.polygonOffset = true;
+    caveFloorLinerMat.polygonOffsetFactor = -1;
+    caveFloorLinerMat.polygonOffsetUnits = -1;
+    const caveCutawayRimMat = this.factory.getMat('#93a0b2', { roughness: 0.76, metalness: 0.08 });
+    const plinthStoneMat = this.factory.getMat('#393d42', { roughness: 0.96 });
 
     for (let ly = 0; ly < CHUNK_SIZE; ly++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
         const gx = startX + lx;
         const gy = startY + ly;
         const cell = getCell(gx, gy);
+        const tileSurf = isFlatOrigin ? null : sampleTerrainSurface(seed, gx + 0.5, gy + 0.5);
+        const tileY = tileSurf ? tileSurf.height : 0;
+
         if (
           cell.tile === 'floor' ||
           cell.tile === 'floor_rug' ||
@@ -1052,8 +1201,181 @@ export class ThreeIsometricRenderer {
           cell.tile === 'tile_clinic' ||
           cell.tile === 'tile_diner'
         ) {
-          indoorRoofCells.push({ gx, gy });
+          indoorRoofCells.push({ gx, gy, gyElev: tileY });
         }
+
+        // Solid 3D Elevated River Bridge Deck, steel stringer girders, wooden pilings & guardrails
+        if (!isFlatOrigin && cell.tile === 'bridge_deck') {
+          const bridge = sampleBridgeInfo(seed, gx + 0.5, gy + 0.5);
+          const bRoot = new THREE.Group();
+          bRoot.position.set(gx + 0.5, tileY, gy + 0.5);
+
+          // Structural planked 3D bridge deck slab so continuous river water flows visibly underneath!
+          const deckSlab = new THREE.Mesh(new THREE.BoxGeometry(1.04, 0.22, 1.04), bridgeDeckMat);
+          deckSlab.position.set(0, -0.105, 0);
+          deckSlab.receiveShadow = true;
+          bRoot.add(deckSlab);
+
+          if (bridge.axis === 'ew') {
+            const girderN = new THREE.Mesh(new THREE.BoxGeometry(1.04, 0.14, 0.12), bridgeGirderMat);
+            girderN.position.set(0, -0.24, -0.36);
+            const girderS = new THREE.Mesh(new THREE.BoxGeometry(1.04, 0.14, 0.12), bridgeGirderMat);
+            girderS.position.set(0, -0.24, 0.36);
+            bRoot.add(girderN, girderS);
+
+            if (getCell(gx, gy - 1).tile !== 'bridge_deck') {
+              const railN = new THREE.Mesh(new THREE.BoxGeometry(1.04, 0.14, 0.09), bridgeRailMat);
+              railN.position.set(0, 0.52, -0.46);
+              const postN = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.62, 0.11), bridgeWoodMat);
+              postN.position.set(0, 0.26, -0.46);
+              bRoot.add(railN, postN);
+              if (gx % 2 === 0) {
+                const pileH = tileY + 0.65;
+                const pileN = new THREE.Mesh(new THREE.BoxGeometry(0.19, pileH, 0.19), bridgeWoodMat);
+                pileN.position.set(0, -pileH * 0.5 - 0.12, -0.42);
+                bRoot.add(pileN);
+              }
+            }
+            if (getCell(gx, gy + 1).tile !== 'bridge_deck') {
+              const railS = new THREE.Mesh(new THREE.BoxGeometry(1.04, 0.14, 0.09), bridgeRailMat);
+              railS.position.set(0, 0.52, 0.46);
+              const postS = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.62, 0.11), bridgeWoodMat);
+              postS.position.set(0, 0.26, 0.46);
+              bRoot.add(railS, postS);
+              if (gx % 2 === 0) {
+                const pileH = tileY + 0.65;
+                const pileS = new THREE.Mesh(new THREE.BoxGeometry(0.19, pileH, 0.19), bridgeWoodMat);
+                pileS.position.set(0, -pileH * 0.5 - 0.12, 0.42);
+                bRoot.add(pileS);
+              }
+            }
+          } else {
+            const girderW = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 1.04), bridgeGirderMat);
+            girderW.position.set(-0.36, -0.24, 0);
+            const girderE = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 1.04), bridgeGirderMat);
+            girderE.position.set(0.36, -0.24, 0);
+            bRoot.add(girderW, girderE);
+
+            if (getCell(gx - 1, gy).tile !== 'bridge_deck') {
+              const railW = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.14, 1.04), bridgeRailMat);
+              railW.position.set(-0.46, 0.52, 0);
+              const postW = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.62, 0.11), bridgeWoodMat);
+              postW.position.set(-0.46, 0.26, 0);
+              bRoot.add(railW, postW);
+              if (gy % 2 === 0) {
+                const pileH = tileY + 0.65;
+                const pileW = new THREE.Mesh(new THREE.BoxGeometry(0.19, pileH, 0.19), bridgeWoodMat);
+                pileW.position.set(-0.42, -pileH * 0.5 - 0.12, 0);
+                bRoot.add(pileW);
+              }
+            }
+            if (getCell(gx + 1, gy).tile !== 'bridge_deck') {
+              const railE = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.14, 1.04), bridgeRailMat);
+              railE.position.set(0.46, 0.52, 0);
+              const postE = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.62, 0.11), bridgeWoodMat);
+              postE.position.set(0.46, 0.26, 0);
+              bRoot.add(railE, postE);
+              if (gy % 2 === 0) {
+                const pileH = tileY + 0.65;
+                const pileE = new THREE.Mesh(new THREE.BoxGeometry(0.19, pileH, 0.19), bridgeWoodMat);
+                pileE.position.set(0.42, -pileH * 0.5 - 0.12, 0);
+                bRoot.add(pileE);
+              }
+            }
+          }
+          staticPropRoots.push(bRoot);
+        }
+
+        // 3D Highway Road Tunnel concrete vault, staggered rocky mountain overburden, portal arches & ISO cutaway curbs
+        if (!isFlatOrigin && (cell.tile === 'road' || cell.tile === 'asphalt_cracked')) {
+          const tun = sampleRoadTunnelInfo(seed, gx + 0.5, gy + 0.5);
+          if (tun.isTunnel) {
+            if (gx + 0.5 < tunMinX) tunMinX = gx + 0.5;
+            if (gx + 0.5 > tunMaxX) tunMaxX = gx + 0.5;
+            if (gy + 0.5 < tunMinZ) tunMinZ = gy + 0.5;
+            if (gy + 0.5 > tunMaxZ) tunMaxZ = gy + 0.5;
+
+            const clearH = Math.max(2.6, tun.roofY - tileY);
+            const jitterH = ((Math.abs(gx * 7 + gy * 13)) % 4) * 0.08;
+            const tRoot = new THREE.Group();
+            tRoot.position.set(gx + 0.5, tileY, gy + 0.5);
+            // Concrete tunnel ceiling slab + staggered mountain overburden cap (zero Z-fighting)
+            const ceiling = new THREE.Mesh(new THREE.BoxGeometry(1.005, 0.36, 1.005), tunnelConcreteMat);
+            ceiling.position.set(0, clearH, 0);
+            const burdenH = 0.82 + jitterH;
+            const burden = new THREE.Mesh(new THREE.BoxGeometry(1.005, burdenH, 1.005), caveRockMat);
+            burden.position.set(0, clearH + 0.18 + burdenH * 0.5, 0);
+            tRoot.add(ceiling, burden);
+
+            // Side retaining walls: back wall stays permanent full height; camera-facing (+Z/+X) wall cuts away cleanly in ISO!
+            if (tun.axis === 'ew') {
+              if (!sampleRoadTunnelInfo(seed, gx + 0.5, gy - 0.5).isTunnel) {
+                const wN = new THREE.Mesh(new THREE.BoxGeometry(1.01, clearH + 0.25, 0.24), tunnelDarkMat);
+                wN.position.set(gx + 0.5, tileY + clearH * 0.5, gy + 0.05);
+                staticPropRoots.push(wN);
+              }
+              if (!sampleRoadTunnelInfo(seed, gx + 0.5, gy + 1.5).isTunnel) {
+                const lowS = new THREE.Mesh(new THREE.BoxGeometry(1.01, 0.56, 0.24), tunnelDarkMat);
+                lowS.position.set(gx + 0.5, tileY + 0.28, gy + 0.95);
+                const rimS = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.09, 0.28), tunnelRimMat);
+                rimS.position.set(gx + 0.5, tileY + 0.59, gy + 0.95);
+                staticPropRoots.push(lowS, rimS);
+
+                const upperH = Math.max(0.5, clearH - 0.45);
+                const upS = new THREE.Mesh(new THREE.BoxGeometry(1.01, upperH, 0.24), tunnelDarkMat);
+                upS.position.set(gx + 0.5, tileY + 0.62 + upperH * 0.5, gy + 0.95);
+                tunnelFpsWallRoots.push(upS);
+              }
+              // Reinforced portal arch beam on tunnel entry/exit tiles
+              if (tun.isPortal) {
+                const beam = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.42, 1.02), tunnelRimMat);
+                beam.position.set(0, clearH - 0.08, 0);
+                tRoot.add(beam);
+              }
+            } else {
+              if (!sampleRoadTunnelInfo(seed, gx - 0.5, gy + 0.5).isTunnel) {
+                const wW = new THREE.Mesh(new THREE.BoxGeometry(0.24, clearH + 0.25, 1.01), tunnelDarkMat);
+                wW.position.set(gx + 0.05, tileY + clearH * 0.5, gy + 0.5);
+                staticPropRoots.push(wW);
+              }
+              if (!sampleRoadTunnelInfo(seed, gx + 1.5, gy + 0.5).isTunnel) {
+                const lowE = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.56, 1.01), tunnelDarkMat);
+                lowE.position.set(gx + 0.95, tileY + 0.28, gy + 0.5);
+                const rimE = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.09, 1.02), tunnelRimMat);
+                rimE.position.set(gx + 0.95, tileY + 0.59, gy + 0.5);
+                staticPropRoots.push(lowE, rimE);
+
+                const upperH = Math.max(0.5, clearH - 0.45);
+                const upE = new THREE.Mesh(new THREE.BoxGeometry(0.24, upperH, 1.01), tunnelDarkMat);
+                upE.position.set(gx + 0.95, tileY + 0.62 + upperH * 0.5, gy + 0.5);
+                tunnelFpsWallRoots.push(upE);
+              }
+              if (tun.isPortal) {
+                const beam = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.42, 0.38), tunnelRimMat);
+                beam.position.set(0, clearH - 0.08, 0);
+                tRoot.add(beam);
+              }
+            }
+
+            // Warm amber ceiling work lamps spaced down the tunnel centerline
+            if ((gx + gy) % 5 === 0 && (tun.axis === 'ew' ? gy % 2 === 0 : gx % 2 === 0)) {
+              const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.08, 0.14), tunnelLampMat);
+              lamp.position.set(0, clearH - 0.2, 0);
+              tRoot.add(lamp);
+              lightAnchors.push({
+                x: gx + 0.5,
+                y: tileY + clearH - 0.38,
+                z: gy + 0.5,
+                color: 0xffb347,
+                intensity: 3.1,
+                distance: 9.0,
+                flicker: false,
+              });
+            }
+            tunnelRoofRoots.push(tRoot);
+          }
+        }
+
         if (cell.prop === 'none' || cell.prop === 'door') continue;
         // Loot containers & vehicles are synced dynamically
         if (
@@ -1079,17 +1401,24 @@ export class ThreeIsometricRenderer {
           const hasWindow = cell.prop !== 'wall_interior' && cell.variant === 2 && ((hasE && hasW) || (hasN && hasS));
 
           const solidGroup = this.factory.createWallGroup(cell.prop, hasWindow, false);
-          solidGroup.position.set(gx + 0.5, 0, gy + 0.5);
+          solidGroup.position.set(gx + 0.5, tileY, gy + 0.5);
           const fpsUpper = solidGroup.userData.fpsUpperGroup as THREE.Group | undefined;
           if (fpsUpper) {
             solidGroup.remove(fpsUpper);
             fpsUpper.visible = true;
-            fpsUpper.position.set(gx + 0.5, 0, gy + 0.5);
+            fpsUpper.position.set(gx + 0.5, tileY, gy + 0.5);
             fpsUpperRoots.push(fpsUpper);
           }
 
+          // Ground outer-frontier building walls onto sloped hillsides with a dark stone foundation plinth
+          if (!isFlatOrigin && tileSurf && tileSurf.slope > 0.08 && cell.prop !== 'wall_interior') {
+            const plinth = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.48, 1.02), plinthStoneMat);
+            plinth.position.set(gx + 0.5, tileY - 0.24, gy + 0.5);
+            staticPropRoots.push(plinth);
+          }
+
           const fadedGroup = this.factory.createWallGroup(cell.prop, hasWindow, true);
-          fadedGroup.position.set(gx + 0.5, 0, gy + 0.5);
+          fadedGroup.position.set(gx + 0.5, tileY, gy + 0.5);
           fadedGroup.visible = false;
 
           solidWallRoots.push(solidGroup);
@@ -1098,28 +1427,279 @@ export class ThreeIsometricRenderer {
           continue;
         }
 
+        // Seat outdoor props firmly into sloped hillsides so edges never float on steep grades
+        const slopeSink =
+          !isFlatOrigin &&
+          tileSurf &&
+          tileSurf.slope > 0.1 &&
+          (cell.prop === 'tree_pine' ||
+            cell.prop === 'tree_dead' ||
+            cell.prop === 'rock_boulder' ||
+            cell.prop === 'fallen_log' ||
+            cell.prop === 'tent' ||
+            cell.prop === 'concrete_barrier' ||
+            cell.prop === 'sandbag_wall' ||
+            cell.prop === 'barrel_burn' ||
+            cell.prop === 'wrecked_car')
+            ? Math.min(0.24, tileSurf.slope * 0.32)
+            : 0;
+        const propY = tileY - slopeSink;
+
         const propGroup = this.factory.createPropGroup(cell.prop);
-        propGroup.position.set(gx + 0.5, 0, gy + 0.5);
+        propGroup.position.set(gx + 0.5, propY, gy + 0.5);
 
         if (cell.prop === 'barrel_burn') {
           const fg = propGroup.userData.flameGroup as THREE.Group | undefined;
           if (fg) {
             propGroup.remove(fg);
-            fg.position.set(gx + 0.5, 0.74, gy + 0.5);
+            fg.position.set(gx + 0.5, propY + 0.74, gy + 0.5);
             group.add(fg);
             burnBarrelFlames.push(fg);
           }
           burnBarrelCoords.push({ x: gx + 0.5, z: gy + 0.5 });
-          lightAnchors.push({ x: gx + 0.5, z: gy + 0.5, color: 0xff7b29, intensity: 3.4, distance: 7.5, flicker: true });
+          lightAnchors.push({ x: gx + 0.5, y: propY + 1.25, z: gy + 0.5, color: 0xff7b29, intensity: 3.4, distance: 7.5, flicker: true });
         } else if (cell.prop === 'streetlamp') {
-          lightAnchors.push({ x: gx + 0.9, z: gy + 0.5, color: 0xffd27a, intensity: 3.2, distance: 8.0, flicker: false });
+          lightAnchors.push({ x: gx + 0.9, y: propY + 1.8, z: gy + 0.5, color: 0xffd27a, intensity: 3.2, distance: 8.0, flicker: false });
         } else if (cell.prop === 'fishing_post') {
-          lightAnchors.push({ x: gx + 0.7, z: gy + 0.5, color: 0xffcf6e, intensity: 2.6, distance: 6.5, flicker: false });
+          lightAnchors.push({ x: gx + 0.7, y: propY + 1.1, z: gy + 0.5, color: 0xffcf6e, intensity: 2.6, distance: 6.5, flicker: false });
         } else if (cell.prop === 'stove') {
-          lightAnchors.push({ x: gx + 0.5, z: gy + 0.5, color: 0xff6e24, intensity: 2.2, distance: 5.5, flicker: true });
+          lightAnchors.push({ x: gx + 0.5, y: propY + 1.0, z: gy + 0.5, color: 0xff6e24, intensity: 2.2, distance: 5.5, flicker: true });
         }
 
         staticPropRoots.push(propGroup);
+      }
+    }
+
+    // Batch Highway Road Tunnel roof vault & FPS foreground side walls into a smooth cutaway shelterRoof
+    if (tunnelRoofRoots.length > 0) {
+      const tunBatch = batchStaticObjectGroups(tunnelRoofRoots);
+      const fadeMaterials: THREE.MeshStandardMaterial[] = [];
+      tunBatch.group.traverse((obj: THREE.Object3D) => {
+        const mesh = obj as THREE.Mesh;
+        if (mesh.isMesh && mesh.material instanceof THREE.MeshStandardMaterial) {
+          const cloned = mesh.material.clone();
+          mesh.material = cloned;
+          fadeMaterials.push(cloned);
+        }
+      });
+      group.add(tunBatch.group);
+      for (const bg of tunBatch.geometries) mergedGeos.push(bg);
+
+      let tunnelFpsWallGroup: THREE.Group | undefined;
+      if (tunnelFpsWallRoots.length > 0) {
+        const wallBatch = batchStaticObjectGroups(tunnelFpsWallRoots);
+        tunnelFpsWallGroup = wallBatch.group;
+        tunnelFpsWallGroup.visible = this.lastIsFps === true;
+        group.add(tunnelFpsWallGroup);
+        for (const bg of wallBatch.geometries) mergedGeos.push(bg);
+      }
+
+      shelterRoofs.push({
+        kind: 'tunnel',
+        group: tunBatch.group,
+        fpsWallGroup: tunnelFpsWallGroup,
+        fadeMaterials,
+        minX: tunMinX - 0.6,
+        maxX: tunMaxX + 0.6,
+        minZ: tunMinZ - 0.6,
+        maxZ: tunMaxZ + 0.6,
+        currentOpacity: 0.78,
+      });
+    }
+
+    // Build True Isometric Rocky Cliff Cave Architecture (3 layers: moody basalt floor liner, asymmetric cutaway perimeter with crisp light-granite rims, and semi-translucent sculpted rocky roof dome)
+    if (!isFlatOrigin) {
+      const rx = Math.floor(startX / 32);
+      const ry = Math.floor(startY / 32);
+      const cave = getMacroRegionCave(seed, rx, ry);
+      if (
+        cave &&
+        cave.gx >= startX &&
+        cave.gx < startX + CHUNK_SIZE &&
+        cave.gy >= startY &&
+        cave.gy < startY + CHUNK_SIZE
+      ) {
+        const caveCX = cave.gx + 0.5;
+        const caveCZ = cave.gy + 0.5;
+        const roofH = Math.max(2.75, cave.roofY - cave.floorY);
+
+        // Layer 3 — Moody Dark Cavern Floor Liner + covered mouth transition floor
+        const linerRoot = new THREE.Group();
+        linerRoot.position.set(caveCX, cave.floorY, caveCZ);
+        const floorDisc = new THREE.Mesh(
+          new THREE.CylinderGeometry(cave.chamberRadius + 0.3, cave.chamberRadius + 0.42, 0.06, 18),
+          caveFloorLinerMat
+        );
+        floorDisc.position.set(0, 0.015, 0);
+        floorDisc.receiveShadow = true;
+        linerRoot.add(floorDisc);
+        const mouthApron = new THREE.Mesh(
+          cave.mouthDir === 's'
+            ? new THREE.BoxGeometry(3.2, 0.06, 2.5)
+            : new THREE.BoxGeometry(2.5, 0.06, 3.2),
+          caveFloorLinerMat
+        );
+        mouthApron.position.set(
+          cave.mouthDir === 'e' ? 2.1 : 0,
+          0.015,
+          cave.mouthDir === 's' ? 2.1 : 0
+        );
+        mouthApron.receiveShadow = true;
+        linerRoot.add(mouthApron);
+        staticPropRoots.push(linerRoot);
+
+        // Layer 2 — Asymmetric Isometric Perimeter Walls (tall NW back massif + crisp-rimmed SE cutaway + FPS upper enclosure)
+        const caveWallRoot = new THREE.Group();
+        caveWallRoot.position.set(caveCX, cave.floorY, caveCZ);
+        const caveFpsWallRoots: THREE.Object3D[] = [];
+        const segCount = 16;
+        const wallR = cave.chamberRadius + 0.52;
+        const mouthAngle = cave.mouthDir === 's' ? Math.PI * 0.5 : 0;
+
+        for (let s = 0; s < segCount; s++) {
+          const ang = (s / segCount) * Math.PI * 2;
+          const dAng = Math.abs(Math.atan2(Math.sin(ang - mouthAngle), Math.cos(ang - mouthAngle)));
+          if (dAng < 0.52) continue; // Keep the timber-framed cave mouth wide open
+
+          const sx = Math.cos(ang) * wallR;
+          const sz = Math.sin(ang) * wallR;
+          const isFrontCutaway = sx + sz > 0.72;
+          const rotY = -ang;
+
+          if (!isFrontCutaway) {
+            // Permanent NW back cliff massif: full-height dark interior basalt + rugged outer granite shoulder
+            const backWall = new THREE.Mesh(
+              new THREE.BoxGeometry(1.26, roofH + 0.62, 1.84),
+              s % 2 === 0 ? caveRockMat : caveDarkMat
+            );
+            backWall.position.set(sx, (roofH + 0.15) * 0.5 - 0.22, sz);
+            backWall.rotation.y = rotY;
+            caveWallRoot.add(backWall);
+
+            // Subtle upper rock ledge accent framing the cavern interior in ISO
+            const upperCap = new THREE.Mesh(new THREE.BoxGeometry(1.32, 0.12, 1.88), caveCutawayRimMat);
+            upperCap.position.set(sx * 0.98, roofH + 0.12, sz * 0.98);
+            upperCap.rotation.y = rotY;
+            caveWallRoot.add(upperCap);
+          } else {
+            // SE Foreground Isometric Cutaway: low beveled dark basalt base + crisp light-granite architectural cutaway rim!
+            const lowWall = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.72, 1.78), caveDarkMat);
+            lowWall.position.set(sx, 0.24, sz);
+            lowWall.rotation.y = rotY;
+            caveWallRoot.add(lowWall);
+
+            const rimCap = new THREE.Mesh(new THREE.BoxGeometry(1.08, 0.11, 1.84), caveCutawayRimMat);
+            rimCap.position.set(sx, 0.635, sz);
+            rimCap.rotation.y = rotY;
+            caveWallRoot.add(rimCap);
+
+            // FPS-only upper wall extension sealing the SE arc so First-Person view is 100% enclosed
+            const upperH = Math.max(0.65, roofH - 0.35);
+            const fpsUpperSeg = new THREE.Mesh(new THREE.BoxGeometry(1.04, upperH, 1.82), caveDarkMat);
+            fpsUpperSeg.position.set(caveCX + sx, cave.floorY + 0.62 + upperH * 0.5, caveCZ + sz);
+            fpsUpperSeg.rotation.y = rotY;
+            caveFpsWallRoots.push(fpsUpperSeg);
+          }
+        }
+        staticPropRoots.push(caveWallRoot);
+
+        // Layer 1 — Sculpted Rocky Roof Dome (semi-translucent peek outside in ISO, smooth cutaway on entry, 100% opaque in FPS)
+        const caveRoofRoots: THREE.Object3D[] = [];
+        const roofRoot = new THREE.Group();
+        roofRoot.position.set(caveCX, cave.floorY, caveCZ);
+
+        const domeBase = new THREE.Mesh(
+          new THREE.CylinderGeometry(3.45, 4.35, 0.62, 8),
+          caveDarkMat
+        );
+        domeBase.position.set(0, roofH + 0.08, 0);
+        domeBase.rotation.y = Math.PI / 8;
+
+        const rockCrown1 = new THREE.Mesh(
+          new THREE.CylinderGeometry(2.75, 3.95, 0.98, 7),
+          caveRockMat
+        );
+        rockCrown1.position.set(-0.22, roofH + 0.76, -0.22);
+        rockCrown1.rotation.y = 0.32;
+
+        const rockCrown2 = new THREE.Mesh(
+          new THREE.CylinderGeometry(1.35, 2.55, 0.84, 7),
+          caveRockMat
+        );
+        rockCrown2.position.set(-0.35, roofH + 1.48, -0.35);
+        rockCrown2.rotation.y = -0.45;
+
+        // Overhanging rocky brow extending cleanly over the timber mouth lintel
+        const brow = new THREE.Mesh(
+          cave.mouthDir === 's'
+            ? new THREE.BoxGeometry(3.95, 0.62, 1.55)
+            : new THREE.BoxGeometry(1.55, 0.62, 3.95),
+          caveRockMat
+        );
+        brow.position.set(
+          cave.mouthDir === 'e' ? 2.65 : 0,
+          roofH + 0.24,
+          cave.mouthDir === 's' ? 2.65 : 0
+        );
+        roofRoot.add(domeBase, rockCrown1, rockCrown2, brow);
+        caveRoofRoots.push(roofRoot);
+
+        const caveBatch = batchStaticObjectGroups(caveRoofRoots);
+        const caveFadeMaterials: THREE.MeshStandardMaterial[] = [];
+        caveBatch.group.traverse((obj: THREE.Object3D) => {
+          const mesh = obj as THREE.Mesh;
+          if (mesh.isMesh && mesh.material instanceof THREE.MeshStandardMaterial) {
+            const cloned = mesh.material.clone();
+            mesh.material = cloned;
+            caveFadeMaterials.push(cloned);
+          }
+        });
+        group.add(caveBatch.group);
+        for (const bg of caveBatch.geometries) mergedGeos.push(bg);
+
+        let caveFpsWallGroup: THREE.Group | undefined;
+        if (caveFpsWallRoots.length > 0) {
+          const cwBatch = batchStaticObjectGroups(caveFpsWallRoots);
+          caveFpsWallGroup = cwBatch.group;
+          caveFpsWallGroup.visible = this.lastIsFps === true;
+          group.add(caveFpsWallGroup);
+          for (const bg of cwBatch.geometries) mergedGeos.push(bg);
+        }
+
+        const rPad = cave.chamberRadius + 0.6;
+        shelterRoofs.push({
+          kind: 'cave',
+          group: caveBatch.group,
+          fpsWallGroup: caveFpsWallGroup,
+          fadeMaterials: caveFadeMaterials,
+          minX: caveCX - rPad,
+          maxX: caveCX + rPad + (cave.mouthDir === 'e' ? 1.0 : 0),
+          minZ: caveCZ - rPad,
+          maxZ: caveCZ + rPad + (cave.mouthDir === 's' ? 1.0 : 0),
+          currentOpacity: 0.42,
+        });
+
+        // Permanent rocky mouth framing jambs + weathered timber lintel beam so hidden caves read crisply
+        const mouthRoot = new THREE.Group();
+        mouthRoot.position.set(caveCX, cave.floorY, caveCZ);
+        if (cave.mouthDir === 's') {
+          const pL = new THREE.Mesh(new THREE.BoxGeometry(0.45, roofH, 0.55), bridgeWoodMat);
+          pL.position.set(-1.65, roofH * 0.5, 3.15);
+          const pR = new THREE.Mesh(new THREE.BoxGeometry(0.45, roofH, 0.55), bridgeWoodMat);
+          pR.position.set(1.65, roofH * 0.5, 3.15);
+          const lintel = new THREE.Mesh(new THREE.BoxGeometry(3.85, 0.36, 0.65), bridgeWoodMat);
+          lintel.position.set(0, roofH - 0.12, 3.15);
+          mouthRoot.add(pL, pR, lintel);
+        } else {
+          const pN = new THREE.Mesh(new THREE.BoxGeometry(0.55, roofH, 0.45), bridgeWoodMat);
+          pN.position.set(3.15, roofH * 0.5, -1.65);
+          const pS = new THREE.Mesh(new THREE.BoxGeometry(0.55, roofH, 0.45), bridgeWoodMat);
+          pS.position.set(3.15, roofH * 0.5, 1.65);
+          const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.36, 3.85), bridgeWoodMat);
+          lintel.position.set(3.15, roofH - 0.12, 0);
+          mouthRoot.add(pN, pS, lintel);
+        }
+        staticPropRoots.push(mouthRoot);
       }
     }
 
@@ -1149,13 +1729,14 @@ export class ThreeIsometricRenderer {
       for (const bg of upperBatch.geometries) mergedGeos.push(bg);
     }
 
-    // Instanced wind-animated 3D grass across open grass and forest_floor tiles
+    // Instanced wind-animated 3D grass across open grass and forest_floor tiles (grounded on hills!)
     const grassMesh = this.grassSystem.createChunkGrassMesh(
       getCell,
       cx,
       cy,
       CHUNK_SIZE,
-      this.isSoftwareGl ? 0.55 : 1
+      this.isSoftwareGl ? 0.55 : 1,
+      isFlatOrigin ? undefined : (gx, gz) => sampleTerrainHeight(seed, gx, gz)
     );
     if (grassMesh) {
       group.add(grassMesh);
@@ -1170,7 +1751,7 @@ export class ThreeIsometricRenderer {
       _quat.identity();
       _scale.set(1, 1, 1);
       for (let i = 0; i < indoorRoofCells.length; i++) {
-        _vec3A.set(indoorRoofCells[i].gx + 0.5, 1.72, indoorRoofCells[i].gy + 0.5);
+        _vec3A.set(indoorRoofCells[i].gx + 0.5, indoorRoofCells[i].gyElev + 1.72, indoorRoofCells[i].gy + 0.5);
         _mat4.compose(_vec3A, _quat, _scale);
         fpsRoofMesh.setMatrixAt(i, _mat4);
       }
@@ -1179,7 +1760,19 @@ export class ThreeIsometricRenderer {
       group.add(fpsRoofMesh);
     }
 
-    const waterGeo = buildChunkWaterGeometry(cx, cy, CHUNK_SIZE, getCell);
+    // Render continuous animated river water underneath elevated river bridges too!
+    const isWaterTile = isFlatOrigin
+      ? undefined
+      : (wx: number, wy: number) => {
+          const t = getCell(wx, wy).tile;
+          if (t === 'water') return true;
+          if (t === 'bridge_deck') {
+            const rv = sampleRiverInfo(seed, wx + 0.5, wy + 0.5);
+            return rv.inWater || rv.riverBand < 0.036;
+          }
+          return false;
+        };
+    const waterGeo = buildChunkWaterGeometry(cx, cy, CHUNK_SIZE, getCell, isWaterTile);
     let waterMesh: THREE.Mesh | undefined;
     if (waterGeo) {
       waterMesh = new THREE.Mesh(waterGeo, this.waterMaterial);
@@ -1202,6 +1795,7 @@ export class ThreeIsometricRenderer {
       mergedWallsGroup,
       dynamicWallsGroup: solidWallRoots.length > 0 ? dynamicWallsGroup : undefined,
       fpsUpperGroup,
+      shelterRoofs,
       burnBarrelFlames,
       burnBarrelCoords,
       lightAnchors,
@@ -1212,6 +1806,7 @@ export class ThreeIsometricRenderer {
   }
 
   public render(state: RenderFrameState): void {
+    this.activeSeed = state.worldStore.seed;
     const settings = getSettings();
     const isFps = state.cameraMode === 'fps' && state.phase !== 'title';
     const rawDt = this.lastRenderClock > 0 ? state.elapsedClock - this.lastRenderClock : 0.016;
@@ -1225,6 +1820,7 @@ export class ThreeIsometricRenderer {
     const shakeZ = shakeMag > 0.004 ? (Math.random() * 2 - 1) * shakeMag : 0;
 
     let targetX: number;
+    let targetY = 0;
     let targetZ: number;
 
     let fpsMeleePose: FirstPersonMeleeSwingPose | null = null;
@@ -1248,16 +1844,20 @@ export class ThreeIsometricRenderer {
 
       if (activeCar) {
         eyeX = activeCar.x + Math.cos(activeCar.angle) * 0.08;
-        eyeY = FPS_CAR_EYE_HEIGHT;
         eyeZ = activeCar.y + Math.sin(activeCar.angle) * 0.08;
+        const gY = this.groundY(eyeX, eyeZ);
+        targetY = gY;
+        eyeY = gY + FPS_CAR_EYE_HEIGHT;
         const speedNorm = clamp(Math.abs(activeCar.speed) / 10, 0, 1);
         targetFov = baseFov + speedNorm * 6 + (activeCar.boosting ? 5 : 0);
       } else {
+        const gY = this.groundY(eyeX, eyeZ);
+        targetY = gY;
         const speedNow = Math.hypot(state.playerVelX, state.playerVelY);
         const bob = settings.fpsHeadBob
           ? computeFirstPersonHeadBob(p.walkCycle, speedNow, state.isSprinting, p.dodgeTimer)
           : { eyeOffsetY: p.dodgeTimer > 0 ? -0.28 : 0, swayX: 0, swayY: 0 };
-        eyeY = FPS_EYE_HEIGHT + bob.eyeOffsetY;
+        eyeY = gY + FPS_EYE_HEIGHT + bob.eyeOffsetY;
         targetRoll = settings.fpsHeadBob ? computeFirstPersonStrafeRoll(state.strafeInput, speedNow) : 0;
         if (state.isSprinting && speedNow > 0.5) targetFov = baseFov + 4.5;
         else if (p.dodgeTimer > 0) targetFov = baseFov + 6;
@@ -1286,6 +1886,7 @@ export class ThreeIsometricRenderer {
         this.fpsCamera.updateProjectionMatrix();
       }
       this.currentFpsRoll += (targetRoll - this.currentFpsRoll) * 0.18;
+      this.smoothedTargetY = targetY;
 
       const punchScale = settings.screenShake ? 1 : 0.35;
       const effYaw = p.facingAngle + (fpsMeleePose ? fpsMeleePose.camYawOffset * punchScale : 0);
@@ -1326,13 +1927,16 @@ export class ThreeIsometricRenderer {
       const centerWorld = isoToWorld(state.camX, state.camY);
       targetX = centerWorld.wx + shakeX;
       targetZ = centerWorld.wy + shakeZ;
+      const rawGroundY = this.groundY(centerWorld.wx, centerWorld.wy);
+      this.smoothedTargetY += (rawGroundY - this.smoothedTargetY) * Math.min(1, dt * 8 + 0.14);
+      targetY = this.smoothedTargetY;
 
       this.camera.position.set(
         targetX + _camOffsetDir.x * 28,
-        _camOffsetDir.y * 28,
+        targetY + _camOffsetDir.y * 28,
         targetZ + _camOffsetDir.z * 28
       );
-      this.camera.lookAt(targetX, 0, targetZ);
+      this.camera.lookAt(targetX, targetY, targetZ);
       this.camera.updateMatrixWorld();
       this.activeCamera = this.camera;
       this.fogExp.density = 0.009;
@@ -1341,9 +1945,9 @@ export class ThreeIsometricRenderer {
     // Stream 3D chunks around camera
     this.ensureChunksAround(targetX, targetZ, state.getCell);
 
-    // Update dynamic sky dome, clouds, wind grass, Day/Night lighting, fog & sun shadows
-    this.grassSystem.updateWind(state.elapsedClock);
-    this.updateAtmosphereAndLights(state, targetX, targetZ, isFps);
+    // Update dynamic sky dome, clouds, wind grass, Day/Night + Weather lighting, fog & sun shadows
+    this.grassSystem.updateWind(state.elapsedClock, state.weather.windStrength);
+    this.updateAtmosphereAndLights(state, targetX, targetY, targetZ, isFps);
 
     // Toggle FPS ceiling roofs & upper walls only when camera mode flips (zero per-frame scan)
     if (this.lastIsFps !== isFps) {
@@ -1351,6 +1955,58 @@ export class ThreeIsometricRenderer {
       for (const cv of this.chunkVisuals.values()) {
         if (cv.fpsRoofMesh) cv.fpsRoofMesh.visible = isFps;
         if (cv.fpsUpperGroup) cv.fpsUpperGroup.visible = isFps;
+      }
+    }
+
+    // Smooth Isometric Cave & Tunnel Roof Cutaways:
+    // - FPS: 100% opaque roof dome + SE foreground enclosure walls
+    // - ISO Outside: semi-translucent rocky cave roof peek (0.42) & tunnel cap (0.78)
+    // - ISO Approaching/Inside: smooth cross-fade to full cutaway revealing moody interior + crisp wall rims
+    const fadeLerp = Math.min(1, dt * 8.5 + 0.12);
+    for (const cv of this.chunkVisuals.values()) {
+      for (let i = 0; i < cv.shelterRoofs.length; i++) {
+        const sr = cv.shelterRoofs[i];
+        if (sr.fpsWallGroup) {
+          sr.fpsWallGroup.visible = isFps;
+        }
+        if (isFps) {
+          sr.currentOpacity = 1;
+          sr.group.visible = true;
+          for (let m = 0; m < sr.fadeMaterials.length; m++) {
+            const mat = sr.fadeMaterials[m];
+            if (mat.transparent || mat.opacity < 0.999) {
+              mat.transparent = false;
+              mat.opacity = 1;
+              mat.depthWrite = true;
+              mat.needsUpdate = true;
+            }
+          }
+        } else {
+          const pad = sr.kind === 'cave' ? 1.55 : state.shelterKind === 'tunnel' ? 11.0 : 4.5;
+          const nearOrInside =
+            state.player.x >= sr.minX - pad &&
+            state.player.x <= sr.maxX + pad &&
+            state.player.y >= sr.minZ - pad &&
+            state.player.y <= sr.maxZ + pad;
+          const targetOp = nearOrInside ? 0 : sr.kind === 'cave' ? 0.42 : 0.78;
+          sr.currentOpacity += (targetOp - sr.currentOpacity) * fadeLerp;
+          if (Math.abs(sr.currentOpacity - targetOp) < 0.01) {
+            sr.currentOpacity = targetOp;
+          }
+          sr.group.visible = sr.currentOpacity > 0.015;
+          if (sr.group.visible) {
+            const isSemi = sr.currentOpacity < 0.98;
+            for (let m = 0; m < sr.fadeMaterials.length; m++) {
+              const mat = sr.fadeMaterials[m];
+              if (mat.transparent !== isSemi) {
+                mat.transparent = isSemi;
+                mat.depthWrite = !isSemi;
+                mat.needsUpdate = true;
+              }
+              mat.opacity = sr.currentOpacity;
+            }
+          }
+        }
       }
     }
 
@@ -1436,7 +2092,8 @@ export class ThreeIsometricRenderer {
     this.syncFishing(state.fishing, state.player, state.elapsedClock, isFps);
     this.syncHighlights(state);
     this.syncParticles(state.particles);
-    this.syncAmbientAsh(state.ambientAsh, targetX, targetZ, state.timeMinutes);
+    this.syncAmbientAsh(state.ambientAsh, targetX, targetY, targetZ, state.timeMinutes);
+    this.syncWeatherRain(state, targetX, targetY, targetZ, dt, isFps);
 
     this.renderer.render(this.scene, this.activeCamera);
     this.renderOverlay2D(state, isFps);
@@ -1445,15 +2102,18 @@ export class ThreeIsometricRenderer {
   private updateAtmosphereAndLights(
     state: RenderFrameState,
     targetX: number,
+    targetY: number,
     targetZ: number,
     isFps: boolean
   ): void {
     const atmo = computeAtmosphereLighting(state.timeMinutes, this.atmoState);
+    applyWeatherAndShelterLighting(atmo, state.weather, state.shelterKind, isFps);
     this.skyDome.update(targetX, targetZ, atmo, state.elapsedClock, isFps);
 
     const nightT = atmo.nightT;
+    const inDarkShelter = state.shelterKind === 'cave' || state.shelterKind === 'tunnel';
 
-    // Sky/fog blend (atmospheric dawn/day/dusk horizon in FPS, deep void vignette in ISO)
+    // Sky/fog blend (atmospheric dawn/day/dusk/storm horizon in FPS, deep void vignette in ISO)
     const fogCol = isFps ? atmo.fpsFogColor : atmo.isoFogColor;
     (this.scene.background as THREE.Color).copy(fogCol);
     if (this.scene.fog) {
@@ -1463,23 +2123,23 @@ export class ThreeIsometricRenderer {
       }
     }
 
-    // Dynamic solar/lunar key light & opposite sky rim fill tracking player bounds
+    // Dynamic solar/lunar key light & opposite sky rim fill tracking player bounds & elevation
     this.sunLight.position.set(
       targetX + atmo.sunLightOffset.x,
-      atmo.sunLightOffset.y,
+      targetY + atmo.sunLightOffset.y,
       targetZ + atmo.sunLightOffset.z
     );
-    this.sunLight.target.position.set(targetX, 0, targetZ);
+    this.sunLight.target.position.set(targetX, targetY, targetZ);
     this.sunLight.target.updateMatrixWorld();
     this.sunLight.color.copy(atmo.sunColor);
     this.sunLight.intensity = atmo.sunIntensity;
 
     this.rimLight.position.set(
       targetX + atmo.rimLightOffset.x,
-      atmo.rimLightOffset.y,
+      targetY + atmo.rimLightOffset.y,
       targetZ + atmo.rimLightOffset.z
     );
-    this.rimLight.target.position.set(targetX, 0, targetZ);
+    this.rimLight.target.position.set(targetX, targetY, targetZ);
     this.rimLight.target.updateMatrixWorld();
     this.rimLight.color.copy(atmo.rimColor);
     this.rimLight.intensity = atmo.rimIntensity;
@@ -1490,7 +2150,7 @@ export class ThreeIsometricRenderer {
     this.scene.environmentIntensity = atmo.envIntensity;
     this.renderer.toneMappingExposure = atmo.exposure;
 
-    // Player flashlight SpotLight (tracks vertical pitch in FPS mode!)
+    // Player flashlight SpotLight (tracks terrain elevation & vertical pitch in FPS mode!)
     const flashlightOn =
       state.phase !== 'title' &&
       state.activeVehicleId === null &&
@@ -1498,28 +2158,27 @@ export class ThreeIsometricRenderer {
       state.player.battery > 0;
     if (flashlightOn) {
       const p = state.player;
+      const pGroundY = this.groundY(p.x, p.y);
       if (isFps) {
         const fx = Math.cos(p.facingAngle);
         const fz = Math.sin(p.facingAngle);
         const rx = -fz;
         const rz = fx;
         const cosP = Math.cos(state.fpsPitch);
-        this.flashlight.position.set(p.x + fx * 0.18 + rx * 0.16, FPS_EYE_HEIGHT - 0.1, p.y + fz * 0.18 + rz * 0.16);
+        this.flashlight.position.set(p.x + fx * 0.18 + rx * 0.16, pGroundY + FPS_EYE_HEIGHT - 0.1, p.y + fz * 0.18 + rz * 0.16);
         this.flashlight.target.position.set(
           p.x + fx * cosP * 7,
-          FPS_EYE_HEIGHT + Math.sin(state.fpsPitch) * 7,
+          pGroundY + FPS_EYE_HEIGHT + Math.sin(state.fpsPitch) * 7,
           p.y + fz * cosP * 7
         );
       } else {
-        this.flashlight.position.set(p.x, 0.85, p.y);
-        this.flashlight.target.position.set(
-          p.x + Math.cos(p.facingAngle) * 6,
-          0,
-          p.y + Math.sin(p.facingAngle) * 6
-        );
+        const tx = p.x + Math.cos(p.facingAngle) * 6;
+        const tz = p.y + Math.sin(p.facingAngle) * 6;
+        this.flashlight.position.set(p.x, pGroundY + 0.85, p.y);
+        this.flashlight.target.position.set(tx, this.groundY(tx, tz), tz);
       }
       this.flashlight.target.updateMatrixWorld();
-      this.flashlight.intensity = 2.8 + nightT * 7.5;
+      this.flashlight.intensity = 3.2 + Math.max(nightT, inDarkShelter ? 0.92 : 0) * 8.5;
       this._flashlightDir.copy(this.flashlight.target.position).sub(this.flashlight.position).normalize();
     } else {
       this.flashlight.intensity = 0;
@@ -1544,33 +2203,39 @@ export class ThreeIsometricRenderer {
       const hl = this.headlightLights[hlIdx++];
       const fx = Math.cos(v.angle);
       const fz = Math.sin(v.angle);
-      hl.position.set(v.x + fx * 0.75, 0.55, v.y + fz * 0.75);
-      hl.target.position.set(v.x + fx * 7.5, 0, v.y + fz * 7.5);
+      const vx0 = v.x + fx * 0.75;
+      const vz0 = v.y + fz * 0.75;
+      const vx1 = v.x + fx * 7.5;
+      const vz1 = v.y + fz * 7.5;
+      hl.position.set(vx0, this.groundY(vx0, vz0) + 0.55, vz0);
+      hl.target.position.set(vx1, this.groundY(vx1, vz1), vz1);
       hl.target.updateMatrixWorld();
-      hl.intensity = 3.2 + nightT * 8.5;
+      hl.intensity = 3.2 + Math.max(nightT, inDarkShelter ? 0.65 : 0) * 8.5;
     }
     for (let i = hlIdx; i < this.headlightLights.length; i++) {
       this.headlightLights[i].intensity = 0;
     }
 
-    // Dynamic PointLight allocation for nearest campfires, burn barrels, streetlamps, fires & sirens
+    // Dynamic PointLight allocation for nearest campfires, burn barrels, tunnel lamps, streetlamps, fires & sirens
     const candidates = this._lightCandidates;
     candidates.length = 0;
     const flicker = Math.sin(state.elapsedClock * 13) * 0.45 + Math.cos(state.elapsedClock * 23) * 0.25;
 
     for (const s of state.structures) {
       if (s.kind !== 'campfire') continue;
-      const dx = s.gx + 0.5 - targetX;
-      const dz = s.gy + 0.5 - targetZ;
+      const sx = s.gx + 0.5;
+      const sz = s.gy + 0.5;
+      const dx = sx - targetX;
+      const dz = sz - targetZ;
       const d2 = dx * dx + dz * dz;
       if (d2 < 320) {
         candidates.push({
-          x: s.gx + 0.5,
-          y: 0.65,
-          z: s.gy + 0.5,
+          x: sx,
+          y: this.groundY(sx, sz) + 0.65,
+          z: sz,
           color: 0xff8c32,
-          intensity: (3.2 + nightT * 2.5) + flicker * 0.7,
-          distance: 8.5,
+          intensity: (3.4 + Math.max(nightT, inDarkShelter ? 0.8 : 0) * 2.8) + flicker * 0.7,
+          distance: 9.0,
           d2,
         });
       }
@@ -1584,7 +2249,7 @@ export class ThreeIsometricRenderer {
       if (d2 < 320) {
         candidates.push({
           x: fp.x,
-          y: 0.6,
+          y: this.groundY(fp.x, fp.y) + 0.6,
           z: fp.y,
           color: 0xff7722,
           intensity: 3.5 + flicker,
@@ -1603,7 +2268,7 @@ export class ThreeIsometricRenderer {
       if (d2 < 320) {
         candidates.push({
           x: v.x,
-          y: 1.15,
+          y: this.groundY(v.x, v.y) + 1.15,
           z: v.y,
           color: sirenPhase === 0 ? 0xff453a : 0x3b9eff,
           intensity: 3.6 + nightT * 3.0,
@@ -1613,7 +2278,8 @@ export class ThreeIsometricRenderer {
       }
     }
 
-    if (nightT > 0.12) {
+    if (nightT > 0.12 || inDarkShelter || state.weather.rainIntensity > 0.35) {
+      const anchorScale = Math.max(0.4 + nightT * 0.8, inDarkShelter ? 0.95 : 0.45);
       for (const cv of this.chunkVisuals.values()) {
         for (const a of cv.lightAnchors) {
           const dx = a.x - targetX;
@@ -1622,10 +2288,10 @@ export class ThreeIsometricRenderer {
           if (d2 < 260) {
             candidates.push({
               x: a.x,
-              y: 1.25,
+              y: a.y,
               z: a.z,
               color: a.color,
-              intensity: a.intensity * (0.4 + nightT * 0.8) + (a.flicker ? flicker * 0.6 : 0),
+              intensity: a.intensity * anchorScale + (a.flicker ? flicker * 0.6 : 0),
               distance: a.distance,
               d2,
             });
@@ -1658,7 +2324,7 @@ export class ThreeIsometricRenderer {
       let rig = this.doorRigs.get(d.id);
       if (!rig) {
         rig = this.factory.createDoorRig(d.orientation);
-        rig.root.position.set(d.gx + 0.5, 0, d.gy + 0.5);
+        rig.root.position.set(d.gx + 0.5, this.groundY(d.gx + 0.5, d.gy + 0.5), d.gy + 0.5);
         this.scene.add(rig.root);
         this.doorRigs.set(d.id, rig);
       }
@@ -1708,7 +2374,7 @@ export class ThreeIsometricRenderer {
           this.lootDropRigs.set(c.id, drop);
         }
         const bob = Math.sin(elapsedClock * 4 + c.gx * 1.7 + c.gy) * 0.05;
-        drop.position.set(c.gx + 0.5, 0.04 + bob, c.gy + 0.5);
+        drop.position.set(c.gx + 0.5, this.groundY(c.gx + 0.5, c.gy + 0.5) + 0.04 + bob, c.gy + 0.5);
         drop.rotation.y = Math.sin(elapsedClock * 1.8 + c.gx) * 0.25;
         const itemSprite = drop.userData.itemSprite as THREE.Sprite | undefined;
         if (itemSprite) {
@@ -1722,7 +2388,7 @@ export class ThreeIsometricRenderer {
       let rig = this.containerRigs.get(c.id);
       if (!rig) {
         rig = this.factory.createLootContainerRig(c.kind);
-        rig.root.position.set(c.gx + 0.5, 0, c.gy + 0.5);
+        rig.root.position.set(c.gx + 0.5, this.groundY(c.gx + 0.5, c.gy + 0.5), c.gy + 0.5);
         this.scene.add(rig.root);
         this.containerRigs.set(c.id, rig);
       }
@@ -1773,7 +2439,7 @@ export class ThreeIsometricRenderer {
       let g = this.structureRigs.get(s.id);
       if (!g) {
         g = this.factory.createStructureGroup(s.kind);
-        g.position.set(s.gx + 0.5, 0, s.gy + 0.5);
+        g.position.set(s.gx + 0.5, this.groundY(s.gx + 0.5, s.gy + 0.5), s.gy + 0.5);
         this.scene.add(g);
         this.structureRigs.set(s.id, g);
       }
@@ -1843,8 +2509,19 @@ export class ThreeIsometricRenderer {
         this.scene.add(rig.root);
         this.vehicleRigs.set(v.id, rig);
       }
-      rig.root.position.set(v.x, 0, v.y);
+      const vSurf = sampleTerrainSurface(this.activeSeed, v.x, v.y);
+      rig.root.position.set(v.x, vSurf.height, v.y);
+      rig.root.rotation.order = 'YXZ';
       rig.root.rotation.y = -v.angle;
+      // Align vehicle pitch & roll cleanly along hill grades and arched bridges
+      const fwdX = Math.cos(v.angle);
+      const fwdZ = Math.sin(v.angle);
+      const rightX = -fwdZ;
+      const rightZ = fwdX;
+      const slopeFwd = -(vSurf.normalX * fwdX + vSurf.normalZ * fwdZ) / Math.max(0.25, vSurf.normalY);
+      const slopeRight = -(vSurf.normalX * rightX + vSurf.normalZ * rightZ) / Math.max(0.25, vSurf.normalY);
+      rig.root.rotation.z = clamp(Math.atan(slopeFwd), -0.42, 0.42);
+      rig.root.rotation.x = clamp(-Math.atan(slopeRight), -0.35, 0.35);
       rig.cabGroup.visible = !(isFps && activeVehicleId === v.id);
 
       // Wheel rotation & gentle suspension tilt
@@ -1978,7 +2655,8 @@ export class ThreeIsometricRenderer {
       const d = this.infectDrops[i];
       if (!d.active) continue;
       d.life -= dt;
-      if (d.life <= 0 || d.y <= 0.015) {
+      const floorY = this.groundY(d.x, d.z) + 0.015;
+      if (d.life <= 0 || d.y <= floorY) {
         d.active = false;
         continue;
       }
@@ -1988,7 +2666,7 @@ export class ThreeIsometricRenderer {
       d.z += d.vz * dt;
       const t = clamp(d.life / d.maxLife, 0, 1);
       const s = d.size * (0.45 + 0.55 * t);
-      _vec3A.set(d.x, Math.max(0.02, d.y), d.z);
+      _vec3A.set(d.x, Math.max(floorY + 0.005, d.y), d.z);
       _scale.set(s * 0.72, s * 1.65, s * 0.72);
       _mat4.compose(_vec3A, _quat, _scale);
       this.infectDropInstanced.setMatrixAt(dropCount, _mat4);
@@ -2066,11 +2744,14 @@ export class ThreeIsometricRenderer {
       }
 
       const { rig, ring } = entry;
+      const zGroundY = this.groundY(z.x, z.y);
       const inWater = z.state !== 'dying' && getCell(Math.floor(z.x), Math.floor(z.y)).tile === 'water';
-      rig.root.position.set(z.x, inWater ? -0.22 * z.scaleY : 0, z.y);
+      rig.root.position.set(z.x, zGroundY + (inWater ? -0.22 * z.scaleY : 0), z.y);
       const facingAngle = Math.atan2(z.facingY, z.facingX);
       rig.root.rotation.y = -facingAngle;
       rig.root.scale.set(z.scaleX, z.scaleY, z.scaleX);
+      // Keep windup telegraph ring elevated cleanly on slopes
+      ring.position.y = zGroundY + 0.035;
 
       const animState = resolveZombieAnimState({
         state: z.state,
@@ -2110,7 +2791,7 @@ export class ThreeIsometricRenderer {
       // Windup ground telegraph ring
       ring.visible = z.state === 'windup';
       if (ring.visible) {
-        ring.position.set(z.x, 0.03, z.y);
+        ring.position.set(z.x, zGroundY + 0.035, z.y);
         const pulse = 0.9 + Math.sin(elapsedClock * 18) * 0.12;
         ring.scale.set(pulse, 1, pulse);
       }
@@ -2504,12 +3185,13 @@ export class ThreeIsometricRenderer {
     if (!thirdPersonVisible) return;
 
     // Wading: while standing in lake/river water, sink the lower half below the animated surface.
+    const pGroundY = this.groundY(p.x, p.y);
     const inWater = state.getCell(Math.floor(p.x), Math.floor(p.y)).tile === 'water';
     this.playerWadeDepth += ((inWater ? 0.55 : 0) - this.playerWadeDepth) * 0.25;
     if (Math.abs(this.playerWadeDepth - (inWater ? 0.55 : 0)) < 0.004) this.playerWadeDepth = inWater ? 0.55 : 0;
     const hasWade = this.playerWadeDepth > 0;
     const sinkY = (this.playerWadeDepth / 0.55) * 0.52 * p.scaleY;
-    this.playerRig.root.position.set(p.x, hasWade ? -sinkY : 0, p.y);
+    this.playerRig.root.position.set(p.x, pGroundY + (hasWade ? -sinkY : 0), p.y);
     this.playerRig.root.rotation.y = -p.facingAngle;
     this.playerRig.root.scale.set(p.scaleX, p.scaleY, p.scaleX);
 
@@ -2598,7 +3280,7 @@ export class ThreeIsometricRenderer {
 
         if (tp.arcOpacity > 0.02) {
           this.meleeArcMesh.visible = true;
-          this.meleeArcMesh.position.set(p.x, 0.56, p.y);
+          this.meleeArcMesh.position.set(p.x, pGroundY + 0.56, p.y);
           this.meleeArcMesh.rotation.set(0, -p.facingAngle, tp.arcRotZ);
           const arcScale = spec.range / 1.85;
           this.meleeArcMesh.scale.set(arcScale, 1, tp.arcFlipX ? -arcScale : arcScale);
@@ -2714,7 +3396,12 @@ export class ThreeIsometricRenderer {
         this.scene.add(g);
         this.projectileMeshes.set(pr.id, g);
       }
-      g.position.set(pr.x, Math.max(0.04, pr.z), pr.y);
+      const groundH = this.groundY(pr.x, pr.y);
+      const projY =
+        pr.kind === 'bullet' || pr.kind === 'pellet'
+          ? Math.max(groundH + 0.04, pr.z)
+          : groundH + Math.max(0.04, pr.z);
+      g.position.set(pr.x, projY, pr.y);
       if (pr.kind === 'molotov') {
         g.rotation.z = elapsedClock * 12;
         g.rotation.x = elapsedClock * 8;
@@ -2840,7 +3527,7 @@ export class ThreeIsometricRenderer {
         this.scene.add(g);
         this.firePatchMeshes.set(fp.id, g);
       }
-      g.position.set(fp.x, 0, fp.y);
+      g.position.set(fp.x, this.groundY(fp.x, fp.y), fp.y);
       const lifeFade = clamp(fp.life * 0.45, 0.12, 1);
       const discMat = (g.children[0] as THREE.Mesh).material as THREE.MeshBasicMaterial;
       discMat.opacity = fp.kind === 'fire' ? clamp(lifeFade * 0.85, 0.1, 0.82) : Math.min(0.45, fp.life * 0.2);
@@ -2905,7 +3592,7 @@ export class ThreeIsometricRenderer {
       if (i < needed) {
         const d = decals[startIdx + i];
         mesh.visible = true;
-        mesh.position.set(d.x, 0.015 + i * 0.0001, d.y);
+        mesh.position.set(d.x, this.groundY(d.x, d.y) + 0.015 + i * 0.0001, d.y);
         mesh.rotation.z = d.variant * 1.1;
         const mat = mesh.material as THREE.MeshBasicMaterial;
         const nextTex = this.atlas.decalTex[d.kind];
@@ -2947,7 +3634,11 @@ export class ThreeIsometricRenderer {
         const d = decals[startIdx + i];
         mesh.visible = true;
         const offset = 0.014 + (i % 7) * 0.0004;
-        mesh.position.set(d.x + d.nx * offset, Math.max(0.015, d.z + d.nz * offset), d.y + d.ny * offset);
+        mesh.position.set(
+          d.x + d.nx * offset,
+          this.groundY(d.x, d.y) + Math.max(0.015, d.z + d.nz * offset),
+          d.y + d.ny * offset
+        );
         _vec3A.set(d.nx, d.nz, d.ny).normalize();
         _quat.setFromUnitVectors(_zAxis, _vec3A);
         if (d.kind !== 'blood_wall' && d.rotation !== 0) {
@@ -3009,7 +3700,11 @@ export class ThreeIsometricRenderer {
       const e = effects[i];
       const prog = clamp(1 - e.life / Math.max(0.01, e.maxLife), 0, 1);
       fx.root.visible = true;
-      fx.root.position.set(e.x + e.nx * 0.02, Math.max(0.02, e.z + e.nz * 0.02), e.y + e.ny * 0.02);
+      fx.root.position.set(
+        e.x + e.nx * 0.02,
+        this.groundY(e.x, e.y) + Math.max(0.02, e.z + e.nz * 0.02),
+        e.y + e.ny * 0.02
+      );
 
       // Build orthonormal basis around hit normal (in Three.js coords: x, z, y)
       _vec3A.set(e.nx, e.nz, e.ny);
@@ -3089,7 +3784,7 @@ export class ThreeIsometricRenderer {
       if (i < ripples.length) {
         const sr = ripples[i];
         m.visible = true;
-        m.position.set(sr.x, 0.03, sr.y);
+        m.position.set(sr.x, this.groundY(sr.x, sr.y) + 0.03, sr.y);
         m.scale.set(sr.radius, 1, sr.radius);
         const mat = m.material as THREE.MeshBasicMaterial;
         mat.color.set(sr.color);
@@ -3136,12 +3831,13 @@ export class ThreeIsometricRenderer {
     const fz = Math.sin(player.facingAngle);
     const rx = -fz;
     const rz = fx;
+    const pGroundY = this.groundY(player.x, player.y);
     const tipX = isFps ? player.x + fx * 0.72 + rx * 0.2 : player.x + fx * 0.65;
-    const tipY = isFps ? FPS_EYE_HEIGHT - 0.05 : 0.95;
+    const tipY = pGroundY + (isFps ? FPS_EYE_HEIGHT - 0.05 : 0.95);
     const tipZ = isFps ? player.y + fz * 0.72 + rz * 0.2 : player.y + fz * 0.65;
     const posAttr = this.fishingLine.geometry.attributes.position as THREE.BufferAttribute;
     posAttr.setXYZ(0, tipX, tipY, tipZ);
-    posAttr.setXYZ(1, fishing.bobberX, 0.08 + bobDip, fishing.bobberY);
+    posAttr.setXYZ(1, fishing.bobberX, WATER_SURFACE_Y + 0.08 + bobDip, fishing.bobberY);
     posAttr.needsUpdate = true;
   }
 
@@ -3149,7 +3845,9 @@ export class ThreeIsometricRenderer {
     // Nearest interactive tile outline
     if (state.nearInteractTile && state.phase === 'playing' && state.activeVehicleId === null && !state.player.buildMode) {
       this.interactHighlight.visible = true;
-      this.interactHighlight.position.set(state.nearInteractTile.gx + 0.5, 0, state.nearInteractTile.gy + 0.5);
+      const ix = state.nearInteractTile.gx + 0.5;
+      const iz = state.nearInteractTile.gy + 0.5;
+      this.interactHighlight.position.set(ix, this.groundY(ix, iz), iz);
     } else {
       this.interactHighlight.visible = false;
     }
@@ -3170,13 +3868,14 @@ export class ThreeIsometricRenderer {
       const valid =
         !cell.solid &&
         cell.tile !== 'water' &&
+        cell.tile !== 'cliff_stone' &&
         !blockedByStruct &&
         !nearPlayer &&
         Object.entries(STRUCTURES[state.player.buildMode].cost).every(
           ([k, amt]) => (state.inventory[k as keyof Inventory] ?? 0) >= (amt ?? 0)
         );
       this.buildHighlight.visible = true;
-      this.buildHighlight.position.set(gx + 0.5, 0, gy + 0.5);
+      this.buildHighlight.position.set(gx + 0.5, this.groundY(gx + 0.5, gy + 0.5), gy + 0.5);
       const col = valid ? 0x5ef28f : 0xeb4d4b;
       this.buildFillMat.color.setHex(col);
       this.buildEdgeMat.color.setHex(col);
@@ -3194,7 +3893,7 @@ export class ThreeIsometricRenderer {
         ? state.player.y + Math.sin(state.player.facingAngle) * 4.5
         : clamp(state.mouseWorldY, state.player.y - spec.range, state.player.y + spec.range);
       this.molotovReticle.visible = true;
-      this.molotovReticle.position.set(tx, 0, ty);
+      this.molotovReticle.position.set(tx, this.groundY(tx, ty), ty);
     } else {
       this.molotovReticle.visible = false;
     }
@@ -3206,7 +3905,7 @@ export class ThreeIsometricRenderer {
       const p = particles[i];
       if (!p.active) continue;
       const alphaScale = clamp(p.life / p.maxLife, 0.15, 1);
-      _vec3A.set(p.x, Math.max(0.04, p.z), p.y);
+      _vec3A.set(p.x, this.groundY(p.x, p.y) + Math.max(0.04, p.z), p.y);
       _euler.set(p.life * 8.5 + i * 1.1, p.x * 4 + p.life * 6.5, p.y * 4 + i * 0.7);
       _quat.setFromEuler(_euler);
       const s = (0.58 + p.size * 0.38) * alphaScale;
@@ -3224,7 +3923,13 @@ export class ThreeIsometricRenderer {
     }
   }
 
-  private syncAmbientAsh(ashList: RenderAshFlake[], targetX: number, targetZ: number, timeMinutes: number): void {
+  private syncAmbientAsh(
+    ashList: RenderAshFlake[],
+    targetX: number,
+    targetY: number,
+    targetZ: number,
+    timeMinutes: number
+  ): void {
     const { darkness } = getDaylightInfo(timeMinutes);
     const mat = this.ashInstanced.material as THREE.MeshBasicMaterial;
     mat.opacity = clamp(0.28 + darkness * 0.32, 0.25, 0.62);
@@ -3235,7 +3940,7 @@ export class ThreeIsometricRenderer {
       const a = ashList[i];
       _vec3A.set(
         targetX + (a.x - 0.5) * span * 2,
-        0.3 + ((1 - a.y) * 2.8),
+        targetY + 0.3 + ((1 - a.y) * 2.8),
         targetZ + (a.y - 0.5) * span * 2
       );
       _euler.set(
@@ -3255,6 +3960,73 @@ export class ThreeIsometricRenderer {
     this.ashInstanced.instanceMatrix.needsUpdate = true;
     if (this.ashInstanced.instanceColor) {
       this.ashInstanced.instanceColor.needsUpdate = true;
+    }
+  }
+
+  private syncWeatherRain(
+    state: RenderFrameState,
+    targetX: number,
+    targetY: number,
+    targetZ: number,
+    dt: number,
+    isFps: boolean
+  ): void {
+    const intensity = state.weather.rainIntensity;
+    if (intensity < 0.05) {
+      this.rainInstanced.count = 0;
+      return;
+    }
+    const maxCount = Math.max(24, Math.floor(this.rainDrops.length * clamp(intensity, 0.2, 1)));
+    const windSlant = 0.14 + state.weather.windStrength * 0.18;
+    const mat = this.rainInstanced.material as THREE.MeshBasicMaterial;
+    mat.opacity = 0.26 + intensity * 0.28;
+
+    _euler.set(0.06, 0, -windSlant);
+    _quat.setFromEuler(_euler);
+
+    let outCount = 0;
+    const rainH = 14;
+    for (let i = 0; i < maxCount; i++) {
+      const d = this.rainDrops[i];
+      d.oy -= d.speed * dt;
+      d.ox += d.speed * windSlant * dt;
+      if (d.oy < 0) {
+        d.oy += rainH;
+        d.ox = ((d.ox + 16) % 32 + 32) % 32 - 16;
+      }
+      const wx = targetX + d.ox;
+      const wz = targetZ + d.oz;
+      const wy = targetY + d.oy;
+      const surf = sampleTerrainSurface(this.activeSeed, wx, wz);
+      const cellTile = state.getCell(Math.floor(wx), Math.floor(wz)).tile;
+      const isIndoor =
+        cellTile === 'floor' ||
+        cellTile === 'floor_rug' ||
+        cellTile === 'floor_bath' ||
+        cellTile === 'tile_clinic' ||
+        cellTile === 'tile_diner';
+      const isCaveRoofed = surf.isCave || surf.isCaveCoveredMouth;
+      const isTunnelRoofed = surf.isTunnel;
+
+      // Zero rain leaks inside caves, road tunnels, or indoor buildings!
+      if (!isFps) {
+        // In ISO cutaway view, suppress the full rain column over sheltered interiors so drops never slice across open roofs
+        if (isCaveRoofed || isTunnelRoofed || isIndoor) continue;
+      } else {
+        if (isCaveRoofed && wy < surf.caveRoofY + 0.2) continue;
+        if (isTunnelRoofed && wy < surf.tunnelRoofY + 0.2) continue;
+        if (isIndoor && wy < surf.height + 2.35) continue;
+      }
+      if (wy < surf.height + 0.15) continue;
+
+      _vec3A.set(wx, wy, wz);
+      _scale.set(1, d.len * (0.85 + intensity * 0.4), 1);
+      _mat4.compose(_vec3A, _quat, _scale);
+      this.rainInstanced.setMatrixAt(outCount++, _mat4);
+    }
+    this.rainInstanced.count = outCount;
+    if (outCount > 0) {
+      this.rainInstanced.instanceMatrix.needsUpdate = true;
     }
   }
 
@@ -3281,7 +4053,7 @@ export class ThreeIsometricRenderer {
     // Damaged zombie mini health bars (guarded against behind-camera inverted projection)
     for (const z of state.zombies) {
       if (z.hp >= z.maxHp || z.state === 'dying') continue;
-      const topH = z.archetype === 'bloater' ? 1.3 : 1.18;
+      const topH = this.groundY(z.x, z.y) + (z.archetype === 'bloater' ? 1.3 : 1.18);
       const proj = this.worldToScreen(z.x, topH, z.y);
       if (!proj.visible) continue;
       const bw = 28;
@@ -3295,7 +4067,7 @@ export class ThreeIsometricRenderer {
     // Locked door lockpick progress bar
     for (const d of state.doors) {
       if (d.status !== 'locked' || d.lockpickProgress <= 0) continue;
-      const proj = this.worldToScreen(d.gx + 0.5, 1.15, d.gy + 0.5);
+      const proj = this.worldToScreen(d.gx + 0.5, this.groundY(d.gx + 0.5, d.gy + 0.5) + 1.15, d.gy + 0.5);
       if (!proj.visible) continue;
       ctx.fillStyle = '#121518';
       ctx.fillRect(Math.round(proj.sx - 16), Math.round(proj.sy), 32, 6);
@@ -3306,6 +4078,7 @@ export class ThreeIsometricRenderer {
     // Player action badge & reload progress bar
     if (state.phase !== 'title' && state.activeVehicleId === null) {
       const p = state.player;
+      const pGY = this.groundY(p.x, p.y);
       let actionLabel = state.actionVisual?.label ?? null;
       if (state.fishing.phase !== 'idle') {
         actionLabel =
@@ -3321,7 +4094,7 @@ export class ThreeIsometricRenderer {
       if (actionLabel) {
         const badgePos = isFps
           ? { sx: this.viewW * 0.5, sy: this.viewH * 0.5 + 42, visible: true }
-          : this.worldToScreen(p.x, 1.48, p.y);
+          : this.worldToScreen(p.x, pGY + 1.48, p.y);
         if (badgePos.visible) {
           ctx.save();
           ctx.font = 'bold 12px "JetBrains Mono", monospace';
@@ -3340,7 +4113,7 @@ export class ThreeIsometricRenderer {
         const prog = clamp(1 - p.reloadingTimer / total, 0, 1);
         const barPos = isFps
           ? { sx: this.viewW * 0.5, sy: this.viewH * 0.5 + 48, visible: true }
-          : this.worldToScreen(p.x, 1.25, p.y);
+          : this.worldToScreen(p.x, pGY + 1.25, p.y);
         if (barPos.visible) {
           ctx.fillStyle = '#121518';
           ctx.fillRect(Math.round(barPos.sx - 18), Math.round(barPos.sy), 36, 6);
@@ -3355,7 +4128,7 @@ export class ThreeIsometricRenderer {
     ctx.font = 'bold 13px "JetBrains Mono", monospace';
     ctx.textAlign = 'center';
     for (const ft of state.floatingTexts) {
-      const proj = this.worldToScreen(ft.x, ft.z + 0.5, ft.y);
+      const proj = this.worldToScreen(ft.x, this.groundY(ft.x, ft.y) + ft.z + 0.5, ft.y);
       if (!proj.visible) continue;
       ctx.globalAlpha = clamp(ft.life / ft.maxLife, 0, 1);
       ctx.fillStyle = '#0d1012';
@@ -3374,7 +4147,7 @@ export class ThreeIsometricRenderer {
 
       const zzzPos = isFps
         ? { sx: this.viewW * 0.5, sy: this.viewH * 0.42 - restProg * 28, visible: true }
-        : this.worldToScreen(state.player.x, 1.2 + restProg * 0.7, state.player.y);
+        : this.worldToScreen(state.player.x, this.groundY(state.player.x, state.player.y) + 1.2 + restProg * 0.7, state.player.y);
       if (zzzPos.visible) {
         ctx.save();
         ctx.globalAlpha = Math.sin(restProg * Math.PI);
@@ -3539,6 +4312,8 @@ export class ThreeIsometricRenderer {
     (this.particleInstanced.material as THREE.Material).dispose();
     this.ashInstanced.geometry.dispose();
     (this.ashInstanced.material as THREE.Material).dispose();
+    this.rainInstanced.geometry.dispose();
+    (this.rainInstanced.material as THREE.Material).dispose();
     this.infectDropInstanced.geometry.dispose();
     (this.infectDropInstanced.material as THREE.Material).dispose();
     this.sporePuffInstanced.geometry.dispose();

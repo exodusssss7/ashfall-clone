@@ -67,7 +67,9 @@ test('world generation produces diverse biomes, non-repeating tiles, and landmar
   let hasHighThreatHotspot = false;
   for (const lm of world.worldStore.landmarks.values()) {
     landmarkKinds.add(lm.kind);
-    assert.ok(lm.hotspotPacks.length >= 2, `landmark ${lm.id} should have hotspot pack`);
+    if (lm.kind !== 'cave' && lm.kind !== 'tunnel') {
+      assert.ok(lm.hotspotPacks.length >= 2, `landmark ${lm.id} should have hotspot pack`);
+    }
     if (lm.threatLevel === 'high') hasHighThreatHotspot = true;
   }
   assert.ok(world.worldStore.landmarks.size >= 8, 'expected numerous outer landmarks');
@@ -100,13 +102,19 @@ test('winding highways and roads build walkable wooden bridges across rivers', (
       const road = sampleRoadInfo(world.worldStore.seed, gx, gy);
       if (river.inWater && road.isAnyRoad) {
         const cell = getWorldCell(world.worldStore, gx, gy);
-        assert.equal(cell.tile, 'pier', `road-river crossing at (${gx}, ${gy}) should form a pier bridge`);
+        assert.ok(
+          cell.tile === 'bridge_deck' || cell.tile === 'pier',
+          `road-river crossing at (${gx}, ${gy}) should form a bridge_deck or pier bridge, got ${cell.tile}`
+        );
         assert.equal(cell.solid, false, `bridge at (${gx}, ${gy}) must be walkable`);
         bridgeCount++;
       }
       if (road.isCountryRoad && river.inWater) {
         const cell = getWorldCell(world.worldStore, gx, gy);
-        assert.equal(cell.tile, 'pier', `country road-river crossing at (${gx}, ${gy}) should form a pier bridge`);
+        assert.ok(
+          cell.tile === 'bridge_deck' || cell.tile === 'pier',
+          `country road-river crossing at (${gx}, ${gy}) should form a bridge_deck or pier bridge, got ${cell.tile}`
+        );
       }
     }
   }

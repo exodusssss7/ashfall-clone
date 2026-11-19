@@ -212,3 +212,49 @@ test('LMG spec: full-auto, unlimited ammo, weakest per-hit firearm', async () =>
   assert.ok(lmg.damage < WEAPONS.pistol.damage, 'LMG per-hit damage below pistol');
   assert.ok(lmg.damage < WEAPONS.shotgun.damage, 'LMG per-hit damage below a single shotgun pellet');
 });
+
+test('3D terrain-aware ballistics connects high-ground shots to valley zombies and blocks shots through hillsides and cave ceilings', () => {
+  const getCell = (gx: number, gy: number) => makeCell(gx, gy, 'grass', 'none');
+  // Hilltop at x <= 4 (elev 3.0), steep drop to valley at x >= 7 (elev 0.0)
+  const hillGroundY = (wx: number) => (wx <= 4 ? 3.0 : wx >= 7 ? 0.0 : 3.0 * ((7 - wx) / 3));
+
+  // Shooter at (3, 5) on hill (eye world-Y = 3.0 + 0.96 = 3.96) aiming down at valley zombie at (9, 5, elev 0.0, head at 0.90)
+  const valleyZombie = makeZombie(10, 9.0, 5.0, 'walker');
+  const worldHit = traceSegmentWorldHit(3.0, 5.0, 3.96, 9.5, 5.0, 0.7, true, getCell, [], [], [], null, hillGroundY);
+  assert.equal(worldHit, null, 'clear downward sightline from ridge to valley should not hit ground');
+
+  const zHit = traceSegmentZombieHit(3.0, 5.0, 3.96, 9.5, 5.0, 0.7, [valleyZombie], true, 1, hillGroundY);
+  assert.ok(zHit !== null, 'high-ground downward shot must hit valley zombie');
+  assert.equal(zHit.zombie.id, 10);
+  assert.equal(zHit.isHeadshot, true);
+
+  // Horizontal shot fired low into a rising hill mound must collide with terrain instead of passing through
+  const moundGroundY = (wx: number) => (wx >= 5 && wx <= 7 ? 2.6 : 0.0);
+  const hillBlock = traceSegmentWorldHit(3.0, 5.0, 0.8, 9.0, 5.0, 0.8, true, getCell, [], [], [], null, moundGroundY);
+  assert.ok(hillBlock !== null, 'bullet fired into a rising hillside must impact the terrain');
+  assert.equal(hillBlock.material, 'dirt');
+  assert.ok(hillBlock.hx >= 4.8 && hillBlock.hx <= 5.5);
+
+  // Upward shot inside a rocky cave hits the cave rock ceiling
+  const caveCeilingY = () => 3.5;
+  const ceilHit = traceSegmentWorldHit(
+    5.0,
+    5.0,
+    2.5,
+    5.0,
+    5.0,
+    4.2,
+    true,
+    getCell,
+    [],
+    [],
+    [],
+    null,
+    () => 0.5,
+    caveCeilingY
+  );
+  assert.ok(ceilHit !== null, 'upward shot inside cave must hit cave ceiling');
+  assert.equal(ceilHit.material, 'stone');
+  assert.equal(ceilHit.nz, -1);
+});
+

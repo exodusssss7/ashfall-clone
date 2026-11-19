@@ -2,6 +2,7 @@ import { CHUNK_SIZE, MAP_SIZE, angleDiff, clamp, dist, readCellFromSource } from
 import type { CellSource } from './isometric';
 import { STRUCTURES } from './recipes';
 import type { WeaponSpec } from './recipes';
+import { applyConsumableWarmth, NORMAL_BODY_TEMP_C } from './weatherSystem';
 import {
   applyBuildingToSetter,
   applyDoorCellState,
@@ -88,6 +89,11 @@ export function createInitialPlayer(spawnX = 28.5, spawnY = 28.5): PlayerState {
     scaleX: 1,
     scaleY: 1,
     buildMode: null,
+    wetness: 0,
+    bodyTemp: NORMAL_BODY_TEMP_C,
+    warmBuffTimer: 0,
+    sheltered: false,
+    elevation: 0,
   };
 }
 
@@ -849,34 +855,64 @@ export function useConsumableItem(
   }
 
   if (item === 'cooked_fish') {
-    if (nextPlayer.hunger >= 99 && nextPlayer.hp >= nextPlayer.maxHp) {
-      return { player, inventory, used: false, message: 'Already full' };
+    const needsWarmth = nextPlayer.bodyTemp < 36.4 || nextPlayer.warmBuffTimer < 5;
+    if (nextPlayer.hunger >= 99 && nextPlayer.hp >= nextPlayer.maxHp && !needsWarmth) {
+      return { player, inventory, used: false, message: 'Already full & warm' };
     }
     nextInv.cooked_fish -= 1;
     nextPlayer.hunger = clamp(nextPlayer.hunger + 42, 0, 100);
     nextPlayer.hp = clamp(nextPlayer.hp + 14, 0, nextPlayer.maxHp);
-    return { player: nextPlayer, inventory: nextInv, used: true, message: 'Ate Grilled Fish (+42 Food, +14 HP)' };
+    const warm = applyConsumableWarmth('cooked_fish', nextPlayer.bodyTemp, nextPlayer.warmBuffTimer, nextPlayer.wetness);
+    nextPlayer.bodyTemp = warm.bodyTemp;
+    nextPlayer.warmBuffTimer = warm.warmBuffTimer;
+    nextPlayer.wetness = warm.wetness;
+    return {
+      player: nextPlayer,
+      inventory: nextInv,
+      used: true,
+      message: 'Ate Grilled Fish (+42 Food, +14 HP, +1.2°C Warmth)',
+    };
   }
 
   if (item === 'fish_stew') {
-    if (nextPlayer.hunger >= 99 && nextPlayer.thirst >= 99 && nextPlayer.hp >= nextPlayer.maxHp) {
-      return { player, inventory, used: false, message: 'Already restored' };
+    const needsWarmth = nextPlayer.bodyTemp < 36.6 || nextPlayer.warmBuffTimer < 10;
+    if (nextPlayer.hunger >= 99 && nextPlayer.thirst >= 99 && nextPlayer.hp >= nextPlayer.maxHp && !needsWarmth) {
+      return { player, inventory, used: false, message: 'Already restored & warm' };
     }
     nextInv.fish_stew -= 1;
     nextPlayer.hunger = clamp(nextPlayer.hunger + 58, 0, 100);
     nextPlayer.thirst = clamp(nextPlayer.thirst + 40, 0, 100);
     nextPlayer.hp = clamp(nextPlayer.hp + 24, 0, nextPlayer.maxHp);
-    return { player: nextPlayer, inventory: nextInv, used: true, message: 'Ate Fish Stew (+58 Food, +40 H2O, +24 HP)' };
+    const warm = applyConsumableWarmth('fish_stew', nextPlayer.bodyTemp, nextPlayer.warmBuffTimer, nextPlayer.wetness);
+    nextPlayer.bodyTemp = warm.bodyTemp;
+    nextPlayer.warmBuffTimer = warm.warmBuffTimer;
+    nextPlayer.wetness = warm.wetness;
+    return {
+      player: nextPlayer,
+      inventory: nextInv,
+      used: true,
+      message: 'Ate Fish Stew (+58 Food, +40 H2O, +24 HP, +2.2°C Warmth)',
+    };
   }
 
   if (item === 'hot_rations') {
-    if (nextPlayer.hunger >= 99 && nextPlayer.hp >= nextPlayer.maxHp) {
-      return { player, inventory, used: false, message: 'Already full' };
+    const needsWarmth = nextPlayer.bodyTemp < 36.6 || nextPlayer.warmBuffTimer < 10;
+    if (nextPlayer.hunger >= 99 && nextPlayer.hp >= nextPlayer.maxHp && !needsWarmth) {
+      return { player, inventory, used: false, message: 'Already full & warm' };
     }
     nextInv.hot_rations -= 1;
     nextPlayer.hunger = clamp(nextPlayer.hunger + 48, 0, 100);
     nextPlayer.hp = clamp(nextPlayer.hp + 12, 0, nextPlayer.maxHp);
-    return { player: nextPlayer, inventory: nextInv, used: true, message: 'Ate Hot Rations (+48 Food, +12 HP)' };
+    const warm = applyConsumableWarmth('hot_rations', nextPlayer.bodyTemp, nextPlayer.warmBuffTimer, nextPlayer.wetness);
+    nextPlayer.bodyTemp = warm.bodyTemp;
+    nextPlayer.warmBuffTimer = warm.warmBuffTimer;
+    nextPlayer.wetness = warm.wetness;
+    return {
+      player: nextPlayer,
+      inventory: nextInv,
+      used: true,
+      message: 'Ate Hot Rations (+48 Food, +12 HP, +1.8°C Warmth)',
+    };
   }
 
   if (item === 'raw_fish') {
@@ -998,7 +1034,7 @@ export function canPlaceStructureAt(
 ): boolean {
   const cell = readCellFromSource(source, gx, gy);
   if (!cell) return false;
-  if (cell.solid || cell.tile === 'water' || cell.prop === 'door') return false;
+  if (cell.solid || cell.tile === 'water' || cell.tile === 'cliff_stone' || cell.prop === 'door') return false;
   if (structures.some((s) => s.gx === gx && s.gy === gy)) return false;
   if (dist(gx + 0.5, gy + 0.5, playerX, playerY) < 0.75) return false;
   if (dist(gx + 0.5, gy + 0.5, playerX, playerY) > 4.2) return false;
@@ -1045,17 +1081,20 @@ const PROP_HALF_EXTENTS: Record<PropKind, { hx: number; hy: number }> = {
   road_sign: { hx: 0.14, hy: 0.14 },
   wrecked_car: { hx: 0.46, hy: 0.38 },
   sandbag_wall: { hx: 0.46, hy: 0.26 },
+  cliff_rock: { hx: 0.48, hy: 0.48 },
+  cave_stalagmite: { hx: 0.28, hy: 0.28 },
 };
 
 export function getTileColliderHalfExtents(cell: TileCell): { hx: number; hy: number } {
-  if (cell.tile === 'water' && cell.prop === 'none') {
+  if ((cell.tile === 'water' || cell.tile === 'cliff_stone') && cell.prop === 'none') {
     return { hx: 0.48, hy: 0.48 };
   }
   return PROP_HALF_EXTENTS[cell.prop] ?? PROP_HALF_EXTENTS.none;
 }
 
 /**
- * Checks exact circle collision against tight per-prop world bounds and optional rotated vehicle hulls.
+ * Checks exact circle collision against tight per-prop world bounds, elevated bridge guardrails,
+ * and optional rotated vehicle hulls.
  */
 export function isCircleBlocked(
   source: CellSource,
@@ -1075,14 +1114,55 @@ export function isCircleBlocked(
     for (let gx = minGX; gx <= maxGX; gx++) {
       const cell = readCellFromSource(source, gx, gy);
       if (!cell) return true;
-      if (!cell.solid) continue;
-      const { hx, hy } = getTileColliderHalfExtents(cell);
-      const cx = clamp(wx, gx + 0.5 - hx, gx + 0.5 + hx);
-      const cy = clamp(wy, gy + 0.5 - hy, gy + 0.5 + hy);
-      const dx = wx - cx;
-      const dy = wy - cy;
-      if (dx * dx + dy * dy < rSq) {
-        return true;
+      if (cell.solid) {
+        const { hx, hy } = getTileColliderHalfExtents(cell);
+        const cx = clamp(wx, gx + 0.5 - hx, gx + 0.5 + hx);
+        const cy = clamp(wy, gy + 0.5 - hy, gy + 0.5 + hy);
+        const dx = wx - cx;
+        const dy = wy - cy;
+        if (dx * dx + dy * dy < rSq) {
+          return true;
+        }
+      }
+
+      // Elevated river bridge side guardrails: block walking/driving sideways off bridge edges into water/banks
+      if (cell.tile === 'bridge_deck') {
+        const isNs = cell.variant >= 2;
+        const isRailDrop = (nx: number, ny: number) => {
+          const nc = readCellFromSource(source, nx, ny);
+          if (!nc) return false;
+          return (
+            nc.tile !== 'bridge_deck' &&
+            nc.tile !== 'road' &&
+            nc.tile !== 'asphalt_cracked' &&
+            nc.tile !== 'gravel' &&
+            nc.tile !== 'dirt'
+          );
+        };
+        const railHalf = 0.08;
+        if (isNs) {
+          if (isRailDrop(gx - 1, gy)) {
+            const cx = clamp(wx, gx, gx + railHalf * 2);
+            const cy = clamp(wy, gy, gy + 1);
+            if ((wx - cx) * (wx - cx) + (wy - cy) * (wy - cy) < rSq) return true;
+          }
+          if (isRailDrop(gx + 1, gy)) {
+            const cx = clamp(wx, gx + 1 - railHalf * 2, gx + 1);
+            const cy = clamp(wy, gy, gy + 1);
+            if ((wx - cx) * (wx - cx) + (wy - cy) * (wy - cy) < rSq) return true;
+          }
+        } else {
+          if (isRailDrop(gx, gy - 1)) {
+            const cx = clamp(wx, gx, gx + 1);
+            const cy = clamp(wy, gy, gy + railHalf * 2);
+            if ((wx - cx) * (wx - cx) + (wy - cy) * (wy - cy) < rSq) return true;
+          }
+          if (isRailDrop(gx, gy + 1)) {
+            const cx = clamp(wx, gx, gx + 1);
+            const cy = clamp(wy, gy + 1 - railHalf * 2, gy + 1);
+            if ((wx - cx) * (wx - cx) + (wy - cy) * (wy - cy) < rSq) return true;
+          }
+        }
       }
     }
   }

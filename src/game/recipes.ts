@@ -267,7 +267,7 @@ export const STRUCTURES: Record<StructureKind, StructureSpec> = {
   campfire: {
     kind: 'campfire',
     name: 'Campfire',
-    role: 'Safe Light & Night Warmth',
+    role: 'Light, Drying & Storm Warmth',
     maxHp: 120,
     cost: { wood: 3, cloth: 1 },
   },
@@ -329,7 +329,7 @@ export const CRAFT_RECIPES: CraftRecipe[] = [
   {
     id: 'craft_campfire',
     name: 'Campfire',
-    description: 'Illuminates darkness, warms the survivor, and cooks food.',
+    description: 'Illuminates caves & night, dries wet clothes rapidly, restores body warmth, and cooks food.',
     category: 'structure',
     cost: { wood: 3, cloth: 1 },
     outputStructure: 'campfire',
@@ -340,7 +340,7 @@ export const COOK_RECIPES: CraftRecipe[] = [
   {
     id: 'cook_grilled_fish',
     name: 'Grilled Fish',
-    description: 'Seared lake catch (+42 Food · +14 HP).',
+    description: 'Seared lake catch (+42 Food · +14 HP · +1.2°C Warmth).',
     category: 'cooking',
     cost: { raw_fish: 1 },
     outputItem: 'cooked_fish',
@@ -350,7 +350,7 @@ export const COOK_RECIPES: CraftRecipe[] = [
   {
     id: 'cook_fish_stew',
     name: 'Hearty Fish Stew',
-    description: 'Restorative hot pot (+58 Food · +40 H2O · +24 HP).',
+    description: 'Restorative hot pot (+58 Food · +40 H2O · +24 HP · +2.2°C Warmth).',
     category: 'cooking',
     cost: { raw_fish: 1, water: 1 },
     outputItem: 'fish_stew',
@@ -360,7 +360,7 @@ export const COOK_RECIPES: CraftRecipe[] = [
   {
     id: 'cook_hot_rations',
     name: 'Hot Rations',
-    description: 'Warmed canned meal (+48 Food · +12 HP).',
+    description: 'Steaming canned meal (+48 Food · +12 HP · +1.8°C Warmth & 60s Insulation).',
     category: 'cooking',
     cost: { food: 1 },
     outputItem: 'hot_rations',

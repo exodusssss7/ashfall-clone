@@ -66,6 +66,23 @@ const INITIAL_HUD: HudSnapshot = {
   activeLootContainer: null,
   pickupNotifications: [],
   hotbar: createDefaultHotbarState(),
+  wetness: 0,
+  bodyTemp: 37.0,
+  thermalStatus: 'normal',
+  warmBuffSeconds: 0,
+  sheltered: false,
+  shelterLabel: null,
+  elevation: 0,
+  highGroundActive: false,
+  weather: {
+    kind: 'clear',
+    label: 'CLEAR',
+    rainIntensity: 0,
+    fogIntensity: 0,
+    windStrength: 0.15,
+    ambientTempC: 17.5,
+    lightningFlash: 0,
+  },
 };
 
 function detectTouchCapability(): boolean {

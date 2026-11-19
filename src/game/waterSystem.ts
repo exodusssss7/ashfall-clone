@@ -16,7 +16,7 @@ export interface WaterRippleEntry {
 }
 
 function isDryLandTile(tile: TileKind): boolean {
-  return tile !== 'water' && tile !== 'pier';
+  return tile !== 'water' && tile !== 'pier' && tile !== 'bridge_deck';
 }
 
 /**
@@ -27,9 +27,11 @@ function isDryLandTile(tile: TileKind): boolean {
 export function computeWaterShoreDepth(
   gx: number,
   gy: number,
-  getCell: (x: number, y: number) => { tile: TileKind }
+  getCell: (x: number, y: number) => { tile: TileKind },
+  isWaterAt?: (x: number, y: number) => boolean
 ): number {
-  if (getCell(gx, gy).tile !== 'water') return 0;
+  const waterHere = isWaterAt ? isWaterAt(gx, gy) : getCell(gx, gy).tile === 'water';
+  if (!waterHere) return 0;
 
   let minLandDist = 3.2;
   for (let dy = -2; dy <= 2; dy++) {
@@ -51,7 +53,8 @@ export function computeWaterShoreDepth(
 function sampleCornerWaterAttributes(
   vx: number,
   vy: number,
-  getCell: (x: number, y: number) => { tile: TileKind }
+  getCell: (x: number, y: number) => { tile: TileKind },
+  isWaterAt?: (x: number, y: number) => boolean
 ): { depth: number; shore: number } {
   let dryNeighbors = 0;
   let waterSum = 0;
@@ -59,11 +62,13 @@ function sampleCornerWaterAttributes(
 
   for (let oy = -1; oy <= 0; oy++) {
     for (let ox = -1; ox <= 0; ox++) {
-      const tile = getCell(vx + ox, vy + oy).tile;
+      const tx = vx + ox;
+      const ty = vy + oy;
+      const tile = getCell(tx, ty).tile;
       if (isDryLandTile(tile)) {
         dryNeighbors++;
-      } else if (tile === 'water') {
-        waterSum += computeWaterShoreDepth(vx + ox, vy + oy, getCell);
+      } else if (isWaterAt ? isWaterAt(tx, ty) : tile === 'water') {
+        waterSum += computeWaterShoreDepth(tx, ty, getCell, isWaterAt);
         waterCount++;
       }
     }
@@ -77,15 +82,17 @@ function sampleCornerWaterAttributes(
 }
 
 /**
- * Builds a subdivided 2x2-per-tile water surface geometry covering only `tile === 'water'`
- * cells within chunk (cx, cy), carrying `aDepth` and `aShore` vertex attributes.
+ * Builds a subdivided 2x2-per-tile water surface geometry covering water tiles
+ * (including river water flowing underneath elevated bridges via optional isWaterAt)
+ * within chunk (cx, cy), carrying `aDepth` and `aShore` vertex attributes.
  * Returns null if the chunk contains no water tiles.
  */
 export function buildChunkWaterGeometry(
   cx: number,
   cy: number,
   chunkSize: number,
-  getCell: (x: number, y: number) => { tile: TileKind }
+  getCell: (x: number, y: number) => { tile: TileKind },
+  isWaterAt?: (x: number, y: number) => boolean
 ): THREE.BufferGeometry | null {
   const startX = cx * chunkSize;
   const startY = cy * chunkSize;
@@ -95,7 +102,7 @@ export function buildChunkWaterGeometry(
     for (let lx = 0; lx < chunkSize; lx++) {
       const gx = startX + lx;
       const gy = startY + ly;
-      if (getCell(gx, gy).tile === 'water') {
+      if (isWaterAt ? isWaterAt(gx, gy) : getCell(gx, gy).tile === 'water') {
         waterTiles.push({ gx, gy });
       }
     }
@@ -125,10 +132,10 @@ export function buildChunkWaterGeometry(
 
   for (let i = 0; i < waterTiles.length; i++) {
     const { gx, gy } = waterTiles[i];
-    const c00 = sampleCornerWaterAttributes(gx, gy, getCell);
-    const c10 = sampleCornerWaterAttributes(gx + 1, gy, getCell);
-    const c01 = sampleCornerWaterAttributes(gx, gy + 1, getCell);
-    const c11 = sampleCornerWaterAttributes(gx + 1, gy + 1, getCell);
+    const c00 = sampleCornerWaterAttributes(gx, gy, getCell, isWaterAt);
+    const c10 = sampleCornerWaterAttributes(gx + 1, gy, getCell, isWaterAt);
+    const c01 = sampleCornerWaterAttributes(gx, gy + 1, getCell, isWaterAt);
+    const c11 = sampleCornerWaterAttributes(gx + 1, gy + 1, getCell, isWaterAt);
 
     const gridD = [
       [c00.depth, (c00.depth + c10.depth) * 0.5, c10.depth],

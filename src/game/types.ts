@@ -18,7 +18,10 @@ export type TileKind =
   | 'gravel'
   | 'mud'
   | 'sand'
-  | 'asphalt_cracked';
+  | 'asphalt_cracked'
+  | 'bridge_deck'
+  | 'cave_floor'
+  | 'cliff_stone';
 
 export type PropKind =
   | 'none'
@@ -55,7 +58,9 @@ export type PropKind =
   | 'fallen_log'
   | 'road_sign'
   | 'wrecked_car'
-  | 'sandbag_wall';
+  | 'sandbag_wall'
+  | 'cliff_rock'
+  | 'cave_stalagmite';
 
 export type BiomeKind =
   | 'town_edge'
@@ -71,7 +76,9 @@ export type LandmarkKind =
   | 'clinic'
   | 'diner'
   | 'outpost'
-  | 'cabin';
+  | 'cabin'
+  | 'cave'
+  | 'tunnel';
 
 export type StructureKind = 'barricade' | 'spike_trap' | 'campfire';
 
@@ -144,6 +151,20 @@ export interface WorldLandmark {
   hotspotSpawned: boolean;
   hotspotCleared: boolean;
   hotspotPacks: ZombieArchetype[];
+  shelterBounds?: { minX: number; maxX: number; minY: number; maxY: number };
+}
+
+export type WeatherKind = 'clear' | 'fog' | 'rain' | 'storm';
+export type ThermalStatus = 'warmed' | 'normal' | 'chilled' | 'freezing';
+
+export interface WeatherSnapshot {
+  kind: WeatherKind;
+  label: string;
+  rainIntensity: number; // 0..1
+  fogIntensity: number; // 0..1
+  windStrength: number; // 0..1
+  ambientTempC: number;
+  lightningFlash: number; // 0..1
 }
 
 export interface WorldStore {
@@ -290,6 +311,7 @@ export interface Projectile {
   targetX?: number;
   targetY?: number;
   canHeadshot?: boolean;
+  originElevation?: number;
 }
 
 export type ImpactMaterial = 'stone' | 'wood' | 'metal' | 'dirt' | 'water';
@@ -394,6 +416,11 @@ export interface PlayerState {
   scaleX: number;
   scaleY: number;
   buildMode: StructureKind | null;
+  wetness: number; // 0..100
+  bodyTemp: number; // 32.0..37.8 Celsius
+  warmBuffTimer: number; // seconds of cold resistance from hot meals
+  sheltered: boolean;
+  elevation: number;
 }
 
 export interface CraftRecipe {
@@ -512,6 +539,15 @@ export interface HudSnapshot {
   activeLootContainer: ActiveLootContainer | null;
   pickupNotifications: PickupNotification[];
   currentBiomeLabel: string;
+  wetness: number; // 0..100
+  bodyTemp: number; // Celsius
+  thermalStatus: ThermalStatus;
+  warmBuffSeconds: number;
+  sheltered: boolean;
+  shelterLabel: string | null;
+  elevation: number;
+  highGroundActive: boolean;
+  weather: WeatherSnapshot;
   discoveredLandmarks: Array<{
     id: string;
     name: string;

@@ -98,6 +98,8 @@ export function classifySurfaceMaterial(
     case 'fallen_log':
       return 'wood';
     case 'rock_boulder':
+    case 'cliff_rock':
+    case 'cave_stalagmite':
       return 'stone';
     case 'sandbag_wall':
       return 'dirt';
@@ -123,6 +125,7 @@ export function classifySurfaceMaterial(
     case 'water':
       return 'water';
     case 'pier':
+    case 'bridge_deck':
     case 'floor':
     case 'floor_rug':
     case 'floor_porch':
@@ -141,6 +144,8 @@ export function classifySurfaceMaterial(
     case 'floor_bath':
     case 'tile_clinic':
     case 'tile_diner':
+    case 'cave_floor':
+    case 'cliff_stone':
     default:
       return 'stone';
   }
@@ -280,6 +285,10 @@ function getPropBounds(
       return { minX: gx + 0.04, maxX: gx + 0.96, minY: gy + 0.10, maxY: gy + 0.90, minZ: 0, maxZ: 0.82 };
     case 'sandbag_wall':
       return { minX: gx + 0.04, maxX: gx + 0.96, minY: gy + 0.22, maxY: gy + 0.78, minZ: 0, maxZ: 0.56 };
+    case 'cliff_rock':
+      return { minX: gx, maxX: gx + 1, minY: gy, maxY: gy + 1, minZ: 0, maxZ: 2.2 };
+    case 'cave_stalagmite':
+      return { minX: gx + 0.22, maxX: gx + 0.78, minY: gy + 0.22, maxY: gy + 0.78, minZ: 0, maxZ: 1.35 };
     default:
       return null;
   }
@@ -297,11 +306,14 @@ export function traceSegmentWorldHit(
   doors: readonly DoorEntity[],
   structures: readonly WorldStructure[],
   vehicles: readonly Vehicle[],
-  ignoreVehicleId: number | null = null
+  ignoreVehicleId: number | null = null,
+  getGroundY?: (wx: number, wy: number) => number,
+  getCeilingY?: (wx: number, wy: number) => number | null
 ): WorldHitResult | null {
   const dx = x1 - x0;
   const dy = y1 - y0;
   const dz = z1 - z0;
+  const groundAt = getGroundY ?? (() => 0);
 
   let best: WorldHitResult | null = null;
   const consider = (
@@ -328,27 +340,91 @@ export function traceSegmentWorldHit(
     };
   };
 
-  // 1. Ground plane (z = 0.02)
-  if (z0 > 0.02 && z1 <= 0.02 && dz < -1e-7) {
-    const t = (0.02 - z0) / dz;
-    if (t >= 0 && t <= 1) {
-      const hx = x0 + dx * t;
-      const hy = y0 + dy * t;
-      const cell = getCell(Math.floor(hx), Math.floor(hy));
-      const mat = classifySurfaceMaterial(cell.tile, 'none');
-      consider(t, 0, 0, 1, mat, mat !== 'water');
+  // 1. Contoured terrain heightfield intersection (or exact flat ground plane when getGroundY omitted)
+  if (!getGroundY) {
+    if (z0 > 0.02 && z1 <= 0.02 && dz < -1e-7) {
+      const t = (0.02 - z0) / dz;
+      if (t >= 0 && t <= 1) {
+        const hx = x0 + dx * t;
+        const hy = y0 + dy * t;
+        const cell = getCell(Math.floor(hx), Math.floor(hy));
+        const mat = classifySurfaceMaterial(cell.tile, 'none');
+        consider(t, 0, 0, 1, mat, mat !== 'water');
+      }
+    }
+  } else {
+    const segLen2D = Math.hypot(dx, dy);
+    const steps = Math.max(1, Math.min(20, Math.ceil(segLen2D / 0.35)));
+    let prevT = 0;
+    let prevClearance = z0 - (groundAt(x0, y0) + 0.02);
+    for (let s = 1; s <= steps; s++) {
+      const curT = s / steps;
+      const sx = x0 + dx * curT;
+      const sy = y0 + dy * curT;
+      const sz = z0 + dz * curT;
+      const curClearance = sz - (groundAt(sx, sy) + 0.02);
+      if (prevClearance > 0 && curClearance <= 0) {
+        let lo = prevT;
+        let hi = curT;
+        for (let b = 0; b < 5; b++) {
+          const mid = (lo + hi) * 0.5;
+          const mx = x0 + dx * mid;
+          const my = y0 + dy * mid;
+          const mz = z0 + dz * mid;
+          if (mz - (groundAt(mx, my) + 0.02) > 0) lo = mid;
+          else hi = mid;
+        }
+        const hitT = (lo + hi) * 0.5;
+        const hx = x0 + dx * hitT;
+        const hy = y0 + dy * hitT;
+        const cell = getCell(Math.floor(hx), Math.floor(hy));
+        const mat = classifySurfaceMaterial(cell.tile, 'none');
+        consider(hitT, 0, 0, 1, mat, mat !== 'water');
+        break;
+      }
+      prevT = curT;
+      prevClearance = curClearance;
     }
   }
 
-  // 2. FPS interior ceiling plane (z = FPS_CEILING_HEIGHT = 1.68)
-  if (isFps && z0 < FPS_CEILING_HEIGHT && z1 >= FPS_CEILING_HEIGHT && dz > 1e-7) {
-    const t = (FPS_CEILING_HEIGHT - z0) / dz;
-    if (t >= 0 && t <= 1) {
-      const hx = x0 + dx * t;
-      const hy = y0 + dy * t;
-      const cell = getCell(Math.floor(hx), Math.floor(hy));
-      if (isIndoorCeilingTile(cell.tile)) {
-        consider(t, 0, 0, -1, 'stone', true);
+  // 2. FPS interior building / cave / tunnel ceiling plane
+  if (isFps && dz > 1e-7) {
+    if (!getGroundY && !getCeilingY) {
+      if (z0 < FPS_CEILING_HEIGHT && z1 >= FPS_CEILING_HEIGHT) {
+        const t = (FPS_CEILING_HEIGHT - z0) / dz;
+        if (t >= 0 && t <= 1) {
+          const hx = x0 + dx * t;
+          const hy = y0 + dy * t;
+          const cell = getCell(Math.floor(hx), Math.floor(hy));
+          if (isIndoorCeilingTile(cell.tile)) {
+            consider(t, 0, 0, -1, 'stone', true);
+          }
+        }
+      }
+    } else {
+      const segLen2D = Math.hypot(dx, dy);
+      const steps = Math.max(1, Math.min(16, Math.ceil(segLen2D / 0.5)));
+      for (let s = 1; s <= steps; s++) {
+        const tA = (s - 1) / steps;
+        const tB = s / steps;
+        const midX = x0 + dx * ((tA + tB) * 0.5);
+        const midY = y0 + dy * ((tA + tB) * 0.5);
+        const cell = getCell(Math.floor(midX), Math.floor(midY));
+        let ceilZ: number | null = getCeilingY ? getCeilingY(midX, midY) : null;
+        if (ceilZ === null && isIndoorCeilingTile(cell.tile)) {
+          ceilZ = groundAt(midX, midY) + FPS_CEILING_HEIGHT;
+        }
+        if (ceilZ !== null) {
+          const zA = z0 + dz * tA;
+          const zB = z0 + dz * tB;
+          if (zA < ceilZ && zB >= ceilZ) {
+            const t = (ceilZ - z0) / dz;
+            if (t >= 0 && t <= 1) {
+              consider(t, 0, 0, -1, 'stone', true);
+              break;
+            }
+          }
+        }
       }
     }
   }
@@ -364,9 +440,10 @@ export function traceSegmentWorldHit(
       const cell = getCell(gx, gy);
       if (cell.prop === 'door') {
         if (isFps) {
+          const gY = groundAt(gx + 0.5, gy + 0.5);
           const lintelHit = intersectSegmentAABB(
             x0, y0, z0, dx, dy, dz,
-            gx, gx + 1, gy, gy + 1, 1.02, 1.94
+            gx, gx + 1, gy, gy + 1, gY + 1.02, gY + 1.94
           );
           if (lintelHit) {
             consider(lintelHit.t, lintelHit.nx, lintelHit.ny, lintelHit.nz, 'stone', true);
@@ -377,9 +454,10 @@ export function traceSegmentWorldHit(
       if (cell.prop === 'none' || cell.prop === 'car_sedan' || cell.prop === 'car_police') continue;
       const box = getPropBounds(cell.prop, gx, gy, isFps);
       if (!box) continue;
+      const gY = groundAt(gx + 0.5, gy + 0.5);
       const hit = intersectSegmentAABB(
         x0, y0, z0, dx, dy, dz,
-        box.minX, box.maxX, box.minY, box.maxY, box.minZ, box.maxZ
+        box.minX, box.maxX, box.minY, box.maxY, gY + box.minZ, gY + box.maxZ
       );
       if (hit) {
         const mat = classifySurfaceMaterial(cell.tile, cell.prop);
@@ -393,11 +471,12 @@ export function traceSegmentWorldHit(
   for (const d of doors) {
     if (d.status === 'open') continue;
     if (d.gx < minGX || d.gx > maxGX || d.gy < minGY || d.gy > maxGY) continue;
+    const gY = groundAt(d.gx + 0.5, d.gy + 0.5);
     const minX = d.orientation === 'ns' ? d.gx + 0.42 : d.gx;
     const maxX = d.orientation === 'ns' ? d.gx + 0.58 : d.gx + 1;
     const minY = d.orientation === 'ns' ? d.gy : d.gy + 0.42;
     const maxY = d.orientation === 'ns' ? d.gy + 1 : d.gy + 0.58;
-    const hit = intersectSegmentAABB(x0, y0, z0, dx, dy, dz, minX, maxX, minY, maxY, 0, 1.0);
+    const hit = intersectSegmentAABB(x0, y0, z0, dx, dy, dz, minX, maxX, minY, maxY, gY, gY + 1.0);
     if (hit) {
       consider(hit.t, hit.nx, hit.ny, hit.nz, 'wood', true);
     }
@@ -407,9 +486,10 @@ export function traceSegmentWorldHit(
   for (const s of structures) {
     if (s.kind !== 'barricade') continue;
     if (s.gx < minGX || s.gx > maxGX || s.gy < minGY || s.gy > maxGY) continue;
+    const gY = groundAt(s.gx + 0.5, s.gy + 0.5);
     const hit = intersectSegmentAABB(
       x0, y0, z0, dx, dy, dz,
-      s.gx + 0.08, s.gx + 0.92, s.gy + 0.25, s.gy + 0.75, 0, 0.92
+      s.gx + 0.08, s.gx + 0.92, s.gy + 0.25, s.gy + 0.75, gY, gY + 0.92
     );
     if (hit) {
       consider(hit.t, hit.nx, hit.ny, hit.nz, 'wood', true);
@@ -421,6 +501,7 @@ export function traceSegmentWorldHit(
     if (v.id === ignoreVehicleId) continue;
     const approxDist = Math.hypot(v.x - x0, v.y - y0);
     if (approxDist > Math.hypot(dx, dy) + 1.8) continue;
+    const gY = groundAt(v.x, v.y);
     const cos = Math.cos(-v.angle);
     const sin = Math.sin(-v.angle);
     const rx0 = x0 - v.x;
@@ -432,7 +513,7 @@ export function traceSegmentWorldHit(
 
     const hit = intersectSegmentAABB(
       lx0, ly0, z0, ldx, ldy, dz,
-      -0.96, 0.96, -0.52, 0.52, 0.05, 0.88
+      -0.96, 0.96, -0.52, 0.52, gY + 0.05, gY + 0.88
     );
     if (hit) {
       const wCos = Math.cos(v.angle);
@@ -515,11 +596,13 @@ export function traceSegmentZombieHit(
   z1: number,
   zombies: readonly Zombie[],
   canHeadshot: boolean,
-  maxT = 1
+  maxT = 1,
+  getGroundY?: (wx: number, wy: number) => number
 ): ZombieHitResult | null {
   const dx = x1 - x0;
   const dy = y1 - y0;
   const dz = z1 - z0;
+  const groundAt = getGroundY ?? (() => 0);
 
   let best: ZombieHitResult | null = null;
   let bestT = maxT;
@@ -527,11 +610,12 @@ export function traceSegmentZombieHit(
   for (const z of zombies) {
     if (z.state === 'dying') continue;
     const isBloater = z.archetype === 'bloater';
+    const zGround = groundAt(z.x, z.y);
 
     if (canHeadshot) {
-      // Exact 3D model proportions matching threeModels.ts actor rig
-      const headBottom = isBloater ? 0.76 : 0.70;
-      const headTop = isBloater ? 1.18 : 1.08;
+      // Exact 3D model proportions matching threeModels.ts actor rig, anchored to zombie's terrain elevation
+      const headBottom = zGround + (isBloater ? 0.76 : 0.70);
+      const headTop = zGround + (isBloater ? 1.18 : 1.08);
       const headRadius = isBloater ? 0.29 : 0.25;
       const bodyRadius = isBloater ? 0.52 : 0.39;
 
@@ -541,7 +625,7 @@ export function traceSegmentZombieHit(
       );
       const tBody = intersectSegmentCylinder(
         x0, y0, z0, dx, dy, dz,
-        z.x, z.y, bodyRadius, 0, headBottom, bestT
+        z.x, z.y, bodyRadius, zGround, headBottom, bestT
       );
 
       if (tHead !== null && (tBody === null || tHead <= tBody)) {
@@ -567,9 +651,10 @@ export function traceSegmentZombieHit(
       }
     } else {
       const hitRadius = isBloater ? 0.55 : 0.42;
+      // Generous vertical envelope in top-down ISO mode so shooting down/up hillsides always connects cleanly
       const tBody = intersectSegmentCylinder(
         x0, y0, z0, dx, dy, dz,
-        z.x, z.y, hitRadius, 0, 1.38, bestT
+        z.x, z.y, hitRadius, zGround - 0.35, zGround + 1.55, bestT
       );
       if (tBody !== null) {
         bestT = tBody;

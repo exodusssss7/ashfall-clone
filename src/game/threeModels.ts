@@ -1180,7 +1180,9 @@ export class ThreeModelFactory {
       scree.rotation.y = 0.9;
       scree.castShadow = true;
       scree.receiveShadow = true;
-      g.add(main, side, top, scree);
+      const anchor = this.box(0.84, 0.42, 0.84, darkRock, 0, -0.18, 0, false, true);
+      anchor.rotation.y = 0.25;
+      g.add(anchor, main, side, top, scree);
       return g;
     }
 
@@ -1324,6 +1326,47 @@ export class ThreeModelFactory {
       g.add(this.box(0.84, 0.24, 0.36, bagMat, 0, 0.38, 0));
       g.add(this.box(0.08, 0.58, 0.08, stake, -0.38, 0.29, 0.14));
       g.add(this.box(0.08, 0.58, 0.08, stake, 0.38, 0.29, 0.14));
+      return g;
+    }
+
+    if (kind === 'cliff_rock') {
+      const rockMat = this.getMat(0xffffff, { map: this.atlas.rockTex, roughness: 0.96 });
+      const darkGranite = this.getMat('#353b43', { roughness: 0.98 });
+      const mossCap = this.getMat('#455939', { roughness: 0.94 });
+      // Deep buried granite skirt so steep cliff faces (slope > 1.2) NEVER expose floating corners
+      const skirt = this.box(1.12, 0.96, 1.12, darkGranite, 0, -0.44, 0, false, true);
+      skirt.rotation.y = 0.04;
+      // Broad craggy rock base + tiered jagged escarpment shoulders
+      const base = this.box(1.06, 1.18, 1.06, darkGranite, 0, 0.50, 0);
+      base.rotation.y = 0.08;
+      const mid = this.box(0.86, 1.02, 0.88, rockMat, -0.05, 1.18, 0.04);
+      mid.rotation.y = -0.22;
+      const shoulder = this.box(0.62, 0.84, 0.68, rockMat, 0.22, 0.88, -0.16);
+      shoulder.rotation.y = 0.38;
+      const crest = new THREE.Mesh(this.boulderTopGeo, rockMat);
+      crest.position.set(-0.04, 1.62, 0.02);
+      crest.scale.set(1.45, 1.15, 1.35);
+      crest.castShadow = true;
+      crest.receiveShadow = true;
+      const ledgeMoss = this.box(0.54, 0.09, 0.48, mossCap, -0.06, 1.72, 0.06, false, true);
+      g.add(skirt, base, mid, shoulder, crest, ledgeMoss);
+      return g;
+    }
+
+    if (kind === 'cave_stalagmite') {
+      this.addContactShadow(g, 0.66, 0.66);
+      const stoneMat = this.getMat(0xffffff, { map: this.atlas.rockTex, roughness: 0.95 });
+      const darkStone = this.getMat('#353a42', { roughness: 0.96 });
+      const baseSkirt = this.box(0.52, 0.26, 0.52, darkStone, 0, -0.08, 0, false, true);
+      const main = this.box(0.34, 0.96, 0.34, stoneMat, 0, 0.48, 0);
+      main.rotation.y = 0.45;
+      const tip = this.box(0.18, 0.46, 0.18, darkStone, 0.02, 1.12, -0.02);
+      tip.rotation.y = 0.9;
+      const side1 = this.box(0.24, 0.56, 0.24, darkStone, -0.18, 0.28, 0.12);
+      side1.rotation.y = -0.35;
+      const side2 = this.box(0.20, 0.44, 0.20, stoneMat, 0.18, 0.22, -0.14);
+      side2.rotation.y = 0.6;
+      g.add(baseSkirt, main, tip, side1, side2);
       return g;
     }
 

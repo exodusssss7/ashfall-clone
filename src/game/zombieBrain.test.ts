@@ -96,6 +96,11 @@ function makePlayer(overrides: Partial<PlayerState> = {}): PlayerState {
     scaleX: 1,
     scaleY: 1,
     buildMode: null,
+    wetness: 0,
+    bodyTemp: 37.0,
+    warmBuffTimer: 0,
+    sheltered: false,
+    elevation: 0,
     ...overrides,
   };
 }

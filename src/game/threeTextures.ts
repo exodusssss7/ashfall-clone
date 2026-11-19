@@ -284,6 +284,34 @@ export function buildSquareTileCanvas(kind: TileKind, variant: number): HTMLCanv
         else if (r < 0.14) col = '#2d333c';
         else if (r < 0.58) col = '#20252c';
         else col = '#181b21';
+      } else if (kind === 'bridge_deck') {
+        // Heavy bolted timber & weathered steel river bridge deck
+        const ns = variant >= 2;
+        const seam = ns ? y % 6 === 0 : x % 6 === 0;
+        const rail = ns ? x <= 2 || x >= size - 3 : y <= 2 || y >= size - 3;
+        const stripe = ns ? (x === 3 || x === size - 4) && y % 8 < 4 : (y === 3 || y === size - 4) && x % 8 < 4;
+        if (rail) col = r < 0.3 ? '#6d757d' : '#4a5259';
+        else if (stripe) col = '#c9a23a';
+        else if (seam) col = '#241910';
+        else if ((ns ? y % 6 === 1 : x % 6 === 1)) col = '#9c6e46';
+        else col = r < 0.28 ? '#875f3c' : r < 0.74 ? '#6e4c2e' : '#573b23';
+      } else if (kind === 'cave_floor') {
+        // Damp dark slate cavern floor with subtle granite speckles & pebbles
+        const slab = hash(Math.floor(x / 4), Math.floor(y / 4), 11);
+        const crevice = (x + y * 2 + variant * 5) % 19 === 0 && r < 0.4;
+        if (crevice) col = '#14171c';
+        else if (slab < 0.25) col = '#2d323b';
+        else if (slab < 0.65) col = '#232830';
+        else col = '#1c2026';
+        if (r > 0.93) col = '#4a525e';
+      } else if (kind === 'cliff_stone') {
+        // Stratified craggy dark granite cliff rock
+        const strata = Math.floor((y + Math.sin(x * 0.35 + variant) * 2.2) / 5);
+        const crack = (y + Math.round(Math.sin(x * 0.4) * 2)) % 5 === 0;
+        if (crack) col = '#1d2126';
+        else if ((strata + variant) % 3 === 0) col = r < 0.3 ? '#6b727a' : '#575d66';
+        else if ((strata + variant) % 3 === 1) col = r < 0.3 ? '#525861' : '#41474f';
+        else col = r < 0.25 ? '#485442' : '#353a42'; // subtle cliff moss
       }
 
       ctx.fillStyle = col;
@@ -2657,6 +2685,9 @@ export class ThreePixelAtlas {
       'mud',
       'sand',
       'asphalt_cracked',
+      'bridge_deck',
+      'cave_floor',
+      'cliff_stone',
     ];
     for (const kind of tileKinds) {
       for (let v = 0; v < 4; v++) {

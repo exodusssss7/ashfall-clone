@@ -82,6 +82,8 @@ export class ThreeGrassSystem {
   public readonly mat: THREE.MeshLambertMaterial;
   private windUniform = { value: 0 };
 
+  private windStrengthUniform = { value: 1.0 };
+
   private _pos = new THREE.Vector3();
   private _quat = new THREE.Quaternion();
   private _euler = new THREE.Euler();
@@ -97,11 +99,13 @@ export class ThreeGrassSystem {
     });
     this.mat.onBeforeCompile = (shader) => {
       shader.uniforms.uWindTime = this.windUniform;
+      shader.uniforms.uWindStrength = this.windStrengthUniform;
       shader.vertexShader = shader.vertexShader
         .replace(
           '#include <common>',
           `#include <common>
-           uniform float uWindTime;`
+           uniform float uWindTime;
+           uniform float uWindStrength;`
         )
         .replace(
           '#include <begin_vertex>',
@@ -113,15 +117,16 @@ export class ThreeGrassSystem {
            #endif
            float sway = sin(uWindTime * 2.2 + grassWorld.x * 0.85 + grassWorld.z * 0.65)
                       + 0.45 * cos(uWindTime * 3.6 + grassWorld.x * 1.35 - grassWorld.z * 1.05);
-           transformed.x += sway * 0.055 * bladeTip * bladeTip;
-           transformed.z += sway * 0.032 * bladeTip * bladeTip;`
+           transformed.x += sway * 0.055 * uWindStrength * bladeTip * bladeTip;
+           transformed.z += sway * 0.032 * uWindStrength * bladeTip * bladeTip;`
         );
     };
-    this.mat.customProgramCacheKey = () => 'ashfall_wind_grass_v1';
+    this.mat.customProgramCacheKey = () => 'ashfall_wind_grass_v2';
   }
 
-  public updateWind(elapsedClock: number): void {
+  public updateWind(elapsedClock: number, windStrength = 0.2): void {
     this.windUniform.value = elapsedClock;
+    this.windStrengthUniform.value = 0.85 + windStrength * 1.35;
   }
 
   public createChunkGrassMesh(
@@ -129,7 +134,8 @@ export class ThreeGrassSystem {
     cx: number,
     cy: number,
     chunkSize: number,
-    densityScale = 1
+    densityScale = 1,
+    getHeight?: (x: number, z: number) => number
   ): THREE.InstancedMesh | null {
     const startX = cx * chunkSize;
     const startY = cy * chunkSize;
@@ -199,7 +205,8 @@ export class ThreeGrassSystem {
 
     for (let i = 0; i < placements.length; i++) {
       const p = placements[i];
-      this._pos.set(p.x, 0, p.z);
+      const py = getHeight ? getHeight(p.x, p.z) : 0;
+      this._pos.set(p.x, py, p.z);
       this._euler.set(0, p.ry, 0);
       this._quat.setFromEuler(this._euler);
       this._scale.set(p.sx, p.sy, p.sx);

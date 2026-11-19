@@ -125,6 +125,26 @@ import {
   transferAllLootItems,
   transferSingleLootItem,
 } from './lootUi';
+import {
+  clearTerrainCaches,
+  computeHighGroundCombatBonus,
+  computeSlopeSpeedMultiplier,
+  findRockyCaveAt,
+  getMacroRegionCave,
+  getShelterInfo,
+  isPointInsideClearedCave,
+  isTerrainStepBlocked,
+  sampleBridgeInfo,
+  sampleRoadTunnelInfo,
+  sampleTerrainHeight,
+  sampleTerrainSurface,
+} from './terrainSystem';
+import {
+  NORMAL_BODY_TEMP_C,
+  classifyThermalStatus,
+  sampleWeatherAt,
+  tickThermalSurvival,
+} from './weatherSystem';
 import type {
   ActiveLootContainer,
   BloodDecal,
@@ -147,9 +167,12 @@ import type {
   SoundRipple,
   StructureKind,
   SurfaceImpactDecal,
+  ThermalStatus,
   TileCell,
   Vehicle,
   WeaponId,
+  WeatherKind,
+  WeatherSnapshot,
   WorldLandmark,
   WorldStore,
   WorldStructure,
@@ -335,6 +358,28 @@ export class SurvivalEngine {
   private lastBiomeLabel = '';
   private hotspotCheckTimer = 0;
 
+  // Terrain, cleared caves, weather & thermal survival state
+  private clearedCaveIds = new Set<string>();
+  private weatherElapsedSeconds = 0;
+  private forcedWeather: WeatherKind | null = null;
+  private currentWeather: WeatherSnapshot = {
+    kind: 'clear',
+    label: 'CLEAR',
+    rainIntensity: 0,
+    fogIntensity: 0,
+    windStrength: 0.15,
+    ambientTempC: 17.5,
+    lightningFlash: 0,
+  };
+  private shelterInfo: {
+    sheltered: boolean;
+    label: string | null;
+    kind: 'cave' | 'tunnel' | 'building' | 'vehicle' | null;
+  } = { sheltered: false, label: null, kind: null };
+  private thermalSpeedMult = 1.0;
+  private lastThermalStatus: ThermalStatus = 'normal';
+  private wasShelteredInStorm = false;
+
   // Mobile touch virtual stick & fire state
   private virtualMoveX = 0; // normalized screen space -1..1
   private virtualMoveY = 0;
@@ -359,6 +404,12 @@ export class SurvivalEngine {
     const initialSettings = getSettings();
     this.cameraMode = initialSettings.defaultCameraMode;
     this.lastSettingCameraMode = initialSettings.defaultCameraMode;
+    if (typeof window !== 'undefined') {
+      const wParam = new URLSearchParams(window.location.search).get('weather');
+      if (wParam === 'clear' || wParam === 'fog' || wParam === 'rain' || wParam === 'storm') {
+        this.forcedWeather = wParam;
+      }
+    }
     this.applyGraphicsQuality(initialSettings.graphicsQuality);
     subscribeSettings((s) => {
       this.applyGraphicsQuality(s.graphicsQuality);
@@ -486,6 +537,12 @@ export class SurvivalEngine {
 
   private initWorld(titleMode: boolean, spawnOverride?: { x: number; y: number }): void {
     this.threeRenderer?.clearSceneCaches();
+    clearTerrainCaches();
+    this.clearedCaveIds.clear();
+    this.weatherElapsedSeconds = 0;
+    this.thermalSpeedMult = 1.0;
+    this.lastThermalStatus = 'normal';
+    this.wasShelteredInStorm = false;
     this.zombieRoutes.clear();
     this.meleeComboStep = 0;
     this.meleeComboResetTimer = 0;
@@ -518,7 +575,27 @@ export class SurvivalEngine {
     this.lastBiomeLabel = 'ASHFALL CROSSROADS';
     this.hotspotCheckTimer = 0.35;
     soundEngine.updateEngineSound(false, 0, false);
+    soundEngine.updateWeatherAudio(false, 0, 0, false, 0);
     this.player = createInitialPlayer(effectiveSpawnX, effectiveSpawnY);
+    this.player.elevation = sampleTerrainHeight(this.worldStore.seed, effectiveSpawnX, effectiveSpawnY);
+    this.shelterInfo = getShelterInfo(
+      this.worldStore.seed,
+      effectiveSpawnX,
+      effectiveSpawnY,
+      this.getCell(Math.floor(effectiveSpawnX), Math.floor(effectiveSpawnY)),
+      false
+    );
+    this.player.sheltered = this.shelterInfo.sheltered;
+    this.currentWeather = sampleWeatherAt(
+      this.worldStore.seed,
+      effectiveSpawnX,
+      effectiveSpawnY,
+      0,
+      titleMode ? 17 * 60 + 45 : 8 * 60 + 30,
+      sampleBiomeAt(this.worldStore.seed, Math.floor(effectiveSpawnX), Math.floor(effectiveSpawnY)),
+      this.player.elevation,
+      this.forcedWeather
+    );
     this.inventory = createInitialInventory();
     this.activeLootSource = null;
     this.activeLootContainer = null;
@@ -691,6 +768,12 @@ export class SurvivalEngine {
     p.infected = false;
     p.hunger = Math.max(p.hunger, 55);
     p.thirst = Math.max(p.thirst, 55);
+    p.wetness = 0;
+    p.bodyTemp = NORMAL_BODY_TEMP_C;
+    p.warmBuffTimer = 0;
+    p.elevation = sampleTerrainHeight(this.worldStore.seed, p.x, p.y);
+    this.thermalSpeedMult = 1.0;
+    this.lastThermalStatus = 'normal';
     p.reloadingTimer = 0;
     p.reloadingWeapon = null;
     p.attackCooldown = 0;
@@ -776,6 +859,7 @@ export class SurvivalEngine {
     this.releasePointerLock();
     soundEngine.playUiClick();
     soundEngine.updateEngineSound(false, 0, false);
+    soundEngine.updateWeatherAudio(false, 0, 0, false, 0);
     this.saveNow();
     this.setPhase('paused');
     this.clearInputs();
@@ -789,6 +873,7 @@ export class SurvivalEngine {
     this.releasePointerLock();
     soundEngine.playUiClick();
     soundEngine.updateEngineSound(false, 0, false);
+    soundEngine.updateWeatherAudio(false, 0, 0, false, 0);
     this.initWorld(true);
     this.setPhase('title');
     this.clearInputs();
@@ -839,6 +924,8 @@ export class SurvivalEngine {
       zombies: this.zombies,
       explored: encodeExploredChunks(this.worldStore.chunks),
       hotbar: cloneHotbarState(this.hotbar),
+      clearedCaveIds: [...this.clearedCaveIds],
+      weatherElapsedSeconds: this.weatherElapsedSeconds,
     };
     storeRunSnapshot(save);
     this.saveAvailable = true;
@@ -873,6 +960,10 @@ export class SurvivalEngine {
     p.hp = clamp(p.hp, 1, Math.max(1, p.maxHp || 100));
     p.hunger = clamp(p.hunger, 0, 100);
     p.thirst = clamp(p.thirst, 0, 100);
+    p.wetness = clamp(typeof p.wetness === 'number' ? p.wetness : 0, 0, 100);
+    p.bodyTemp = clamp(typeof p.bodyTemp === 'number' ? p.bodyTemp : NORMAL_BODY_TEMP_C, 32.0, 37.6);
+    p.warmBuffTimer = Math.max(0, typeof p.warmBuffTimer === 'number' ? p.warmBuffTimer : 0);
+    p.elevation = sampleTerrainHeight(this.worldStore.seed, p.x, p.y);
     this.player = p;
     this.inventory = { ...createInitialInventory(), ...save.inventory };
     if (save.hotbar) {
@@ -924,15 +1015,42 @@ export class SurvivalEngine {
     }
 
     const lm = new Map<string, WorldLandmark>();
+    this.clearedCaveIds = new Set(Array.isArray(save.clearedCaveIds) ? save.clearedCaveIds : []);
     for (const l of save.landmarks) {
       lm.set(l.id, { ...l, hotspotPacks: Array.isArray(l.hotspotPacks) ? [...l.hotspotPacks] : [] });
+      if (l.kind === 'cave' && l.hotspotCleared) {
+        this.clearedCaveIds.add(l.id);
+      }
     }
     this.worldStore.landmarks = lm;
+    this.weatherElapsedSeconds = Math.max(0, Number(save.weatherElapsedSeconds) || 0);
     decodeExploredChunks(this.worldStore.chunks, save.explored);
 
     const activeId = save.activeVehicleId;
     this.activeVehicleId =
       activeId !== null && this.vehicles.some((v) => v.id === activeId) ? activeId : null;
+
+    this.shelterInfo = getShelterInfo(
+      this.worldStore.seed,
+      this.player.x,
+      this.player.y,
+      this.getCell(Math.floor(this.player.x), Math.floor(this.player.y)),
+      this.activeVehicleId !== null
+    );
+    this.player.sheltered = this.shelterInfo.sheltered;
+    this.currentWeather = sampleWeatherAt(
+      this.worldStore.seed,
+      this.player.x,
+      this.player.y,
+      this.weatherElapsedSeconds,
+      this.timeMinutes,
+      sampleBiomeAt(this.worldStore.seed, Math.floor(this.player.x), Math.floor(this.player.y)),
+      this.player.elevation,
+      this.forcedWeather
+    );
+    this.lastThermalStatus = classifyThermalStatus(this.player.bodyTemp, this.player.warmBuffTimer);
+    this.thermalSpeedMult =
+      this.lastThermalStatus === 'freezing' ? 0.78 : this.lastThermalStatus === 'chilled' ? 0.88 : 1.0;
 
     this.zombieRoutes.clear();
     this.meleeComboStep = 0;
@@ -2039,6 +2157,7 @@ export class SurvivalEngine {
     this.elapsedClock += dt;
 
     if (this.phase === 'paused' || this.phase === 'gameover' || this.hudEditMode) {
+      soundEngine.updateWeatherAudio(false, 0, 0, false, 0);
       return;
     }
 
@@ -2150,6 +2269,7 @@ export class SurvivalEngine {
       soundEngine.updateEngineSound(false, 0, false);
       this.updatePlayer(dt);
     }
+    this.updateWeatherAndThermal(dt);
     this.syncAudioListener();
     soundEngine.updateSprintBreathing(this.activeVehicleId === null && this.isSprinting, this.phase === 'playing' && !this.modalOpen && !this.pendingGameOver && !document.hidden && this.player.hp > 0 && this.activeVehicleId === null, dt);
     this.updateDoors(dt);
@@ -2249,17 +2369,32 @@ export class SurvivalEngine {
 
     // Move car & resolve tight solid building/prop/parked-car collisions across infinite world
     const carRadius = 0.42;
-    const nextX = next.x + next.vx * dt;
-    const nextY = next.y + next.vy * dt;
+    const travelSign = next.speed >= 0 ? 1 : -1;
+    const slopeMult = computeSlopeSpeedMultiplier(
+      this.worldStore.seed,
+      next.x,
+      next.y,
+      Math.cos(next.angle) * travelSign,
+      Math.sin(next.angle) * travelSign,
+      true
+    );
+    const nextX = next.x + next.vx * slopeMult * dt;
+    const nextY = next.y + next.vy * slopeMult * dt;
     let crashed = false;
 
-    if (!isCircleBlocked(this.worldStore, nextX, next.y, carRadius, this.vehicles, next.id)) {
+    if (
+      !isCircleBlocked(this.worldStore, nextX, next.y, carRadius, this.vehicles, next.id) &&
+      !isTerrainStepBlocked(this.worldStore.seed, next.x, next.y, nextX, next.y, 0.58)
+    ) {
       next.x = nextX;
     } else {
       crashed = true;
     }
 
-    if (!isCircleBlocked(this.worldStore, next.x, nextY, carRadius, this.vehicles, next.id)) {
+    if (
+      !isCircleBlocked(this.worldStore, next.x, nextY, carRadius, this.vehicles, next.id) &&
+      !isTerrainStepBlocked(this.worldStore.seed, next.x, next.y, next.x, nextY, 0.58)
+    ) {
       next.y = nextY;
     } else {
       crashed = true;
@@ -2486,7 +2621,7 @@ export class SurvivalEngine {
 
     if (p.dodgeTimer > 0) {
       p.dodgeTimer -= dt;
-      const dodgeSpeed = 8.4;
+      const dodgeSpeed = 8.4 * this.thermalSpeedMult;
       this.playerVelX = p.dodgeDirX * dodgeSpeed;
       this.playerVelY = p.dodgeDirY * dodgeSpeed;
       this.moveActor(p, this.playerVelX * dt, this.playerVelY * dt, 0.22);
@@ -2499,7 +2634,11 @@ export class SurvivalEngine {
         }
       }
     } else {
-      const baseSpeed = wantsSprint ? 4.8 : 3.25;
+      const slopeMult =
+        moveLen > 0
+          ? computeSlopeSpeedMultiplier(this.worldStore.seed, p.x, p.y, moveX, moveY, false)
+          : 1.0;
+      const baseSpeed = (wantsSprint ? 4.8 : 3.25) * slopeMult * this.thermalSpeedMult;
       const targetVx = moveLen > 0 ? moveX * baseSpeed : 0;
       const targetVy = moveLen > 0 ? moveY * baseSpeed : 0;
       const accelRate = moveLen > 0 ? 18 : 22;
@@ -2774,26 +2913,34 @@ export class SurvivalEngine {
           const kbX = dx / dLen;
           const kbY = dy / dLen;
           const hit = resolveMeleeHit(spec, Math.random());
+          const hgBonus = computeHighGroundCombatBonus(
+            sampleTerrainHeight(this.worldStore.seed, p.x, p.y),
+            sampleTerrainHeight(this.worldStore.seed, z.x, z.y)
+          );
+          const finalMeleeDmg = hgBonus.active ? Math.round(hit.damage * hgBonus.damageMultiplier) : hit.damage;
           if (hit.isCrit) anyCrit = true;
           const wasBleeding = z.bleedTimer > 0;
-          if (hit.bleedDuration > 0 && z.hp - hit.damage > 0) {
+          if (hit.bleedDuration > 0 && z.hp - finalMeleeDmg > 0) {
             z.bleedTimer = Math.max(z.bleedTimer, hit.bleedDuration);
             if (!wasBleeding) {
               this.addFloatingText(z.x, z.y, 1.48, 'BLEED!', '#e04f44');
             }
           }
           // Heavy weapons & critical blows interrupt zombie attack windup
-          if (z.state === 'windup' && (isHeavyMelee || hit.isCrit) && z.hp - hit.damage > 0) {
+          if (z.state === 'windup' && (isHeavyMelee || hit.isCrit) && z.hp - finalMeleeDmg > 0) {
             z.state = 'recover';
             z.stateTimer = 0.36;
           }
           this.damageZombie(
             z,
-            hit.damage,
+            finalMeleeDmg,
             kbX * hit.knockback,
             kbY * hit.knockback,
             isHeavyMelee || hit.isCrit,
-            hit.isCrit
+            hit.isCrit,
+            false,
+            0.58,
+            hgBonus.active
           );
           this.spawnParticles(
             z.x - kbX * 0.14,
@@ -2965,14 +3112,16 @@ export class SurvivalEngine {
       p.attackCooldown = spec.cooldown;
       soundEngine.playMeleeSwing();
       const useForwardTarget = this.usingVirtualAim && this.cameraMode !== 'fps';
+      const shooterElev = sampleTerrainHeight(this.worldStore.seed, p.x, p.y);
+      const effectiveRange = shooterElev >= 1.35 ? spec.range * 1.24 : spec.range;
       const tx = useForwardTarget
-        ? p.x + Math.cos(p.facingAngle) * 4.5
-        : clamp(this.mouseWorldX, p.x - spec.range, p.x + spec.range);
+        ? p.x + Math.cos(p.facingAngle) * (shooterElev >= 1.35 ? 5.6 : 4.5)
+        : clamp(this.mouseWorldX, p.x - effectiveRange, p.x + effectiveRange);
       const ty = useForwardTarget
-        ? p.y + Math.sin(p.facingAngle) * 4.5
-        : clamp(this.mouseWorldY, p.y - spec.range, p.y + spec.range);
+        ? p.y + Math.sin(p.facingAngle) * (shooterElev >= 1.35 ? 5.6 : 4.5)
+        : clamp(this.mouseWorldY, p.y - effectiveRange, p.y + effectiveRange);
       const d = Math.max(1.2, dist(p.x, p.y, tx, ty));
-      const travelTime = clamp(d / 8.5, 0.25, 0.85);
+      const travelTime = clamp(d / 8.5, 0.25, 0.95);
       this.projectiles.push({
         id: this.nextEntityId++,
         kind: 'molotov',
@@ -2987,6 +3136,7 @@ export class SurvivalEngine {
         maxLife: travelTime,
         targetX: tx,
         targetY: ty,
+        originElevation: shooterElev,
       });
       this.emitHud();
     }
@@ -3003,8 +3153,20 @@ export class SurvivalEngine {
     speed: number
   ): void {
     const isFps = this.cameraMode === 'fps';
-    const spawnZ = isFps ? FPS_EYE_HEIGHT : 0.65;
-    const maxLife = kind === 'pellet' ? 0.28 : 0.45;
+    const seed = this.worldStore.seed;
+    const shooterElev = sampleTerrainHeight(seed, sx, sy);
+    const spawnZ = shooterElev + (isFps ? FPS_EYE_HEIGHT : 0.65);
+    const rangeBoost = !this.shelterInfo.sheltered && shooterElev >= 1.35 ? 1.24 : 1.0;
+    const maxLife = (kind === 'pellet' ? 0.28 : 0.45) * rangeBoost;
+    // In ISO, slope projectile vertical velocity cleanly toward the target terrain height so uphill/downhill shots connect naturally
+    let isoVz = 0;
+    if (!isFps) {
+      const aimDist = this.usingVirtualAim ? 8.5 : Math.max(2.0, dist(sx, sy, this.mouseWorldX, this.mouseWorldY));
+      const tx = this.usingVirtualAim ? sx + Math.cos(angle) * aimDist : this.mouseWorldX;
+      const ty = this.usingVirtualAim ? sy + Math.sin(angle) * aimDist : this.mouseWorldY;
+      const targetElev = sampleTerrainHeight(seed, tx, ty);
+      isoVz = clamp(((targetElev - shooterElev) / aimDist) * speed, -speed * 0.45, speed * 0.45);
+    }
     for (let i = 0; i < count; i++) {
       const yawOffset = (Math.random() - 0.5) * spread;
       if (isFps) {
@@ -3024,6 +3186,7 @@ export class SurvivalEngine {
           life: maxLife,
           maxLife,
           canHeadshot: true,
+          originElevation: shooterElev,
         });
       } else {
         const a = angle + yawOffset;
@@ -3035,11 +3198,12 @@ export class SurvivalEngine {
           z: spawnZ,
           vx: Math.cos(a) * speed,
           vy: Math.sin(a) * speed,
-          vz: 0,
+          vz: isoVz,
           damage,
           life: maxLife,
           maxLife,
           canHeadshot: false,
+          originElevation: shooterElev,
         });
       }
     }
@@ -3439,7 +3603,7 @@ export class SurvivalEngine {
         pr.vz -= 9.5 * dt;
         if (pr.life <= 0 || pr.z <= 0.05) {
           if (pr.kind === 'molotov') {
-            this.detonateMolotov(pr.x, pr.y);
+            this.detonateMolotov(pr.x, pr.y, pr.originElevation ?? this.player.elevation);
           } else {
             this.firePatches.push({
               id: this.nextEntityId++,
@@ -3460,7 +3624,16 @@ export class SurvivalEngine {
         continue;
       }
 
-      // Swept 3D ballistic collision so high-speed bullets never tunnel
+      // Swept 3D ballistic collision in true world-Y so hillside/cliff/cave/tunnel shots never tunnel or clip through ridges
+      const seed = this.worldStore.seed;
+      const getGroundY = (wx: number, wy: number) => sampleTerrainHeight(seed, wx, wy);
+      const getCeilingY = (wx: number, wy: number): number | null => {
+        const surf = sampleTerrainSurface(seed, wx, wy);
+        if (surf.isCave || surf.isCaveCoveredMouth) return surf.caveRoofY;
+        if (surf.isTunnel) return surf.tunnelRoofY;
+        return null;
+      };
+
       const prevX = pr.x;
       const prevY = pr.y;
       const prevZ = pr.z;
@@ -3480,7 +3653,9 @@ export class SurvivalEngine {
         this.doors,
         this.structures,
         this.vehicles,
-        this.activeVehicleId
+        this.activeVehicleId,
+        getGroundY,
+        getCeilingY
       );
 
       const zombieHit = traceSegmentZombieHit(
@@ -3492,7 +3667,8 @@ export class SurvivalEngine {
         nextZ,
         this.zombies,
         Boolean(pr.canHeadshot),
-        worldHit ? worldHit.t : 1
+        worldHit ? worldHit.t : 1,
+        getGroundY
       );
 
       if (zombieHit) {
@@ -3502,9 +3678,14 @@ export class SurvivalEngine {
         const dirY = pr.vy / speed3D;
         const dirZ = pr.vz / speed3D;
 
+        const shooterElev = pr.originElevation ?? this.player.elevation;
+        const targetElev = sampleTerrainHeight(seed, zombieHit.zombie.x, zombieHit.zombie.y);
+        const hgBonus = computeHighGroundCombatBonus(shooterElev, targetElev);
+        const localHitZ = Math.max(0.08, zombieHit.hz - targetElev);
+
         if (zombieHit.isHeadshot) {
           const mult = pr.kind === 'bullet' ? HEADSHOT_MULTIPLIER_BULLET : HEADSHOT_MULTIPLIER_PELLET;
-          const dmg = Math.round(pr.damage * mult);
+          const dmg = Math.round(pr.damage * mult * hgBonus.damageMultiplier);
           this.damageZombie(
             zombieHit.zombie,
             dmg,
@@ -3513,12 +3694,13 @@ export class SurvivalEngine {
             true,
             true,
             true,
-            zombieHit.hz
+            localHitZ,
+            hgBonus.active
           );
           this.pushImpactEffect(
             zombieHit.hx,
             zombieHit.hy,
-            zombieHit.hz,
+            localHitZ,
             -dirX,
             -dirY,
             -dirZ,
@@ -3540,13 +3722,16 @@ export class SurvivalEngine {
               this.doors,
               this.structures,
               this.vehicles,
-              this.activeVehicleId
+              this.activeVehicleId,
+              getGroundY,
+              getCeilingY
             );
             if (backHit && backHit.allowDecal) {
+              const localBackZ = Math.max(0.04, backHit.hz - getGroundY(backHit.hx, backHit.hy));
               this.pushImpactDecal(
                 backHit.hx,
                 backHit.hy,
-                backHit.hz,
+                localBackZ,
                 backHit.nx,
                 backHit.ny,
                 backHit.nz,
@@ -3561,20 +3746,22 @@ export class SurvivalEngine {
             Math.random(),
             pr.canHeadshot ? 0.1 : pr.kind === 'bullet' ? 0.22 : 0.12
           );
+          const boostedDmg = hgBonus.active ? Math.round(damage * hgBonus.damageMultiplier) : damage;
           this.damageZombie(
             zombieHit.zombie,
-            damage,
+            boostedDmg,
             (pr.vx / speed2D) * (isCrit ? 3.4 : 2.5),
             (pr.vy / speed2D) * (isCrit ? 3.4 : 2.5),
-            isCrit,
+            isCrit || hgBonus.active,
             isCrit,
             false,
-            zombieHit.hz
+            localHitZ,
+            hgBonus.active
           );
           this.pushImpactEffect(
             zombieHit.hx,
             zombieHit.hy,
-            zombieHit.hz,
+            localHitZ,
             -dirX,
             -dirY,
             -dirZ,
@@ -3611,18 +3798,19 @@ export class SurvivalEngine {
     isFps: boolean
   ): void {
     const scale = kind === 'bullet' ? 1.0 : 0.78;
-    this.pushImpactEffect(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, hit.material, scale);
+    const localZ = Math.max(0.02, hit.hz - sampleTerrainHeight(this.worldStore.seed, hit.hx, hit.hy));
+    this.pushImpactEffect(hit.hx, hit.hy, localZ, hit.nx, hit.ny, hit.nz, hit.material, scale);
     soundEngine.playBulletImpact(hit.material);
 
     if (hit.material === 'stone') {
-      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, kind === 'bullet' ? 6 : 4, '#ffd98a', 2.4, 4.4);
-      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, kind === 'bullet' ? 5 : 3, '#8f969c', 1.1, 2.4);
+      this.spawnDirectionalParticles(hit.hx, hit.hy, localZ, hit.nx, hit.ny, hit.nz, kind === 'bullet' ? 6 : 4, '#ffd98a', 2.4, 4.4);
+      this.spawnDirectionalParticles(hit.hx, hit.hy, localZ, hit.nx, hit.ny, hit.nz, kind === 'bullet' ? 5 : 3, '#8f969c', 1.1, 2.4);
     } else if (hit.material === 'wood') {
-      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, kind === 'bullet' ? 7 : 4, '#b88252', 1.8, 3.6);
-      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, 3, '#dec8a4', 1.0, 2.0);
+      this.spawnDirectionalParticles(hit.hx, hit.hy, localZ, hit.nx, hit.ny, hit.nz, kind === 'bullet' ? 7 : 4, '#b88252', 1.8, 3.6);
+      this.spawnDirectionalParticles(hit.hx, hit.hy, localZ, hit.nx, hit.ny, hit.nz, 3, '#dec8a4', 1.0, 2.0);
     } else if (hit.material === 'metal') {
-      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, kind === 'bullet' ? 9 : 5, '#fff0a6', 3.2, 5.6);
-      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, 3, '#ff9d3b', 2.2, 4.0);
+      this.spawnDirectionalParticles(hit.hx, hit.hy, localZ, hit.nx, hit.ny, hit.nz, kind === 'bullet' ? 9 : 5, '#fff0a6', 3.2, 5.6);
+      this.spawnDirectionalParticles(hit.hx, hit.hy, localZ, hit.nx, hit.ny, hit.nz, 3, '#ff9d3b', 2.2, 4.0);
       if (hit.vehicleId !== undefined) {
         const v = this.vehicles.find((car) => car.id === hit.vehicleId);
         if (v && v.hp > 0) {
@@ -3631,10 +3819,10 @@ export class SurvivalEngine {
         }
       }
     } else if (hit.material === 'water') {
-      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, 8, '#a6e4f5', 1.6, 3.4);
+      this.spawnDirectionalParticles(hit.hx, hit.hy, localZ, hit.nx, hit.ny, hit.nz, 8, '#a6e4f5', 1.6, 3.4);
       this.threeRenderer.addWaterRipple(hit.hx, hit.hy, this.elapsedClock, kind === 'bullet' ? 1.15 : 0.82);
     } else {
-      this.spawnDirectionalParticles(hit.hx, hit.hy, hit.hz, hit.nx, hit.ny, hit.nz, 6, '#6e543a', 1.4, 3.0);
+      this.spawnDirectionalParticles(hit.hx, hit.hy, localZ, hit.nx, hit.ny, hit.nz, 6, '#6e543a', 1.4, 3.0);
     }
 
     if (isFps && hit.allowDecal) {
@@ -3644,7 +3832,7 @@ export class SurvivalEngine {
         this.pushImpactDecal(
           hit.hx,
           hit.hy,
-          hit.hz,
+          localZ,
           hit.nx,
           hit.ny,
           hit.nz,
@@ -3721,7 +3909,7 @@ export class SurvivalEngine {
     }
   }
 
-  private detonateMolotov(x: number, y: number): void {
+  private detonateMolotov(x: number, y: number, originElevation = 0): void {
     soundEngine.playMolotovShatter();
     this.trauma = Math.min(1, this.trauma + 0.4);
     this.emitSound(x, y, 12, true);
@@ -3740,7 +3928,11 @@ export class SurvivalEngine {
     for (const z of this.zombies) {
       if (z.state === 'dying') continue;
       if (dist(z.x, z.y, x, y) <= 2.4) {
-        this.damageZombie(z, 38, 0, 0, true);
+        const hgBonus = computeHighGroundCombatBonus(
+          originElevation,
+          sampleTerrainHeight(this.worldStore.seed, z.x, z.y)
+        );
+        this.damageZombie(z, Math.round(38 * hgBonus.damageMultiplier), 0, 0, true, false, false, 0.58, hgBonus.active);
         z.burnTimer = 4.5;
       }
     }
@@ -3790,7 +3982,8 @@ export class SurvivalEngine {
     heavy: boolean,
     isCrit = false,
     isHeadshot = false,
-    hitZ = 0.58
+    hitZ = 0.58,
+    isHighGround = false
   ): void {
     z.hp -= amount;
     this.recentCombatTimer = Math.max(this.recentCombatTimer, 6.0);
@@ -3830,15 +4023,25 @@ export class SurvivalEngine {
     if (isHeadshot) {
       this.spawnParticles(z.x, z.y, hitZ, 15, '#d92b23', 4.0, 2.8);
       this.spawnParticles(z.x, z.y, hitZ, 5, '#e6dcc8', 3.1, 2.4);
-      this.addFloatingText(z.x, z.y, 1.38, `HEADSHOT -${Math.round(amount)}`, '#ff5a36');
+      this.addFloatingText(
+        z.x,
+        z.y,
+        1.38,
+        isHighGround ? `HIGH GROUND HEADSHOT -${Math.round(amount)}` : `HEADSHOT -${Math.round(amount)}`,
+        '#ff5a36'
+      );
     } else {
       this.spawnParticles(z.x, z.y, hitZ, heavy ? 12 : 7, isCrit ? '#d93829' : '#a32222', 3.4, 2.2);
       this.addFloatingText(
         z.x,
         z.y,
         1.2,
-        isCrit ? `CRIT -${Math.round(amount)}` : `-${Math.round(amount)}`,
-        isCrit ? '#ffd266' : heavy ? '#f0d078' : '#e6e2d8'
+        isHighGround
+          ? `HIGH GROUND -${Math.round(amount)}`
+          : isCrit
+            ? `CRIT -${Math.round(amount)}`
+            : `-${Math.round(amount)}`,
+        isHighGround ? '#8fd4ff' : isCrit ? '#ffd266' : heavy ? '#f0d078' : '#e6e2d8'
       );
     }
 
@@ -4030,24 +4233,26 @@ export class SurvivalEngine {
         const nextLen = Math.hypot(nextDx, nextDy) || 1;
         const dirX = nextDx / nextLen;
         const dirY = nextDy / nextLen;
-        this.moveActor(z, dirX * z.speed * 0.35 * dt, dirY * z.speed * 0.35 * dt, 0.21);
+        const wSlope = computeSlopeSpeedMultiplier(this.worldStore.seed, z.x, z.y, dirX, dirY, false);
+        this.moveActor(z, dirX * z.speed * 0.35 * wSlope * dt, dirY * z.speed * 0.35 * wSlope * dt, 0.21);
         const turnBlend = 1 - Math.exp(-dt * 8);
         const fx = lerp(z.facingX, dirX, turnBlend);
         const fy = lerp(z.facingY, dirY, turnBlend);
         const fNorm = Math.hypot(fx, fy) || 1;
         z.facingX = fx / fNorm;
         z.facingY = fy / fNorm;
-        z.walkCycle += z.speed * 0.35 * dt * 3;
+        z.walkCycle += z.speed * 0.35 * wSlope * dt * 3;
       } else if (z.state === 'alert') {
         z.stateTimer -= dt;
         if (z.lastHeardX !== null && z.lastHeardY !== null) {
           const dHeard = dist(z.x, z.y, z.lastHeardX, z.lastHeardY);
           if (dHeard > 0.55) {
             const steer = this.steerZombie(z, z.lastHeardX, z.lastHeardY);
-            this.moveActor(z, steer.dx * z.speed * 0.72 * dt, steer.dy * z.speed * 0.72 * dt, 0.21);
+            const aSlope = computeSlopeSpeedMultiplier(this.worldStore.seed, z.x, z.y, steer.dx, steer.dy, false);
+            this.moveActor(z, steer.dx * z.speed * 0.72 * aSlope * dt, steer.dy * z.speed * 0.72 * aSlope * dt, 0.21);
             z.facingX = steer.dx;
             z.facingY = steer.dy;
-            z.walkCycle += z.speed * 0.72 * dt * 3;
+            z.walkCycle += z.speed * 0.72 * aSlope * dt * 3;
           } else {
             z.lastHeardX = null;
             z.lastHeardY = null;
@@ -4122,8 +4327,9 @@ export class SurvivalEngine {
             mx = -z.facingY;
             my = z.facingX;
           }
-          this.moveActor(z, mx * z.speed * dt, my * z.speed * dt, 0.21);
-          z.walkCycle += z.speed * dt * 3;
+          const sSlope = computeSlopeSpeedMultiplier(this.worldStore.seed, z.x, z.y, mx, my, false);
+          this.moveActor(z, mx * z.speed * sSlope * dt, my * z.speed * sSlope * dt, 0.21);
+          z.walkCycle += z.speed * sSlope * dt * 3;
         } else {
           // Runner weaves slightly when closing in
           let mx = steer.dx;
@@ -4148,8 +4354,9 @@ export class SurvivalEngine {
               soundEngine.playZombieGroan(z.archetype, { x: z.x, y: z.y });
             }
           } else {
-            this.moveActor(z, mx * z.speed * dt, my * z.speed * dt, 0.21);
-            z.walkCycle += z.speed * dt * 3;
+            const cSlope = computeSlopeSpeedMultiplier(this.worldStore.seed, z.x, z.y, mx, my, false);
+            this.moveActor(z, mx * z.speed * cSlope * dt, my * z.speed * cSlope * dt, 0.21);
+            z.walkCycle += z.speed * cSlope * dt * 3;
           }
         }
         if (
@@ -4308,7 +4515,14 @@ export class SurvivalEngine {
       });
       if (candidate) {
         const cell = this.getCell(Math.floor(candidate.x), Math.floor(candidate.y));
-        if (cell.tile !== 'water') {
+        const inClearedCave = isPointInsideClearedCave(
+          this.worldStore.seed,
+          candidate.x,
+          candidate.y,
+          this.clearedCaveIds,
+          this.worldStore.landmarks.values()
+        );
+        if (cell.tile !== 'water' && !inClearedCave) {
           const r = Math.random();
           let arch: ZombieArchetype = 'walker';
           if (r < (isNight ? 0.28 : 0.12)) arch = 'runner';
@@ -4325,7 +4539,18 @@ export class SurvivalEngine {
     y: number,
     archetype: ZombieArchetype,
     initialPose?: { facingX: number; facingY: number; wanderTargetX: number; wanderTargetY: number }
-  ): void {
+  ): boolean {
+    if (
+      isPointInsideClearedCave(
+        this.worldStore.seed,
+        x,
+        y,
+        this.clearedCaveIds,
+        this.worldStore.landmarks.values()
+      )
+    ) {
+      return false;
+    }
     const cfg = ZOMBIE_CONFIGS[archetype];
     const hpScale = 1 + (this.day - 1) * 0.12;
     let facingX = initialPose?.facingX;
@@ -4368,35 +4593,55 @@ export class SurvivalEngine {
       koRotation: 0,
       variant: Math.floor(Math.random() * 4),
     });
+    return true;
   }
 
   private moveActor(actor: { x: number; y: number }, dx: number, dy: number, radius: number): void {
-    const canMoveX = !this.isPointSolid(actor.x + dx, actor.y, radius);
+    const seed = this.worldStore.seed;
+    const canMoveX =
+      !this.isPointSolid(actor.x + dx, actor.y, radius) &&
+      !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + dx, actor.y, 0.68);
     if (canMoveX) {
       actor.x += dx;
     } else if (Math.abs(dx) > 0.0005) {
       // Smooth corner-sliding around isometric doorways and furniture edges (works even on diagonal WASD)
       const probe = 0.28;
-      const clearPlus = !this.isPointSolid(actor.x + dx, actor.y + probe, radius);
-      const clearMinus = !this.isPointSolid(actor.x + dx, actor.y - probe, radius);
+      const clearPlus =
+        !this.isPointSolid(actor.x + dx, actor.y + probe, radius) &&
+        !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + dx, actor.y + probe, 0.68);
+      const clearMinus =
+        !this.isPointSolid(actor.x + dx, actor.y - probe, radius) &&
+        !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + dx, actor.y - probe, 0.68);
       if (clearPlus !== clearMinus) {
         const slide = Math.abs(dx) * 0.72 * (clearPlus ? 1 : -1);
-        if (!this.isPointSolid(actor.x + dx * 0.45, actor.y + slide, radius)) {
+        if (
+          !this.isPointSolid(actor.x + dx * 0.45, actor.y + slide, radius) &&
+          !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + dx * 0.45, actor.y + slide, 0.68)
+        ) {
           actor.y += slide;
         }
       }
     }
 
-    const canMoveY = !this.isPointSolid(actor.x, actor.y + dy, radius);
+    const canMoveY =
+      !this.isPointSolid(actor.x, actor.y + dy, radius) &&
+      !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x, actor.y + dy, 0.68);
     if (canMoveY) {
       actor.y += dy;
     } else if (Math.abs(dy) > 0.0005) {
       const probe = 0.28;
-      const clearPlus = !this.isPointSolid(actor.x + probe, actor.y + dy, radius);
-      const clearMinus = !this.isPointSolid(actor.x - probe, actor.y + dy, radius);
+      const clearPlus =
+        !this.isPointSolid(actor.x + probe, actor.y + dy, radius) &&
+        !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + probe, actor.y + dy, 0.68);
+      const clearMinus =
+        !this.isPointSolid(actor.x - probe, actor.y + dy, radius) &&
+        !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x - probe, actor.y + dy, 0.68);
       if (clearPlus !== clearMinus) {
         const slide = Math.abs(dy) * 0.72 * (clearPlus ? 1 : -1);
-        if (!this.isPointSolid(actor.x + slide, actor.y + dy * 0.45, radius)) {
+        if (
+          !this.isPointSolid(actor.x + slide, actor.y + dy * 0.45, radius) &&
+          !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + slide, actor.y + dy * 0.45, 0.68)
+        ) {
           actor.x += slide;
         }
       }
@@ -4463,9 +4708,18 @@ export class SurvivalEngine {
     );
 
     for (const lm of this.worldStore.landmarks.values()) {
+      const isCave = lm.kind === 'cave';
+      if (isCave && (lm.hotspotCleared || this.clearedCaveIds.has(lm.id))) {
+        lm.hotspotCleared = true;
+        lm.hotspotSpawned = true;
+        this.clearedCaveIds.add(lm.id);
+        continue;
+      }
+
       const d = dist(this.player.x, this.player.y, lm.gx + 0.5, lm.gy + 0.5);
       // Pre-populate landmark packs while landmark is still at a safe distance and never on top of an active fight
-      if (!lm.hotspotSpawned && d <= 34 && d >= 16 && !pressure.inCombat) {
+      const minSpawnDist = isCave ? 10 : 16;
+      if (!lm.hotspotSpawned && d <= 34 && d >= minSpawnDist && !pressure.inCombat) {
         lm.hotspotSpawned = true;
         const count = lm.hotspotPacks.length;
         for (let i = 0; i < count; i++) {
@@ -4473,32 +4727,169 @@ export class SurvivalEngine {
           const baseAng = (i / Math.max(1, count)) * Math.PI * 2;
           for (let attempt = 0; attempt < 12; attempt++) {
             const ang = baseAng + attempt * 0.56;
-            const rad = 2.6 + (attempt % 5) * 1.95;
+            const rad = isCave ? 0.8 + (attempt % 4) * 0.85 : 2.6 + (attempt % 5) * 1.95;
             const zx = lm.gx + 0.5 + Math.cos(ang) * rad;
             const zy = lm.gy + 0.5 + Math.sin(ang) * rad;
-            if (dist(zx, zy, this.player.x, this.player.y) < 16.0) continue;
+            if (!isCave && dist(zx, zy, this.player.x, this.player.y) < 16.0) continue;
             if (!this.isPointSolid(zx, zy, 0.25)) {
               this.spawnZombieAt(zx, zy, arch);
               break;
             }
           }
         }
-      } else if (lm.hotspotSpawned && !lm.hotspotCleared && d <= lm.radius + 7) {
+      } else if (
+        (lm.hotspotSpawned || (isCave && lm.hotspotPacks.length === 0)) &&
+        !lm.hotspotCleared &&
+        d <= lm.radius + (isCave ? 4 : 7)
+      ) {
         let aliveNear = 0;
         for (const z of this.zombies) {
           if (z.state === 'dying') continue;
-          if (dist(z.x, z.y, lm.gx + 0.5, lm.gy + 0.5) <= lm.radius + 7) {
+          if (dist(z.x, z.y, lm.gx + 0.5, lm.gy + 0.5) <= lm.radius + (isCave ? 4.5 : 7)) {
             aliveNear++;
           }
         }
         if (aliveNear === 0) {
           lm.hotspotCleared = true;
-          this.score += 75;
-          this.showBanner(`HOTSPOT CLEARED: ${lm.name.toUpperCase()} (+75)`, 2.8);
+          lm.hotspotSpawned = true;
+          if (isCave) {
+            this.clearedCaveIds.add(lm.id);
+            this.score += 75;
+            this.showBanner(`CAVE SHELTER SECURED: ${lm.name.toUpperCase()} · NO RESPAWNS (+75)`, 3.4);
+          } else {
+            this.score += 75;
+            this.showBanner(`HOTSPOT CLEARED: ${lm.name.toUpperCase()} (+75)`, 2.8);
+          }
           this.emitHud();
         }
       }
     }
+  }
+
+  private isNearWarmthSource(): boolean {
+    const p = this.player;
+    const seed = this.worldStore.seed;
+    if (
+      this.structures.some(
+        (s) =>
+          s.kind === 'campfire' &&
+          dist(s.gx + 0.5, s.gy + 0.5, p.x, p.y) <= 4.2 &&
+          Math.abs(sampleTerrainHeight(seed, s.gx + 0.5, s.gy + 0.5) - p.elevation) < 1.8
+      )
+    ) {
+      return true;
+    }
+    const pgx = Math.floor(p.x);
+    const pgy = Math.floor(p.y);
+    for (let dy = -3; dy <= 3; dy++) {
+      for (let dx = -3; dx <= 3; dx++) {
+        const cell = this.getCell(pgx + dx, pgy + dy);
+        if (
+          (cell.prop === 'stove' || cell.prop === 'barrel_burn') &&
+          dist(pgx + dx + 0.5, pgy + dy + 0.5, p.x, p.y) <= 3.6 &&
+          Math.abs(sampleTerrainHeight(seed, pgx + dx + 0.5, pgy + dy + 0.5) - p.elevation) < 1.8
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private updateWeatherAndThermal(dt: number): void {
+    this.weatherElapsedSeconds += dt;
+    const p = this.player;
+    const seed = this.worldStore.seed;
+    p.elevation = sampleTerrainHeight(seed, p.x, p.y);
+    const cell = this.getCell(Math.floor(p.x), Math.floor(p.y));
+    this.shelterInfo = getShelterInfo(seed, p.x, p.y, cell, this.activeVehicleId !== null);
+    p.sheltered = this.shelterInfo.sheltered;
+
+    const biome = sampleBiomeAt(seed, Math.floor(p.x), Math.floor(p.y));
+    this.currentWeather = sampleWeatherAt(
+      seed,
+      p.x,
+      p.y,
+      this.weatherElapsedSeconds,
+      this.timeMinutes,
+      biome,
+      p.elevation,
+      this.forcedWeather
+    );
+
+    const activeCar =
+      this.activeVehicleId !== null
+        ? this.vehicles.find((v) => v.id === this.activeVehicleId) ?? null
+        : null;
+    const inHeatedCabin = activeCar !== null && activeCar.fuel > 0;
+    const nearHeatSource = this.activeVehicleId === null && this.isNearWarmthSource();
+    const inWater = this.activeVehicleId === null && cell.tile === 'water';
+
+    const thermal = tickThermalSurvival({
+      wetness: p.wetness,
+      bodyTemp: p.bodyTemp,
+      warmBuffTimer: p.warmBuffTimer,
+      dt,
+      weather: this.currentWeather,
+      sheltered: this.shelterInfo.sheltered,
+      nearHeatSource,
+      inWater,
+      inHeatedCabin,
+    });
+
+    p.wetness = thermal.wetness;
+    p.bodyTemp = thermal.bodyTemp;
+    p.warmBuffTimer = thermal.warmBuffTimer;
+    this.thermalSpeedMult = thermal.speedMultiplier;
+
+    if (thermal.hpDrainPerSec > 0 && p.hp > 0 && !this.pendingGameOver) {
+      p.hp = Math.max(0, p.hp - thermal.hpDrainPerSec * dt);
+      if (p.hp <= 0) {
+        this.pendingGameOver = true;
+        this.actionVisual = null;
+        this.deathDelayTimer = 0.55;
+        this.trauma = 0.85;
+        soundEngine.playPlayerHurt();
+        if (this.score > this.bestScore) {
+          this.bestScore = this.score;
+          try {
+            localStorage.setItem(BEST_SCORE_KEY, String(this.bestScore));
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+
+    if (thermal.thermalStatus !== this.lastThermalStatus) {
+      if (thermal.thermalStatus === 'freezing') {
+        this.showBanner('FREEZING · SEEK CAVE SHELTER, CAMPFIRE OR EAT HOT RATIONS', 3.4);
+      } else if (thermal.thermalStatus === 'chilled' && this.lastThermalStatus !== 'freezing') {
+        this.showBanner('CHILLED · SOAKED CLOTHES SLOWING MOVEMENT', 2.8);
+      } else if (
+        (thermal.thermalStatus === 'normal' || thermal.thermalStatus === 'warmed') &&
+        (this.lastThermalStatus === 'chilled' || this.lastThermalStatus === 'freezing')
+      ) {
+        this.showBanner('WARMED UP · BODY TEMPERATURE STABILIZED', 2.4);
+      }
+      this.lastThermalStatus = thermal.thermalStatus;
+    }
+
+    const shelteredInRain = this.shelterInfo.sheltered && this.currentWeather.rainIntensity > 0.35;
+    if (shelteredInRain && !this.wasShelteredInStorm && this.shelterInfo.label) {
+      this.showBanner(`SHELTERED IN ${this.shelterInfo.label} · DRYING OUT`, 2.4);
+    }
+    this.wasShelteredInStorm = shelteredInRain;
+
+    const audioActive =
+      this.phase === 'playing' && !this.modalOpen && !this.pendingGameOver && !document.hidden;
+    soundEngine.updateWeatherAudio(
+      audioActive,
+      this.currentWeather.rainIntensity,
+      this.currentWeather.windStrength,
+      this.shelterInfo.sheltered,
+      this.currentWeather.lightningFlash
+    );
   }
 
   private spawnParticles(
@@ -4711,6 +5102,9 @@ export class SurvivalEngine {
       mouseWorldY: this.mouseWorldY,
       usingVirtualAim: this.usingVirtualAim && this.cameraMode !== 'fps',
       nearInteractTile,
+      weather: this.currentWeather,
+      sheltered: this.shelterInfo.sheltered,
+      shelterKind: this.shelterInfo.kind,
     });
 
     // Pass 7: Tactical Minimap (throttled to ~8Hz for low CPU overhead)
@@ -4747,6 +5141,12 @@ export class SurvivalEngine {
         if (!cell.explored) continue;
         if (cell.tile === 'water') {
           mctx.fillStyle = '#265c78';
+        } else if (cell.tile === 'bridge_deck') {
+          mctx.fillStyle = '#b88854';
+        } else if (cell.tile === 'cave_floor') {
+          mctx.fillStyle = '#333d4f';
+        } else if (cell.tile === 'cliff_stone') {
+          mctx.fillStyle = '#5e6673';
         } else if (cell.tile === 'pier') {
           mctx.fillStyle = '#ab784b';
         } else if (cell.prop === 'door') {
@@ -4755,6 +5155,8 @@ export class SurvivalEngine {
           if (cell.prop === 'wall_interior') mctx.fillStyle = '#cfc6b0';
           else if (cell.prop === 'wall_wood') mctx.fillStyle = '#8f5932';
           else if (cell.prop.startsWith('wall')) mctx.fillStyle = '#a34a36';
+          else if (cell.prop === 'cliff_rock') mctx.fillStyle = '#474f5b';
+          else if (cell.prop === 'cave_stalagmite') mctx.fillStyle = '#556070';
           else if (cell.prop === 'tree_pine' || cell.prop === 'tree_dead') mctx.fillStyle = '#2f5e2c';
           else if (cell.prop === 'wrecked_car') mctx.fillStyle = '#994823';
           else if (cell.prop === 'rock_boulder') mctx.fillStyle = '#6c7275';
@@ -4786,8 +5188,22 @@ export class SurvivalEngine {
         } else {
           mctx.fillStyle = '#38632e';
         }
-        mctx.fillRect(Math.floor(rx * scale), Math.floor(ry * scale), Math.ceil(scale), Math.ceil(scale));
+        const px = Math.floor(rx * scale);
+        const py = Math.floor(ry * scale);
+        const pw = Math.ceil(scale);
+        const ph = Math.ceil(scale);
+        mctx.fillRect(px, py, pw, ph);
+        // Subtle topographic elevation highlight on outer frontier hills
+        const elev = sampleTerrainHeight(this.worldStore.seed, gx + 0.5, gy + 0.5);
+        if (elev > 0.65 && cell.tile !== 'cave_floor') {
+          mctx.fillStyle = `rgba(235, 240, 226, ${clamp((elev - 0.6) * 0.065, 0, 0.28).toFixed(2)})`;
+          mctx.fillRect(px, py, pw, ph);
+        }
       }
+    }
+    if (this.currentWeather.rainIntensity > 0.35) {
+      mctx.fillStyle = `rgba(74, 118, 158, ${(this.currentWeather.rainIntensity * 0.14).toFixed(2)})`;
+      mctx.fillRect(0, 0, size, size);
     }
 
     const toRadar = (wx: number, wy: number) => ({
@@ -5092,6 +5508,195 @@ export class SurvivalEngine {
       activeLootContainer: this.activeLootContainer,
       pickupNotifications: this.pickupNotifications,
       hotbar: cloneHotbarState(this.hotbar),
+      wetness: Math.round(this.player.wetness),
+      bodyTemp: Math.round(this.player.bodyTemp * 10) / 10,
+      thermalStatus: classifyThermalStatus(this.player.bodyTemp, this.player.warmBuffTimer),
+      warmBuffSeconds: Math.ceil(this.player.warmBuffTimer),
+      sheltered: this.shelterInfo.sheltered,
+      shelterLabel: this.shelterInfo.label,
+      elevation: Math.round(this.player.elevation * 10) / 10,
+      highGroundActive: !this.shelterInfo.sheltered && this.player.elevation >= 1.35,
+      weather: { ...this.currentWeather },
     });
+  }
+
+  // ---- Deterministic verification helpers (only exposed via ?debug=1 in App.tsx) ----
+
+  setWeather(kind: WeatherKind | null): WeatherSnapshot {
+    this.forcedWeather = kind;
+    this.updateWeatherAndThermal(0.016);
+    this.emitHud();
+    this.render();
+    return { ...this.currentWeather };
+  }
+
+  teleportTo(wx: number, wy: number): { x: number; y: number; elevation: number; sheltered: boolean; shelterLabel: string | null } {
+    this.streamChunksAround(wx, wy, 3);
+    this.player.x = wx;
+    this.player.y = wy;
+    this.player.vx = 0;
+    this.player.vy = 0;
+    this.player.elevation = sampleTerrainHeight(this.worldStore.seed, wx, wy);
+    const iso = worldToIso(wx, wy, 0);
+    this.camX = iso.sx;
+    this.camY = iso.sy;
+    this.lastFogGX = Math.floor(wx);
+    this.lastFogGY = Math.floor(wy);
+    this.revealFogAround(wx, wy, 10);
+    this.updateWeatherAndThermal(0.016);
+    this.emitHud();
+    this.render();
+    return {
+      x: this.player.x,
+      y: this.player.y,
+      elevation: this.player.elevation,
+      sheltered: this.shelterInfo.sheltered,
+      shelterLabel: this.shelterInfo.label,
+    };
+  }
+
+  findNearestFeature(
+    kind: 'hill' | 'cliff' | 'bridge' | 'tunnel' | 'cave'
+  ): { x: number; y: number; elevation: number; label?: string } | null {
+    const seed = this.worldStore.seed;
+    if (kind === 'cave') {
+      let best: { x: number; y: number; elevation: number; label: string; d: number } | null = null;
+      for (let ry = -6; ry <= 7; ry++) {
+        for (let rx = -6; rx <= 7; rx++) {
+          const cave = getMacroRegionCave(seed, rx, ry);
+          if (!cave) continue;
+          const d = Math.hypot(cave.gx - 32, cave.gy - 32);
+          if (!best || d < best.d) {
+            best = { x: cave.gx + 0.5, y: cave.gy + 0.5, elevation: cave.floorY, label: cave.name, d };
+          }
+        }
+      }
+      return best ? { x: best.x, y: best.y, elevation: best.elevation, label: best.label } : null;
+    }
+
+    let best: { x: number; y: number; elevation: number; d: number } | null = null;
+    for (let gy = -160; gy <= 224; gy += 2) {
+      for (let gx = -160; gx <= 224; gx += 2) {
+        if (gx >= -2 && gx <= 66 && gy >= -2 && gy <= 66) continue;
+        const wx = gx + 0.5;
+        const wy = gy + 0.5;
+        const d = Math.hypot(wx - 32, wy - 32);
+        if (best && d >= best.d) continue;
+
+        if (kind === 'bridge') {
+          const b = sampleBridgeInfo(seed, wx, wy);
+          if (b.isBridge && b.bridgeHeight > 0.35) {
+            best = { x: wx, y: wy, elevation: b.bridgeHeight, d };
+          }
+        } else if (kind === 'tunnel') {
+          const t = sampleRoadTunnelInfo(seed, wx, wy);
+          if (t.isTunnel) {
+            best = { x: wx, y: wy, elevation: t.floorY, d };
+          }
+        } else if (kind === 'cliff') {
+          const s = sampleTerrainSurface(seed, wx, wy);
+          if (s.isCliff && !s.isCaveWall && !s.isTunnel) {
+            // Stand on nearby walkable high edge beside the cliff
+            const near = sampleTerrainSurface(seed, wx - 2, wy - 2);
+            if (!near.isCliff && near.height >= 1.5) {
+              best = { x: wx - 2, y: wy - 2, elevation: near.height, d };
+            }
+          }
+        } else if (kind === 'hill') {
+          const s = sampleTerrainSurface(seed, wx, wy);
+          if (!s.isCliff && !s.isCave && !s.isTunnel && s.height >= 2.2) {
+            best = { x: wx, y: wy, elevation: s.height, d };
+          }
+        }
+      }
+    }
+    return best ? { x: best.x, y: best.y, elevation: best.elevation } : null;
+  }
+
+  simulateThermalSeconds(seconds: number): { wetness: number; bodyTemp: number; thermalStatus: ThermalStatus; hp: number } {
+    const steps = Math.max(1, Math.ceil(seconds / 0.25));
+    const stepDt = seconds / steps;
+    for (let i = 0; i < steps; i++) {
+      this.updateWeatherAndThermal(stepDt);
+    }
+    this.emitHud();
+    this.render();
+    return {
+      wetness: Math.round(this.player.wetness),
+      bodyTemp: Math.round(this.player.bodyTemp * 10) / 10,
+      thermalStatus: classifyThermalStatus(this.player.bodyTemp, this.player.warmBuffTimer),
+      hp: Math.round(this.player.hp),
+    };
+  }
+
+  clearCaveAndVerifyNoRespawn(): {
+    caveId: string | null;
+    cleared: boolean;
+    spawnInsideBlocked: boolean;
+    spawnOutsideAllowed: boolean;
+  } {
+    const hit = findRockyCaveAt(this.worldStore.seed, this.player.x, this.player.y);
+    if (!hit) {
+      return { caveId: null, cleared: false, spawnInsideBlocked: false, spawnOutsideAllowed: false };
+    }
+    const cave = hit.cave;
+    // Eliminate any live zombies near the cave
+    for (let i = this.zombies.length - 1; i >= 0; i--) {
+      const z = this.zombies[i];
+      if (dist(z.x, z.y, cave.gx + 0.5, cave.gy + 0.5) <= cave.chamberRadius + 8) {
+        this.zombies.splice(i, 1);
+      }
+    }
+    this.hotspotCheckTimer = 1.0;
+    this.updateLandmarksAndHotspots(0.4);
+    const lm = this.worldStore.landmarks.get(cave.id);
+    if (lm) {
+      lm.hotspotSpawned = true;
+      lm.hotspotCleared = true;
+    }
+    this.clearedCaveIds.add(cave.id);
+    const insideSpawned = this.spawnZombieAt(cave.gx + 0.5, cave.gy + 0.5, 'walker');
+    const outsideSpawned = this.spawnZombieAt(cave.gx + 14.5, cave.gy + 14.5, 'walker');
+    if (outsideSpawned) {
+      this.zombies.pop();
+    }
+    this.emitHud();
+    return {
+      caveId: cave.id,
+      cleared: this.clearedCaveIds.has(cave.id),
+      spawnInsideBlocked: !insideSpawned,
+      spawnOutsideAllowed: outsideSpawned,
+    };
+  }
+
+  getDebugState() {
+    return {
+      phase: this.phase,
+      cameraMode: this.cameraMode,
+      player: {
+        x: Math.round(this.player.x * 100) / 100,
+        y: Math.round(this.player.y * 100) / 100,
+        hp: Math.round(this.player.hp),
+        elevation: Math.round(this.player.elevation * 100) / 100,
+        wetness: Math.round(this.player.wetness),
+        bodyTemp: Math.round(this.player.bodyTemp * 10) / 10,
+        warmBuffTimer: Math.round(this.player.warmBuffTimer),
+        thermalStatus: classifyThermalStatus(this.player.bodyTemp, this.player.warmBuffTimer),
+        sheltered: this.shelterInfo.sheltered,
+        shelterLabel: this.shelterInfo.label,
+        highGroundActive: !this.shelterInfo.sheltered && this.player.elevation >= 1.35,
+      },
+      weather: { ...this.currentWeather },
+      clearedCaveIds: [...this.clearedCaveIds],
+      zombiesAlive: this.zombies.filter((z) => z.state !== 'dying').length,
+      landmarks: [...this.worldStore.landmarks.values()].map((l) => ({
+        id: l.id,
+        name: l.name,
+        kind: l.kind,
+        gx: l.gx,
+        gy: l.gy,
+        hotspotCleared: l.hotspotCleared,
+      })),
+    };
   }
 }

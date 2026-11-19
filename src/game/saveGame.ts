@@ -59,6 +59,8 @@ export interface RunSnapshot {
   doors: DoorEntity[];
   zombies: Zombie[];
   explored: ExploredChunkBits[];
+  clearedCaveIds?: string[];
+  weatherElapsedSeconds?: number;
 }
 
 export interface RunSaveMeta {

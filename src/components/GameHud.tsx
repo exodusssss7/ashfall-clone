@@ -16,12 +16,19 @@ import {
   Car,
   ChevronDown,
   ChevronUp,
+  CloudFog,
+  CloudLightning,
+  CloudRain,
   Eye,
   Flame,
   Clock3,
+  Mountain,
+  ShieldCheck,
   Skull,
+  Thermometer,
   Utensils,
   Droplet,
+  Droplets,
   Flashlight,
   Fuel,
   Gamepad2,
@@ -341,6 +348,20 @@ export const GameHud: React.FC<GameHudProps> = ({
         />
       )}
 
+      {/* Chilled / Freezing peripheral frost vignette */}
+      {(hud.thermalStatus === 'chilled' || hud.thermalStatus === 'freezing') && (
+        <div
+          data-testid="frost-vignette"
+          className="fixed inset-0 pointer-events-none"
+          style={{
+            boxShadow:
+              hud.thermalStatus === 'freezing'
+                ? 'inset 0 0 110px rgba(96, 182, 245, 0.52)'
+                : 'inset 0 0 70px rgba(120, 190, 240, 0.26)',
+          }}
+        />
+      )}
+
       {/* TOP ROW: Compact Vitality Cluster (Left) + Day/Time & Utility Cluster (Right) */}
       <div className="flex items-start justify-between gap-2 md:gap-4">
         {/* Top-Left Survival Vitals: compact, pinned to the corner */}
@@ -436,6 +457,48 @@ export const GameHud: React.FC<GameHudProps> = ({
             </button>
           </div>
 
+          {/* Body Temperature & Clothing Wetness */}
+          <div
+            data-testid="thermal-readout"
+            className="flex items-center justify-between gap-1.5 text-[10px] font-telemetry pt-0.5 border-t border-[#262b2a]"
+          >
+            <span
+              className={`flex items-center gap-1 whitespace-nowrap ${
+                hud.thermalStatus === 'freezing'
+                  ? 'text-[#7cd6ff] font-bold vital-critical'
+                  : hud.thermalStatus === 'chilled'
+                    ? 'text-[#9bd5ff] font-bold'
+                    : hud.thermalStatus === 'warmed'
+                      ? 'text-[#ffba5a] font-bold'
+                      : 'text-[#c7c2b6]'
+              }`}
+            >
+              <Thermometer className="w-3 h-3 shrink-0" />
+              <span>{hud.bodyTemp.toFixed(1)}°C</span>
+              {hud.thermalStatus === 'freezing' && <span>· {touchEnabled ? 'FREEZE' : 'FREEZING'}</span>}
+              {hud.thermalStatus === 'chilled' && <span>· {touchEnabled ? 'CHILL' : 'CHILLED'}</span>}
+              {hud.thermalStatus === 'warmed' && (
+                <span>
+                  · {touchEnabled ? 'WARM' : 'WARMED'}
+                  {hud.warmBuffSeconds > 0 ? ` ${hud.warmBuffSeconds}s` : ''}
+                </span>
+              )}
+            </span>
+            {hud.wetness >= 5 ? (
+              <span className="flex items-center gap-0.5 text-[#6ec4f0] font-bold whitespace-nowrap">
+                <Droplets className="w-3 h-3 shrink-0" />
+                WET {hud.wetness}%
+              </span>
+            ) : hud.sheltered ? (
+              <span className="flex items-center gap-0.5 text-[#78c796] whitespace-nowrap">
+                <ShieldCheck className="w-3 h-3 shrink-0" />
+                DRY
+              </span>
+            ) : (
+              <span className="text-[#8a918d] whitespace-nowrap">DRY</span>
+            )}
+          </div>
+
           {/* Bleeding or Flashlight status text */}
           <div className="flex items-center justify-between text-[11px] font-telemetry pt-0.5 border-t border-[#262b2a]">
             <span className={hud.bleeding ? 'text-[#ff5e57] font-bold' : 'text-[#8a918d]'}>
@@ -449,7 +512,8 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
 
         {/* Top-Right Day/Time, Kills & Utility Controls */}
-        <div ref={utilityDrag.ref} style={utilityDrag.style} className="utility-cluster flex items-start gap-1.5 md:gap-2 shrink-0">
+        <div ref={utilityDrag.ref} style={utilityDrag.style} className="utility-cluster flex flex-col items-end gap-1 shrink-0">
+          <div className="flex items-start gap-1.5 md:gap-2">
           <div className={`clock-panel hud-panel flex items-center ${touchEnabled ? 'px-2.5 py-1.5 gap-2.5' : 'px-3 py-2 gap-3'}`}>
             <div className="whitespace-nowrap">
               <div className="font-telemetry text-[10px] uppercase tracking-wider text-[#8a918d]">
@@ -463,8 +527,13 @@ export const GameHud: React.FC<GameHudProps> = ({
             <div className="h-6 w-px bg-[#2c3331]" />
 
             <div className="whitespace-nowrap">
-              <div className="font-telemetry text-[10px] uppercase tracking-wider text-[#8a918d]">
-                Kills · ({hud.worldCoords.gx}, {hud.worldCoords.gy})
+              <div className="font-telemetry text-[10px] uppercase tracking-wider text-[#8a918d] flex items-center gap-1">
+                {hud.weather.kind === 'storm' && <CloudLightning className="w-3 h-3 text-[#8bc9ff]" />}
+                {hud.weather.kind === 'rain' && <CloudRain className="w-3 h-3 text-[#7ec4ff]" />}
+                {hud.weather.kind === 'fog' && <CloudFog className="w-3 h-3 text-[#b5c2c9]" />}
+                <span>
+                  {hud.weather.label} · {Math.round(hud.weather.ambientTempC)}°C
+                </span>
               </div>
               <div className={`font-telemetry font-bold leading-tight text-[#e8a849] ${touchEnabled ? 'text-xs' : 'text-base'}`}>
                 <Skull className="clock-symbol" />{hud.kills} <span className="text-[#69706c] font-normal">/</span> {hud.score}
@@ -565,6 +634,40 @@ export const GameHud: React.FC<GameHudProps> = ({
               <Pause className="w-4 h-4" /><span className="utility-label">Pause</span>
             </button>
           </div>
+          </div>
+
+          {/* Contextual Terrain & Shelter Strip (positioned cleanly below fixed utility buttons on desktop) */}
+          {(hud.sheltered || hud.highGroundActive || hud.elevation >= 0.5) && (
+            <div
+              data-testid="terrain-status-strip"
+              className={`hud-panel px-2.5 py-1 flex items-center gap-2 text-[10px] font-telemetry tracking-wider whitespace-nowrap ${
+                touchEnabled ? '' : 'mt-[50px]'
+              }`}
+            >
+              {hud.sheltered && hud.shelterLabel && (
+                <span className="flex items-center gap-1 text-[#78c796] font-bold">
+                  <ShieldCheck className="w-3 h-3 shrink-0" />
+                  {touchEnabled ? hud.shelterLabel : `SHELTERED · ${hud.shelterLabel}`}
+                </span>
+              )}
+              {hud.sheltered && hud.elevation >= 0.5 && (
+                <span className="text-[#4a5350]">|</span>
+              )}
+              {!hud.sheltered && hud.highGroundActive ? (
+                <span className="flex items-center gap-1 text-[#8fd4ff] font-bold">
+                  <Mountain className="w-3 h-3 shrink-0" />
+                  {touchEnabled
+                    ? `HIGH +DMG (${Math.round(hud.elevation * 4)}m)`
+                    : `HIGH GROUND · +DMG +RNG (${Math.round(hud.elevation * 4)}m)`}
+                </span>
+              ) : hud.elevation >= 0.5 ? (
+                <span className="flex items-center gap-1 text-[#c7c2b6]">
+                  <Mountain className="w-3 h-3 shrink-0 text-[#9aa09c]" />
+                  ELEV {Math.round(hud.elevation * 4)}m
+                </span>
+              ) : null}
+            </div>
+          )}
         </div>
       </div>
 

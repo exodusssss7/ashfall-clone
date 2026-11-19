@@ -33,6 +33,10 @@ function iconForLandmark(kind: LandmarkKind): string {
       return 'bandage';
     case 'diner':
       return 'food';
+    case 'cave':
+      return 'campfire';
+    case 'tunnel':
+      return 'car_trunk';
     case 'cabin':
     default:
       return 'wood';
@@ -117,7 +121,7 @@ export function NavigationRadar({
                 <h2 className="font-pixel text-xl text-[#f0ece1]">World Navigation</h2>
                 <p className="text-[10px] font-telemetry text-[#9aa09c]">
                   Region: <span className="text-[#f0d078]">{hud.currentBiomeLabel}</span> · Coords ({hud.worldCoords.gx},{' '}
-                  {hud.worldCoords.gy})
+                  {hud.worldCoords.gy}) · Elev {Math.round(hud.elevation * 4)}m · {hud.weather.label} ({Math.round(hud.weather.ambientTempC)}°C)
                 </p>
               </div>
               <button
@@ -168,14 +172,16 @@ export function NavigationRadar({
                               <span>{lmDist} tiles</span>
                               {lm.hotspotCleared ? (
                                 <span className="inline-flex items-center gap-0.5 text-[#78c796]">
-                                  <CheckCircle2 className="w-3 h-3" /> Cleared
+                                  <CheckCircle2 className="w-3 h-3" /> {lm.kind === 'cave' ? 'Safe Shelter' : 'Cleared'}
                                 </span>
                               ) : lm.threatLevel === 'high' ? (
                                 <span className="inline-flex items-center gap-0.5 text-[#ff6e66]">
                                   <AlertTriangle className="w-3 h-3" /> Horde
                                 </span>
                               ) : (
-                                <span className="text-[#f0d078]">Active</span>
+                                <span className="text-[#f0d078]">
+                                  {lm.kind === 'cave' ? 'Cave Shelter' : lm.kind === 'tunnel' ? 'Road Tunnel' : 'Active'}
+                                </span>
                               )}
                             </div>
                           </div>
