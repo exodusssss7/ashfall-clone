@@ -1380,6 +1380,11 @@ export class ThreeIsometricRenderer {
               seal.position.set(cx, tileY + wallH * 0.5 - 0.1, cz);
               staticPropRoots.push(seal);
             };
+            // Support-spacing (user-approved 2026-11-20): only every ~3rd road crossing gets a
+            // dressed portal frame (legs + header); skipped crossings stay plain openings (no
+            // wall added, so the lane is never blocked - the opening exists with or without dressing).
+            const thinFrame = (fx: number, fz: number, alongX: boolean) =>
+              (alongX ? Math.round(fx) : Math.round(fz)) % 3 === 0;
             const addHeader = (cx: number, cz: number, alongX: boolean, fpsManaged: boolean) => {
               // Full portal frame: header above lane clearance + jamb stubs at both ends
               const header = new THREE.Mesh(new THREE.BoxGeometry(alongX ? 1.02 : 0.3, 0.55, alongX ? 0.3 : 1.02), tunnelRimMat);
@@ -1394,20 +1399,20 @@ export class ThreeIsometricRenderer {
             };
             if (tun.axis === 'ew') {
               if (!tunnelClaimedAt(gx, gy - 1)) {
-                if (roadAt(gx, gy - 1) && tun.isPortal) addHeader(gx + 0.5, gy + 0.05, true, false);
+                if (roadAt(gx, gy - 1) && tun.isPortal) { if (thinFrame(gx + 0.5, gy + 0.05, true)) addHeader(gx + 0.5, gy + 0.05, true, false); }
                 else addFullWall(gx + 0.5, gy + 0.05, true);
               }
               if (!tunnelClaimedAt(gx, gy + 1)) {
-                if (roadAt(gx, gy + 1) && tun.isPortal) addHeader(gx + 0.5, gy + 0.95, true, true);
+                if (roadAt(gx, gy + 1) && tun.isPortal) { if (thinFrame(gx + 0.5, gy + 0.95, true)) addHeader(gx + 0.5, gy + 0.95, true, true); }
                 else addCutawayWall(gx + 0.5, gy + 0.95, true);
               }
               // Step-corner seals where the bore's x edge steps with the curving road
               if (!tunnelClaimedAt(gx - 1, gy)) {
-                if (roadAt(gx - 1, gy) && tun.isPortal) addHeader(gx + 0.05, gy + 0.5, false, false);
+                if (roadAt(gx - 1, gy) && tun.isPortal) { if (thinFrame(gx + 0.05, gy + 0.5, false)) addHeader(gx + 0.05, gy + 0.5, false, false); }
                 else addFullWall(gx + 0.05, gy + 0.5, false);
               }
               if (!tunnelClaimedAt(gx + 1, gy)) {
-                if (roadAt(gx + 1, gy) && tun.isPortal) addHeader(gx + 0.95, gy + 0.5, false, true);
+                if (roadAt(gx + 1, gy) && tun.isPortal) { if (thinFrame(gx + 0.95, gy + 0.5, false)) addHeader(gx + 0.95, gy + 0.5, false, true); }
                 else addCutawayWall(gx + 0.95, gy + 0.5, false);
               }
               // Reinforced portal arch beam on tunnel entry/exit tiles
@@ -1418,20 +1423,20 @@ export class ThreeIsometricRenderer {
               }
             } else {
               if (!tunnelClaimedAt(gx - 1, gy)) {
-                if (roadAt(gx - 1, gy) && tun.isPortal) addHeader(gx + 0.05, gy + 0.5, false, false);
+                if (roadAt(gx - 1, gy) && tun.isPortal) { if (thinFrame(gx + 0.05, gy + 0.5, false)) addHeader(gx + 0.05, gy + 0.5, false, false); }
                 else addFullWall(gx + 0.05, gy + 0.5, false);
               }
               if (!tunnelClaimedAt(gx + 1, gy)) {
-                if (roadAt(gx + 1, gy) && tun.isPortal) addHeader(gx + 0.95, gy + 0.5, false, true);
+                if (roadAt(gx + 1, gy) && tun.isPortal) { if (thinFrame(gx + 0.95, gy + 0.5, false)) addHeader(gx + 0.95, gy + 0.5, false, true); }
                 else addCutawayWall(gx + 0.95, gy + 0.5, false);
               }
               // Step-corner seals where the bore's z edge steps with the curving road
               if (!tunnelClaimedAt(gx, gy - 1)) {
-                if (roadAt(gx, gy - 1) && tun.isPortal) addHeader(gx + 0.5, gy + 0.05, true, false);
+                if (roadAt(gx, gy - 1) && tun.isPortal) { if (thinFrame(gx + 0.5, gy + 0.05, true)) addHeader(gx + 0.5, gy + 0.05, true, false); }
                 else addFullWall(gx + 0.5, gy + 0.05, true);
               }
               if (!tunnelClaimedAt(gx, gy + 1)) {
-                if (roadAt(gx, gy + 1) && tun.isPortal) addHeader(gx + 0.5, gy + 0.95, true, true);
+                if (roadAt(gx, gy + 1) && tun.isPortal) { if (thinFrame(gx + 0.5, gy + 0.95, true)) addHeader(gx + 0.5, gy + 0.95, true, true); }
                 else addCutawayWall(gx + 0.5, gy + 0.95, true);
               }
               if (tun.isPortal) {
