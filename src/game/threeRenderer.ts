@@ -45,9 +45,10 @@ import {
 } from './lighting';
 import {
   getMacroRegionCave,
+  isTunnelClaimedCell,
+  isTunnelCoreCell,
   sampleBridgeInfo,
   sampleRoadTunnelInfo,
-  TUNNEL_HILL_THRESHOLD,
   sampleTerrainHeight,
   sampleTerrainMeshHeight,
   sampleTerrainSurface,
@@ -1189,25 +1190,13 @@ export class ThreeIsometricRenderer {
     const caveCutawayRimMat = this.factory.getMat('#93a0b2', { roughness: 0.76, metalness: 0.08 });
     const plinthStoneMat = this.factory.getMat('#393d42', { roughness: 0.96 });
 
-    // Render-only tunnel envelope: the bore (isTunnel) PLUS its portal aprons (isPortal band road
-    // cells) get the roof/wall envelope, so the envelope ends in a framed mouth at grade instead of
-    // stepping mid-run and opening daylight slits between wall segments. Render-only: gameplay
-    // collision/paths still read sampleRoadTunnelInfo directly.
-    const tunnelCoreAt = (tx: number, ty: number) => {
-      const t = sampleRoadTunnelInfo(seed, tx + 0.5, ty + 0.5);
-      return t.isTunnel || (t.isPortal && sampleRoadInfo(seed, tx, ty).isAnyRoad);
-    };
-    // One extra ring: highway cells on the hillside just below the portal band, adjacent to the
-    // core envelope, get roofed too so the bore narrows down to grade as a walled gallery instead
-    // of stepping open mid-run (roofY=0 marks the below-band branch; floorY/0.78 recovers rawHill).
-    const tunnelClaimedAt = (tx: number, ty: number) => {
-      if (tunnelCoreAt(tx, ty)) return true;
-      const t = sampleRoadTunnelInfo(seed, tx + 0.5, ty + 0.5);
-      if (t.roofY !== 0) return false;
-      if (!sampleRoadInfo(seed, tx, ty).isAnyRoad) return false;
-      if (t.floorY / 0.78 < TUNNEL_HILL_THRESHOLD - 0.55) return false;
-      return tunnelCoreAt(tx - 1, ty) || tunnelCoreAt(tx + 1, ty) || tunnelCoreAt(tx, ty - 1) || tunnelCoreAt(tx, ty + 1);
-    };
+    // Tunnel envelope: the bore (isTunnel) PLUS its portal aprons (isPortal band road cells) get
+    // the roof/wall envelope, so the envelope ends in a framed mouth at grade instead of stepping
+    // mid-run and opening daylight slits between wall segments. The classification lives in
+    // terrainSystem (isTunnelCoreCell/isTunnelClaimedCell) so gameplay collision matches these
+    // visible walls exactly.
+    const tunnelCoreAt = (tx: number, ty: number) => isTunnelCoreCell(seed, tx, ty);
+    const tunnelClaimedAt = (tx: number, ty: number) => isTunnelClaimedCell(seed, tx, ty);
     for (let ly = 0; ly < CHUNK_SIZE; ly++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
         const gx = startX + lx;

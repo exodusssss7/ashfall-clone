@@ -397,6 +397,59 @@ export function sampleRoadTunnelInfo(seed: number, wx: number, wy: number): {
 }
 
 /**
+ * Tunnel envelope cell classification shared by the renderer (threeRenderer) and movement
+ * collision, so visible solid walls and blocking always agree. A core cell is tunnel interior
+ * (bore plus portal-apron road cells).
+ */
+export function isTunnelCoreCell(seed: number, tx: number, ty: number): boolean {
+  const t = sampleRoadTunnelInfo(seed, tx + 0.5, ty + 0.5);
+  return t.isTunnel || (t.isPortal && sampleRoadInfo(seed, tx, ty).isAnyRoad);
+}
+
+/**
+ * Full claimed envelope: core cells plus the one-cell approach ring on the hillside just below the
+ * portal band that still gets roofed/walled (roofY=0 marks the below-band branch; floorY/0.78
+ * recovers rawHill).
+ */
+export function isTunnelClaimedCell(seed: number, tx: number, ty: number): boolean {
+  if (isTunnelCoreCell(seed, tx, ty)) return true;
+  const t = sampleRoadTunnelInfo(seed, tx + 0.5, ty + 0.5);
+  if (t.roofY !== 0) return false;
+  if (!sampleRoadInfo(seed, tx, ty).isAnyRoad) return false;
+  if (t.floorY / 0.78 < TUNNEL_HILL_THRESHOLD - 0.55) return false;
+  return (
+    isTunnelCoreCell(seed, tx - 1, ty) ||
+    isTunnelCoreCell(seed, tx + 1, ty) ||
+    isTunnelCoreCell(seed, tx, ty - 1) ||
+    isTunnelCoreCell(seed, tx, ty + 1)
+  );
+}
+
+// Renderer wall boxes on tunnel envelope edges are centered 0.05 inside the claimed cell with
+// 0.24 thickness: the solid slab reaches 0.17 into the claimed cell and 0.07 into the open cell.
+export const TUNNEL_WALL_FACE_CLAIMED = 0.17;
+export const TUNNEL_WALL_FACE_OPEN = 0.07;
+// Movement stops the point camera this far short of a wall slab so the FPS near plane (0.08)
+// never enters the mesh when hugging a wall.
+export const TUNNEL_WALL_CAMERA_CLEARANCE = 0.1;
+
+/**
+ * True where the renderer stands a solid wall on the shared edge of adjacent cells A and B:
+ * exactly one side is a claimed tunnel cell and the unclaimed side is not a designed opening
+ * (road cell in the portal band, matching the renderer's header/opening condition). This covers
+ * end seals where the road stops inside the envelope as well as side/corner seals.
+ */
+export function isTunnelEdgeWall(seed: number, ax: number, ay: number, bx: number, by: number): boolean {
+  const aClaimed = isTunnelClaimedCell(seed, ax, ay);
+  const bClaimed = isTunnelClaimedCell(seed, bx, by);
+  if (aClaimed === bClaimed) return false;
+  const ux = aClaimed ? bx : ax;
+  const uy = aClaimed ? by : ay;
+  const claimedTun = sampleRoadTunnelInfo(seed, (aClaimed ? ax : bx) + 0.5, (aClaimed ? ay : by) + 0.5);
+  return !(sampleRoadInfo(seed, ux, uy).isAnyRoad && claimedTun.isPortal);
+}
+
+/**
  * Returns true if tile (gx, gy) is a flanking tunnel retaining-wall shoulder adjacent to an active
  * highway road tunnel (marked solid so players/vehicles/zombies cannot clip sideways out of tunnels).
  */
@@ -648,6 +701,44 @@ export function isTerrainStepBlocked(
   if (!fromTun.isTunnel && !fromTun.isPortal && toTun.isTunnel) {
     const fromRoad = sampleRoadInfo(seed, fromX, fromY);
     if (!fromRoad.isMainHighway) return true;
+  }
+
+  // 2b. Keep movement out of the solid walls the renderer stands on tunnel envelope edges (end
+  // seals where the road stops inside the envelope, side/corner seals), both directions. The
+  // camera is a point, so it must stop at the wall's visible face (slab starts 0.17 inside the
+  // claimed cell / 0.07 inside the open cell, plus near-plane clearance), not at the cell
+  // boundary. Designed openings (road + portal band) have no wall and stay passable. A position
+  // already inside a slab (e.g. an old save) is never trapped: only entering is blocked.
+  {
+    const slabBlocked = (axis: 'x' | 'y', fromK: number, toK: number, fixed: number): boolean => {
+      if (fromK === toK) return false;
+      const dir = toK > fromK ? 1 : -1;
+      const fromCell = Math.floor(fromK);
+      const nCell = fromCell + dir;
+      const fixedCell = Math.floor(fixed);
+      const [aX, aY, bX, bY] =
+        axis === 'y'
+          ? [fixedCell, fromCell, fixedCell, nCell]
+          : [fromCell, fixedCell, nCell, fixedCell];
+      if (!isTunnelEdgeWall(seed, aX, aY, bX, bY)) return false;
+      const lowClaimed =
+        axis === 'y'
+          ? isTunnelClaimedCell(seed, fixedCell, Math.min(fromCell, nCell))
+          : isTunnelClaimedCell(seed, Math.min(fromCell, nCell), fixedCell);
+      const boundary = Math.max(fromCell, nCell);
+      const lo = boundary - (lowClaimed ? TUNNEL_WALL_FACE_CLAIMED : TUNNEL_WALL_FACE_OPEN);
+      const hi = boundary + (lowClaimed ? TUNNEL_WALL_FACE_OPEN : TUNNEL_WALL_FACE_CLAIMED);
+      const loLim = lo - TUNNEL_WALL_CAMERA_CLEARANCE;
+      const hiLim = hi + TUNNEL_WALL_CAMERA_CLEARANCE;
+      if (fromK <= loLim) return dir > 0 && toK > loLim;
+      if (fromK >= hiLim) return dir < 0 && toK < hiLim;
+      // from is inside the expanded slab (old save / teleport): allow only the shortest way out,
+      // never passage through to the far side.
+      const distLo = fromK - loLim;
+      const distHi = hiLim - fromK;
+      return distLo <= distHi ? dir > 0 : dir < 0;
+    };
+    if (slabBlocked('x', fromX, toX, fromY) || slabBlocked('y', fromY, toY, fromX)) return true;
   }
 
   // 3. Block climbing into/through cave walls (including low cutaway front walls) or steep vertical cliff jumps
