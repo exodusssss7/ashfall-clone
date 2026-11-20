@@ -2488,6 +2488,82 @@ function buildRockGraniteTexture(): THREE.CanvasTexture {
   return toNearestTexture(c);
 }
 
+
+function buildStoneMasonryTexture(): THREE.CanvasTexture {
+  // Coursed cut-stone tunnel lining: running-bond blocks, recessed mortar, warm gray stone
+  const [c, ctx] = makePixelCanvas(64, 64);
+  const rowH = 8, blockW = 16;
+  for (let row = 0; row < 8; row++) {
+    const off = row % 2 === 0 ? 0 : blockW / 2;
+    for (let bx = -1; bx < 5; bx++) {
+      const x0 = bx * blockW + off;
+      const tone = pxHash(bx + 31, row + 57, 211);
+      const base = tone < 0.3 ? '#7a7a76' : tone < 0.6 ? '#6d6d69' : tone < 0.85 ? '#82827c' : '#62625e';
+      for (let y = 0; y < rowH; y++) {
+        for (let x = 0; x < blockW; x++) {
+          const px = ((x0 + x) % 64 + 64) % 64;
+          const py = row * rowH + y;
+          let col = base;
+          if (y === 0 || x === 0) col = '#42423e'; // recessed mortar joint
+          else if (y === 1 || x === 1) col = '#4e4e4a'; // mortar shadow edge
+          else {
+            const n = pxHash(px, py, 223);
+            if (n > 0.95) col = '#8f8f89'; // light chip
+            else if (n < 0.05) col = '#585854'; // dark pit
+            else if (y === rowH - 1) col = '#5b5b57'; // block bottom shade
+          }
+          ctx.fillStyle = col;
+          ctx.fillRect(px, py, 1, 1);
+        }
+      }
+    }
+  }
+  return toNearestTexture(c, 1, 1);
+}
+
+function buildTunnelConcreteTexture(): THREE.CanvasTexture {
+  // Poured concrete panels: warm light gray, form lines, tie holes, speckle, hairline cracks
+  const [c, ctx] = makePixelCanvas(48, 48);
+  for (let y = 0; y < 48; y++) {
+    for (let x = 0; x < 48; x++) {
+      const n = pxHash(x, y, 307);
+      let col = n > 0.9 ? '#8e939a' : n < 0.1 ? '#757a81' : '#82868c';
+      if (y % 16 === 0) col = '#6a6f76'; // horizontal form seam
+      if (y % 16 === 1) col = '#8f949b'; // seam highlight
+      if (x % 24 === 0) col = '#6a6f76'; // vertical form seam
+      // form tie holes
+      if ((x % 24 === 12) && (y % 16 === 8)) col = '#5c6167';
+      if ((x % 24 === 12) && (y % 16 === 9)) col = '#6e7379';
+      // hairline crack
+      if (Math.abs(y - 30 - Math.sin(x * 0.35) * 2.5) < 0.7 && x > 8 && x < 40) col = '#61666d';
+      ctx.fillStyle = col;
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+  return toNearestTexture(c, 1, 1);
+}
+
+function buildTunnelConcreteSmoothTexture(): THREE.CanvasTexture {
+  // Smooth poured concrete for narrow jamb/column faces: fine isotropic aggregate
+  // speckle only - no form seams or tie holes (those stretch into plank-like grain
+  // on narrow faces at close range)
+  const [c, ctx] = makePixelCanvas(48, 48);
+  for (let y = 0; y < 48; y++) {
+    for (let x = 0; x < 48; x++) {
+      const n = pxHash(x, y, 911);
+      const m = pxHash(x, y, 912);
+      let col = '#7b7f86';
+      if (n > 0.82) col = '#888d94';
+      else if (n < 0.16) col = '#6e7279';
+      if (m > 0.965) col = '#62666d'; // sparse aggregate fleck
+      else if (m < 0.03) col = '#92979e'; // sparse light fleck
+      ctx.fillStyle = col;
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+  return toNearestTexture(c, 1, 1);
+}
+
 function buildFlameSpriteTexture(): THREE.CanvasTexture {
   const [c, ctx] = makePixelCanvas(32, 48);
   // Crisp serrated pixel-art flame silhouette with incandescent core & rising sparks
@@ -2657,6 +2733,10 @@ export class ThreePixelAtlas {
   public readonly contactShadowTex: THREE.CanvasTexture;
   public readonly tentTex: THREE.CanvasTexture;
   public readonly rockTex: THREE.CanvasTexture;
+  public readonly tunnelStoneTex: THREE.CanvasTexture;
+  public readonly tunnelStoneTallTex: THREE.CanvasTexture;
+  public readonly tunnelConcreteTex: THREE.CanvasTexture;
+  public readonly tunnelConcreteSmoothTex: THREE.CanvasTexture;
   public readonly roadSignTex: THREE.CanvasTexture;
   public readonly wreckedCarTex: THREE.CanvasTexture;
   public readonly wreckedCarTopTex: THREE.CanvasTexture;
@@ -2815,6 +2895,29 @@ export class ThreePixelAtlas {
     this.contactShadowTex = this.track(buildSoftContactShadowTexture());
     this.tentTex = this.track(buildTentCanvasTexture());
     this.rockTex = this.track(buildRockGraniteTexture());
+    this.tunnelStoneTex = this.track(buildStoneMasonryTexture());
+    {
+      const tall = buildStoneMasonryTexture();
+      tall.wrapS = THREE.RepeatWrapping; tall.wrapT = THREE.RepeatWrapping;
+      tall.repeat.set(0.5, 2);
+      // Glancing-angle antialiasing: crisp texels up close, averaged at grazing angles
+      tall.minFilter = THREE.LinearMipmapLinearFilter;
+      tall.generateMipmaps = true;
+      tall.anisotropy = 8;
+      tall.needsUpdate = true;
+      this.tunnelStoneTallTex = this.track(tall);
+    }
+    this.tunnelConcreteTex = this.track(buildTunnelConcreteTexture());
+    this.tunnelConcreteSmoothTex = this.track(buildTunnelConcreteSmoothTexture());
+    // Jamb faces are narrow and tall: repeat vertically so texels stay square-ish
+    this.tunnelConcreteSmoothTex.repeat.set(1, 8);
+    for (const t of [this.tunnelStoneTex, this.tunnelConcreteTex, this.tunnelConcreteSmoothTex]) {
+      t.minFilter = THREE.LinearMipmapLinearFilter;
+      t.generateMipmaps = true;
+      t.anisotropy = 8;
+      t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.RepeatWrapping;
+      t.needsUpdate = true;
+    }
     this.roadSignTex = this.track(buildRoadSignTexture());
     this.wreckedCarTex = this.track(buildWreckedCarTexture());
     this.wreckedCarTopTex = this.track(buildWreckedCarTopTexture());

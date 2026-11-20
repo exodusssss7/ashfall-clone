@@ -47,11 +47,12 @@ import {
   getMacroRegionCave,
   sampleBridgeInfo,
   sampleRoadTunnelInfo,
+  TUNNEL_HILL_THRESHOLD,
   sampleTerrainHeight,
   sampleTerrainMeshHeight,
   sampleTerrainSurface,
 } from './terrainSystem';
-import { sampleRiverInfo } from './worldGen';
+import { sampleRiverInfo, sampleRoadInfo } from './worldGen';
 import { getBuildTargetTile, getDaylightInfo } from './survivalLogic';
 import { getSettings } from './settings';
 import { STRUCTURES } from './recipes';
@@ -1170,9 +1171,11 @@ export class ThreeIsometricRenderer {
     const bridgeGirderMat = this.factory.getMat('#353b42', { roughness: 0.62, metalness: 0.45 });
     const bridgeRailMat = this.factory.getMat('#5a646e', { roughness: 0.68, metalness: 0.38 });
     const bridgeWoodMat = this.factory.getMat(0xffffff, { map: this.atlas.woodDarkTex, roughness: 0.9 });
-    const tunnelConcreteMat = this.factory.getMat('#5b636d', { roughness: 0.94, metalness: 0.05 });
-    const tunnelRimMat = this.factory.getMat('#8f99a6', { roughness: 0.78, metalness: 0.08 });
-    const tunnelDarkMat = this.factory.getMat('#49505a', { roughness: 0.98 });
+    const tunnelConcreteMat = this.factory.getMat(0xffffff, { map: this.atlas.tunnelConcreteTex, roughness: 0.92, metalness: 0.04 });
+    const tunnelJambMat = this.factory.getMat(0xffffff, { map: this.atlas.tunnelConcreteSmoothTex, roughness: 0.94, metalness: 0.03 });
+    const tunnelRimMat = this.factory.getMat('#a8b0ba', { roughness: 0.72, metalness: 0.08 });
+    const tunnelDarkMat = this.factory.getMat(0xffffff, { map: this.atlas.tunnelStoneTex, roughness: 0.96 });
+    const tunnelStoneTallMat = this.factory.getMat(0xffffff, { map: this.atlas.tunnelStoneTallTex, roughness: 0.96 });
     const tunnelLampMat = this.factory.getMat('#ffbe55', { emissive: '#ffaa33', emissiveIntensity: 2.1 });
     const caveRockMat = this.factory.getMat(0xffffff, { map: this.atlas.rockTex, roughness: 0.96 });
     const caveDarkMat = this.factory.getMat('#222730', { roughness: 0.98 });
@@ -1186,6 +1189,25 @@ export class ThreeIsometricRenderer {
     const caveCutawayRimMat = this.factory.getMat('#93a0b2', { roughness: 0.76, metalness: 0.08 });
     const plinthStoneMat = this.factory.getMat('#393d42', { roughness: 0.96 });
 
+    // Render-only tunnel envelope: the bore (isTunnel) PLUS its portal aprons (isPortal band road
+    // cells) get the roof/wall envelope, so the envelope ends in a framed mouth at grade instead of
+    // stepping mid-run and opening daylight slits between wall segments. Render-only: gameplay
+    // collision/paths still read sampleRoadTunnelInfo directly.
+    const tunnelCoreAt = (tx: number, ty: number) => {
+      const t = sampleRoadTunnelInfo(seed, tx + 0.5, ty + 0.5);
+      return t.isTunnel || (t.isPortal && sampleRoadInfo(seed, tx, ty).isAnyRoad);
+    };
+    // One extra ring: highway cells on the hillside just below the portal band, adjacent to the
+    // core envelope, get roofed too so the bore narrows down to grade as a walled gallery instead
+    // of stepping open mid-run (roofY=0 marks the below-band branch; floorY/0.78 recovers rawHill).
+    const tunnelClaimedAt = (tx: number, ty: number) => {
+      if (tunnelCoreAt(tx, ty)) return true;
+      const t = sampleRoadTunnelInfo(seed, tx + 0.5, ty + 0.5);
+      if (t.roofY !== 0) return false;
+      if (!sampleRoadInfo(seed, tx, ty).isAnyRoad) return false;
+      if (t.floorY / 0.78 < TUNNEL_HILL_THRESHOLD - 0.55) return false;
+      return tunnelCoreAt(tx - 1, ty) || tunnelCoreAt(tx + 1, ty) || tunnelCoreAt(tx, ty - 1) || tunnelCoreAt(tx, ty + 1);
+    };
     for (let ly = 0; ly < CHUNK_SIZE; ly++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
         const gx = startX + lx;
@@ -1291,53 +1313,102 @@ export class ThreeIsometricRenderer {
         // so flanking gallery floors get the same roof/walls instead of standing open to the sky.
         if (!isFlatOrigin) {
           const tun = sampleRoadTunnelInfo(seed, gx + 0.5, gy + 0.5);
-          if (tun.isTunnel) {
+          if (tunnelClaimedAt(gx, gy)) {
             if (gx + 0.5 < tunMinX) tunMinX = gx + 0.5;
             if (gx + 0.5 > tunMaxX) tunMaxX = gx + 0.5;
             if (gy + 0.5 < tunMinZ) tunMinZ = gy + 0.5;
             if (gy + 0.5 > tunMaxZ) tunMaxZ = gy + 0.5;
 
             const clearH = Math.max(2.6, tun.roofY - tileY);
+            // Slope the ceiling smoothly between neighbors instead of per-tile stair-step slabs
+            const clearAt = (tx: number, ty: number) => {
+              if (!tunnelClaimedAt(tx, ty)) return null;
+              const ti = sampleRoadTunnelInfo(seed, tx + 0.5, ty + 0.5);
+              return Math.max(2.6, ti.roofY - sampleTerrainSurface(seed, tx + 0.5, ty + 0.5).height);
+            };
+            const hPrev = tun.axis === 'ew' ? clearAt(gx - 1, gy) : clearAt(gx, gy - 1);
+            const hNext = tun.axis === 'ew' ? clearAt(gx + 1, gy) : clearAt(gx, gy + 1);
+            const slopeDh = ((hNext ?? clearH) - (hPrev ?? clearH)) / 2;
+            const wallH = Math.max(clearH, hPrev ?? 0, hNext ?? 0) + 0.3;
             const jitterH = ((Math.abs(gx * 7 + gy * 13)) % 4) * 0.08;
             const tRoot = new THREE.Group();
             tRoot.position.set(gx + 0.5, tileY, gy + 0.5);
-            // Concrete tunnel ceiling slab + staggered mountain overburden cap (zero Z-fighting)
-            // Slab extends downward enough to overlap the lowest adjacent tunnel ceiling, sealing
-            // daylight slots that otherwise open where the bore roof steps with the hillside.
+            // Concrete ceiling slab + staggered overburden cap; slab extends downward enough to
+            // overlap the lowest adjacent ceiling, sealing daylight slots at roof steps.
             let slabDrop = 0;
             for (const [nx, ny] of [[gx - 1, gy], [gx + 1, gy], [gx, gy - 1], [gx, gy + 1]]) {
+              if (!tunnelClaimedAt(nx, ny)) continue;
               const tn = sampleRoadTunnelInfo(seed, nx + 0.5, ny + 0.5);
-              if (!tn.isTunnel) continue;
               const nClear = Math.max(2.6, tn.roofY - sampleTerrainSurface(seed, nx + 0.5, ny + 0.5).height);
               slabDrop = Math.max(slabDrop, clearH - nClear - 0.36);
             }
             slabDrop = Math.max(0, slabDrop);
-            const slabH = 0.36 + slabDrop;
-            const ceiling = new THREE.Mesh(new THREE.BoxGeometry(1.005, slabH, 1.005), tunnelConcreteMat);
+            const slabH = 0.36 + slabDrop + Math.abs(slopeDh);
+            // Slabs overlap along the bore axis so tilted neighbors never open wedge seams
+            const slabLen = 1.005 + 1.4;
+            const ceiling = new THREE.Mesh(
+              tun.axis === 'ew' ? new THREE.BoxGeometry(slabLen, slabH, 1.005) : new THREE.BoxGeometry(1.005, slabH, slabLen),
+              tunnelConcreteMat);
             ceiling.position.set(0, clearH + 0.18 - slabH * 0.5, 0);
+            if (tun.axis === 'ew') ceiling.rotation.z = Math.atan(slopeDh);
+            else ceiling.rotation.x = -Math.atan(slopeDh);
             const burdenH = 0.82 + jitterH;
-            const burden = new THREE.Mesh(new THREE.BoxGeometry(1.005, burdenH, 1.005), caveRockMat);
-            burden.position.set(0, clearH + 0.18 + burdenH * 0.5, 0);
+            const burden = new THREE.Mesh(
+              tun.axis === 'ew' ? new THREE.BoxGeometry(slabLen, burdenH, 1.005) : new THREE.BoxGeometry(1.005, burdenH, slabLen),
+              caveRockMat);
+            burden.position.set(0, clearH + 0.18 + burdenH * 0.5 + Math.abs(slopeDh) * 0.5, 0);
             tRoot.add(ceiling, burden);
 
-            // Side retaining walls: back wall stays permanent full height; camera-facing (+Z/+X) wall cuts away cleanly in ISO!
+            // Stone-lined retaining walls. Camera-facing (+Z/+X) sides keep the ISO cutaway
+            // (low curb + rim permanent, upper wall FPS-only). Where the envelope edge steps with
+            // the curving road, cross walls seal hillside corners; where the highway lane itself
+            // crosses the face, a framed header leaves a designed opening (no wall across the lane).
+            const roadAt = (tx: number, ty: number) => sampleRoadInfo(seed, tx, ty).isAnyRoad;
+            const addCutawayWall = (cx: number, cz: number, alongX: boolean) => {
+              const low = new THREE.Mesh(new THREE.BoxGeometry(alongX ? 1.01 : 0.24, 0.56, alongX ? 0.24 : 1.01), tunnelDarkMat);
+              low.position.set(cx, tileY + 0.28, cz);
+              const rim = new THREE.Mesh(new THREE.BoxGeometry(alongX ? 1.02 : 0.28, 0.09, alongX ? 0.28 : 1.02), tunnelRimMat);
+              rim.position.set(cx, tileY + 0.59, cz);
+              staticPropRoots.push(low, rim);
+              const upperH = Math.max(0.5, wallH - 0.75);
+              const up = new THREE.Mesh(new THREE.BoxGeometry(alongX ? 1.01 : 0.24, upperH, alongX ? 0.24 : 1.01), tunnelStoneTallMat);
+              up.position.set(cx, tileY + 0.62 + upperH * 0.5, cz);
+              tunnelFpsWallRoots.push(up);
+            };
+            const addFullWall = (cx: number, cz: number, alongX: boolean) => {
+              const seal = new THREE.Mesh(new THREE.BoxGeometry(alongX ? 1.01 : 0.24, wallH + 0.25, alongX ? 0.24 : 1.01), tunnelStoneTallMat);
+              seal.position.set(cx, tileY + wallH * 0.5 - 0.1, cz);
+              staticPropRoots.push(seal);
+            };
+            const addHeader = (cx: number, cz: number, alongX: boolean, fpsManaged: boolean) => {
+              // Full portal frame: header above lane clearance + jamb stubs at both ends
+              const header = new THREE.Mesh(new THREE.BoxGeometry(alongX ? 1.02 : 0.3, 0.55, alongX ? 0.3 : 1.02), tunnelRimMat);
+              header.position.set(cx, tileY + wallH - 0.5, cz);
+              const jambGeo = new THREE.BoxGeometry(alongX ? 0.26 : 0.3, wallH + 0.1, alongX ? 0.3 : 0.26);
+              const j1 = new THREE.Mesh(jambGeo, tunnelJambMat);
+              const j2 = new THREE.Mesh(jambGeo, tunnelJambMat);
+              if (alongX) { j1.position.set(cx - 0.44, tileY + wallH * 0.5 - 0.05, cz); j2.position.set(cx + 0.44, tileY + wallH * 0.5 - 0.05, cz); }
+              else { j1.position.set(cx, tileY + wallH * 0.5 - 0.05, cz - 0.44); j2.position.set(cx, tileY + wallH * 0.5 - 0.05, cz + 0.44); }
+              (fpsManaged ? tunnelFpsWallRoots : staticPropRoots).push(header);
+              staticPropRoots.push(j1, j2);
+            };
             if (tun.axis === 'ew') {
-              if (!sampleRoadTunnelInfo(seed, gx + 0.5, gy - 0.5).isTunnel) {
-                const wN = new THREE.Mesh(new THREE.BoxGeometry(1.01, clearH + 0.25, 0.24), tunnelDarkMat);
-                wN.position.set(gx + 0.5, tileY + clearH * 0.5, gy + 0.05);
-                staticPropRoots.push(wN);
+              if (!tunnelClaimedAt(gx, gy - 1)) {
+                if (roadAt(gx, gy - 1) && tun.isPortal) addHeader(gx + 0.5, gy + 0.05, true, false);
+                else addFullWall(gx + 0.5, gy + 0.05, true);
               }
-              if (!sampleRoadTunnelInfo(seed, gx + 0.5, gy + 1.5).isTunnel) {
-                const lowS = new THREE.Mesh(new THREE.BoxGeometry(1.01, 0.56, 0.24), tunnelDarkMat);
-                lowS.position.set(gx + 0.5, tileY + 0.28, gy + 0.95);
-                const rimS = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.09, 0.28), tunnelRimMat);
-                rimS.position.set(gx + 0.5, tileY + 0.59, gy + 0.95);
-                staticPropRoots.push(lowS, rimS);
-
-                const upperH = Math.max(0.5, clearH - 0.45);
-                const upS = new THREE.Mesh(new THREE.BoxGeometry(1.01, upperH, 0.24), tunnelDarkMat);
-                upS.position.set(gx + 0.5, tileY + 0.62 + upperH * 0.5, gy + 0.95);
-                tunnelFpsWallRoots.push(upS);
+              if (!tunnelClaimedAt(gx, gy + 1)) {
+                if (roadAt(gx, gy + 1) && tun.isPortal) addHeader(gx + 0.5, gy + 0.95, true, true);
+                else addCutawayWall(gx + 0.5, gy + 0.95, true);
+              }
+              // Step-corner seals where the bore's x edge steps with the curving road
+              if (!tunnelClaimedAt(gx - 1, gy)) {
+                if (roadAt(gx - 1, gy) && tun.isPortal) addHeader(gx + 0.05, gy + 0.5, false, false);
+                else addFullWall(gx + 0.05, gy + 0.5, false);
+              }
+              if (!tunnelClaimedAt(gx + 1, gy)) {
+                if (roadAt(gx + 1, gy) && tun.isPortal) addHeader(gx + 0.95, gy + 0.5, false, true);
+                else addCutawayWall(gx + 0.95, gy + 0.5, false);
               }
               // Reinforced portal arch beam on tunnel entry/exit tiles
               if (tun.isPortal) {
@@ -1346,22 +1417,22 @@ export class ThreeIsometricRenderer {
                 tRoot.add(beam);
               }
             } else {
-              if (!sampleRoadTunnelInfo(seed, gx - 0.5, gy + 0.5).isTunnel) {
-                const wW = new THREE.Mesh(new THREE.BoxGeometry(0.24, clearH + 0.25, 1.01), tunnelDarkMat);
-                wW.position.set(gx + 0.05, tileY + clearH * 0.5, gy + 0.5);
-                staticPropRoots.push(wW);
+              if (!tunnelClaimedAt(gx - 1, gy)) {
+                if (roadAt(gx - 1, gy) && tun.isPortal) addHeader(gx + 0.05, gy + 0.5, false, false);
+                else addFullWall(gx + 0.05, gy + 0.5, false);
               }
-              if (!sampleRoadTunnelInfo(seed, gx + 1.5, gy + 0.5).isTunnel) {
-                const lowE = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.56, 1.01), tunnelDarkMat);
-                lowE.position.set(gx + 0.95, tileY + 0.28, gy + 0.5);
-                const rimE = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.09, 1.02), tunnelRimMat);
-                rimE.position.set(gx + 0.95, tileY + 0.59, gy + 0.5);
-                staticPropRoots.push(lowE, rimE);
-
-                const upperH = Math.max(0.5, clearH - 0.45);
-                const upE = new THREE.Mesh(new THREE.BoxGeometry(0.24, upperH, 1.01), tunnelDarkMat);
-                upE.position.set(gx + 0.95, tileY + 0.62 + upperH * 0.5, gy + 0.5);
-                tunnelFpsWallRoots.push(upE);
+              if (!tunnelClaimedAt(gx + 1, gy)) {
+                if (roadAt(gx + 1, gy) && tun.isPortal) addHeader(gx + 0.95, gy + 0.5, false, true);
+                else addCutawayWall(gx + 0.95, gy + 0.5, false);
+              }
+              // Step-corner seals where the bore's z edge steps with the curving road
+              if (!tunnelClaimedAt(gx, gy - 1)) {
+                if (roadAt(gx, gy - 1) && tun.isPortal) addHeader(gx + 0.5, gy + 0.05, true, false);
+                else addFullWall(gx + 0.5, gy + 0.05, true);
+              }
+              if (!tunnelClaimedAt(gx, gy + 1)) {
+                if (roadAt(gx, gy + 1) && tun.isPortal) addHeader(gx + 0.5, gy + 0.95, true, true);
+                else addCutawayWall(gx + 0.5, gy + 0.95, true);
               }
               if (tun.isPortal) {
                 const beam = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.42, 0.38), tunnelRimMat);
