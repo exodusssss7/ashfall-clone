@@ -293,7 +293,7 @@ export function applyWeatherAndShelterLighting(
     const dim = isFps
       ? shelterKind === 'cave'
         ? 0.72
-        : 0.58
+        : 0.46
       : shelterKind === 'cave'
         ? 0.36
         : 0.30;

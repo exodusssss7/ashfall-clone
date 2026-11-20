@@ -25,6 +25,8 @@ export interface RockyCavePlan {
   chamberRadius: number;
   /** Direction the cave mouth opens toward ('s' = +Y, 'e' = +X) */
   mouthDir: 's' | 'e';
+  /** Mouth corridor length in tiles from chamber center (5.2 base, extended per-cave until the mouth reaches open terrain) */
+  mouthLen: number;
   floorY: number;
   roofY: number;
   shelterBounds: { minX: number; maxX: number; minY: number; maxY: number };
@@ -188,6 +190,7 @@ export function getMacroRegionCave(seed: number, rx: number, ry: number): RockyC
     gy: best.gy,
     chamberRadius,
     mouthDir,
+    mouthLen: 5.2,
     floorY,
     roofY,
     shelterBounds: {
@@ -199,7 +202,72 @@ export function getMacroRegionCave(seed: number, rx: number, ry: number): RockyC
   };
 
   cavePlanCache.set(cacheKey, plan);
+
+  // Guarantee the mouth corridor actually reaches open terrain. Some hillsides stamp an impassable
+  // cliff band right past the default 5.2-tile mouth, sealing the cave. Only caves that are truly
+  // sealed get their corridor extended (deterministically, terrain-driven, no RNG), half a tile at
+  // a time, until the chamber connects to the open map. Safe from recursion: the plan is already
+  // cached, so terrain sampling here never re-enters this computation.
+  while (plan.mouthLen < 12.2 && isCaveMouthSealed(seed, plan)) {
+    plan.mouthLen += 0.5;
+  }
+
   return plan;
+}
+
+/**
+ * True when no walkable route exists from the cave's mouth out to open terrain (distance > 9.5
+ * from the chamber center). Walkability mirrors the game's movement rules: a point is blocked
+ * when its surface is impassable cliff (the same predicate that stamps solid cliff_stone), and a
+ * 0.5-tile step between neighbors must pass the same 0.68 height-step rule actors use.
+ */
+function isCaveMouthSealed(seed: number, cave: RockyCavePlan): boolean {
+  const ccx = cave.gx + 0.5;
+  const ccy = cave.gy + 0.5;
+  const step = 0.5;
+  // Box trails 10 tiles behind the chamber (escapes can wrap around the hill shoulder) and
+  // reaches 14.5 along the mouth direction, 10 to each side
+  const inBox = (x: number, y: number) =>
+    cave.mouthDir === 'e'
+      ? x >= ccx - 10 && x <= ccx + 14.5 && y >= ccy - 10 && y <= ccy + 10
+      : x >= ccx - 10 && x <= ccx + 10 && y >= ccy - 10 && y <= ccy + 14.5;
+  const key = (ix: number, iy: number) => `${ix},${iy}`;
+  const walkable = (ix: number, iy: number) => {
+    const x = ccx + ix * step;
+    const y = ccy + iy * step;
+    if (!inBox(x, y)) return false;
+    // Snap to the owning cell's center: cliff_stone stamping is decided at cell centers,
+    // so point-sampling slope between cells would leak through walls the cell grid blocks
+    return !sampleTerrainSurface(seed, Math.floor(x) + 0.5, Math.floor(y) + 0.5).isCliff;
+  };
+  const startIx = Math.round((cave.mouthDir === 'e' ? 2 : 0) / step);
+  const startIy = Math.round((cave.mouthDir === 's' ? 2 : 0) / step);
+  if (!walkable(startIx, startIy)) return true;
+  const seen = new Set<string>([key(startIx, startIy)]);
+  const queue: Array<[number, number]> = [[startIx, startIy]];
+  while (queue.length > 0) {
+    const [ix, iy] = queue.pop()!;
+    const x = ccx + ix * step;
+    const y = ccy + iy * step;
+    // Reached open terrain: far enough out and genuinely outside the cave's own carved mouth/interior
+    if (Math.hypot(x - ccx, y - ccy) > 8.6) {
+      const s = sampleTerrainSurface(seed, x, y);
+      if (!s.isCave && !s.isCaveMouth) return false;
+    }
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = ix + dx;
+      const ny = iy + dy;
+      const k = key(nx, ny);
+      if (seen.has(k)) continue;
+      const wx = ccx + nx * step;
+      const wy = ccy + ny * step;
+      if (!walkable(nx, ny)) continue;
+      if (isTerrainStepBlocked(seed, x, y, wx, wy, 0.68)) continue;
+      seen.add(k);
+      queue.push([nx, ny]);
+    }
+  }
+  return true;
 }
 
 /**
@@ -229,12 +297,13 @@ export function findRockyCaveAt(seed: number, wx: number, wy: number): {
       const dx = wx - (cave.gx + 0.5);
       const dy = wy - (cave.gy + 0.5);
       const d = Math.hypot(dx, dy);
-      if (d > 8.5) continue;
+      // Mouth corridors can extend up to 12.2 tiles on sealed caves, so the query window must cover that reach
+      if (d > 12.6) continue;
 
       const inMouth =
         cave.mouthDir === 's'
-          ? dy >= 1.5 && dy <= 5.2 && Math.abs(dx) <= 1.55
-          : dx >= 1.5 && dx <= 5.2 && Math.abs(dy) <= 1.55;
+          ? dy >= 1.5 && dy <= cave.mouthLen && Math.abs(dx) <= 1.55
+          : dx >= 1.5 && dx <= cave.mouthLen && Math.abs(dy) <= 1.55;
 
       const inCoveredMouth =
         cave.mouthDir === 's'

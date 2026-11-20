@@ -1170,9 +1170,9 @@ export class ThreeIsometricRenderer {
     const bridgeGirderMat = this.factory.getMat('#353b42', { roughness: 0.62, metalness: 0.45 });
     const bridgeRailMat = this.factory.getMat('#5a646e', { roughness: 0.68, metalness: 0.38 });
     const bridgeWoodMat = this.factory.getMat(0xffffff, { map: this.atlas.woodDarkTex, roughness: 0.9 });
-    const tunnelConcreteMat = this.factory.getMat('#3b4047', { roughness: 0.94, metalness: 0.05 });
+    const tunnelConcreteMat = this.factory.getMat('#5b636d', { roughness: 0.94, metalness: 0.05 });
     const tunnelRimMat = this.factory.getMat('#8f99a6', { roughness: 0.78, metalness: 0.08 });
-    const tunnelDarkMat = this.factory.getMat('#22262c', { roughness: 0.98 });
+    const tunnelDarkMat = this.factory.getMat('#49505a', { roughness: 0.98 });
     const tunnelLampMat = this.factory.getMat('#ffbe55', { emissive: '#ffaa33', emissiveIntensity: 2.1 });
     const caveRockMat = this.factory.getMat(0xffffff, { map: this.atlas.rockTex, roughness: 0.96 });
     const caveDarkMat = this.factory.getMat('#222730', { roughness: 0.98 });
@@ -1287,7 +1287,9 @@ export class ThreeIsometricRenderer {
         }
 
         // 3D Highway Road Tunnel concrete vault, staggered rocky mountain overburden, portal arches & ISO cutaway curbs
-        if (!isFlatOrigin && (cell.tile === 'road' || cell.tile === 'asphalt_cracked')) {
+        // Covers every tile the bore claims (road lanes AND walkable shoulder strips), not just road tiles,
+        // so flanking gallery floors get the same roof/walls instead of standing open to the sky.
+        if (!isFlatOrigin) {
           const tun = sampleRoadTunnelInfo(seed, gx + 0.5, gy + 0.5);
           if (tun.isTunnel) {
             if (gx + 0.5 < tunMinX) tunMinX = gx + 0.5;
@@ -1300,8 +1302,19 @@ export class ThreeIsometricRenderer {
             const tRoot = new THREE.Group();
             tRoot.position.set(gx + 0.5, tileY, gy + 0.5);
             // Concrete tunnel ceiling slab + staggered mountain overburden cap (zero Z-fighting)
-            const ceiling = new THREE.Mesh(new THREE.BoxGeometry(1.005, 0.36, 1.005), tunnelConcreteMat);
-            ceiling.position.set(0, clearH, 0);
+            // Slab extends downward enough to overlap the lowest adjacent tunnel ceiling, sealing
+            // daylight slots that otherwise open where the bore roof steps with the hillside.
+            let slabDrop = 0;
+            for (const [nx, ny] of [[gx - 1, gy], [gx + 1, gy], [gx, gy - 1], [gx, gy + 1]]) {
+              const tn = sampleRoadTunnelInfo(seed, nx + 0.5, ny + 0.5);
+              if (!tn.isTunnel) continue;
+              const nClear = Math.max(2.6, tn.roofY - sampleTerrainSurface(seed, nx + 0.5, ny + 0.5).height);
+              slabDrop = Math.max(slabDrop, clearH - nClear - 0.36);
+            }
+            slabDrop = Math.max(0, slabDrop);
+            const slabH = 0.36 + slabDrop;
+            const ceiling = new THREE.Mesh(new THREE.BoxGeometry(1.005, slabH, 1.005), tunnelConcreteMat);
+            ceiling.position.set(0, clearH + 0.18 - slabH * 0.5, 0);
             const burdenH = 0.82 + jitterH;
             const burden = new THREE.Mesh(new THREE.BoxGeometry(1.005, burdenH, 1.005), caveRockMat);
             burden.position.set(0, clearH + 0.18 + burdenH * 0.5, 0);
@@ -1358,7 +1371,7 @@ export class ThreeIsometricRenderer {
             }
 
             // Warm amber ceiling work lamps spaced down the tunnel centerline
-            if ((gx + gy) % 5 === 0 && (tun.axis === 'ew' ? gy % 2 === 0 : gx % 2 === 0)) {
+            if ((gx + gy) % 4 === 0 && (tun.axis === 'ew' ? gy % 2 === 0 : gx % 2 === 0)) {
               const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.08, 0.14), tunnelLampMat);
               lamp.position.set(0, clearH - 0.2, 0);
               tRoot.add(lamp);
@@ -1367,8 +1380,8 @@ export class ThreeIsometricRenderer {
                 y: tileY + clearH - 0.38,
                 z: gy + 0.5,
                 color: 0xffb347,
-                intensity: 3.1,
-                distance: 9.0,
+                intensity: 4.4,
+                distance: 10.5,
                 flicker: false,
               });
             }
@@ -1988,7 +2001,8 @@ export class ThreeIsometricRenderer {
             state.player.x <= sr.maxX + pad &&
             state.player.y >= sr.minZ - pad &&
             state.player.y <= sr.maxZ + pad;
-          const targetOp = nearOrInside ? 0 : sr.kind === 'cave' ? 0.42 : 0.78;
+          // Keep occluding cave/tunnel roofs at 30% opacity when near/inside (never fully transparent)
+          const targetOp = nearOrInside ? 0.3 : sr.kind === 'cave' ? 0.42 : 0.78;
           sr.currentOpacity += (targetOp - sr.currentOpacity) * fadeLerp;
           if (Math.abs(sr.currentOpacity - targetOp) < 0.01) {
             sr.currentOpacity = targetOp;
