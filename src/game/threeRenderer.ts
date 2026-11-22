@@ -1631,7 +1631,10 @@ export class ThreeIsometricRenderer {
         caveWallRoot.position.set(caveCX, cave.floorY, caveCZ);
         const caveFpsWallRoots: THREE.Object3D[] = [];
         const segCount = 16;
-        const wallR = cave.chamberRadius + 0.52;
+        // Keep every wall-segment inner face clear of the walkable chamber interior (chamberRadius):
+        // the deepest box reaches 0.63 inward from wallR, so 0.80 leaves a 0.17 safety margin and
+        // the FPS camera can never end up inside the rock architecture (which rendered as a void).
+        const wallR = cave.chamberRadius + 0.80;
         const mouthAngle = cave.mouthDir === 's' ? Math.PI * 0.5 : 0;
 
         for (let s = 0; s < segCount; s++) {
@@ -1761,19 +1764,21 @@ export class ThreeIsometricRenderer {
         const mouthRoot = new THREE.Group();
         mouthRoot.position.set(caveCX, cave.floorY, caveCZ);
         if (cave.mouthDir === 's') {
+          // Jambs sit outside the walkable mouth corridor (|dx| <= 1.55) with margin so the FPS
+          // camera cannot clip inside the timber (which rendered as a black see-through slab).
           const pL = new THREE.Mesh(new THREE.BoxGeometry(0.45, roofH, 0.55), bridgeWoodMat);
-          pL.position.set(-1.65, roofH * 0.5, 3.15);
+          pL.position.set(-1.95, roofH * 0.5, 3.15);
           const pR = new THREE.Mesh(new THREE.BoxGeometry(0.45, roofH, 0.55), bridgeWoodMat);
-          pR.position.set(1.65, roofH * 0.5, 3.15);
-          const lintel = new THREE.Mesh(new THREE.BoxGeometry(3.85, 0.36, 0.65), bridgeWoodMat);
+          pR.position.set(1.95, roofH * 0.5, 3.15);
+          const lintel = new THREE.Mesh(new THREE.BoxGeometry(4.35, 0.36, 0.65), bridgeWoodMat);
           lintel.position.set(0, roofH - 0.12, 3.15);
           mouthRoot.add(pL, pR, lintel);
         } else {
           const pN = new THREE.Mesh(new THREE.BoxGeometry(0.55, roofH, 0.45), bridgeWoodMat);
-          pN.position.set(3.15, roofH * 0.5, -1.65);
+          pN.position.set(3.15, roofH * 0.5, -1.95);
           const pS = new THREE.Mesh(new THREE.BoxGeometry(0.55, roofH, 0.45), bridgeWoodMat);
-          pS.position.set(3.15, roofH * 0.5, 1.65);
-          const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.36, 3.85), bridgeWoodMat);
+          pS.position.set(3.15, roofH * 0.5, 1.95);
+          const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.36, 4.35), bridgeWoodMat);
           lintel.position.set(3.15, roofH - 0.12, 0);
           mouthRoot.add(pN, pS, lintel);
         }

@@ -238,7 +238,7 @@ export const GameHud: React.FC<GameHudProps> = ({
   const bestFood = pickBestFoodConsumable(hud.inventory) ?? 'food';
 
   const hotbar = hud.hotbar ?? { slots: new Array<HotbarSlotValue>(14).fill(null), expanded: false };
-  const row1Slots = hotbar.slots.slice(0, 7);
+  const row1Slots = hotbar.slots.slice(0, 5);
   const row2Slots = hotbar.slots.slice(7, 14);
   const row2FilledCount = countRowAssignedSlots(hotbar, 2);
 
@@ -1105,7 +1105,7 @@ export const GameHud: React.FC<GameHudProps> = ({
 
                   <div
                     role="region"
-                    aria-label="Primary Hotbar Row (Slots 1 to 7)"
+                    aria-label="Primary Hotbar Row (Slots 1 to 5)"
                     data-testid="hotbar-row-1"
                     className="equipment-bar hotbar-row-1 flex items-center gap-1 md:gap-1.5"
                   >

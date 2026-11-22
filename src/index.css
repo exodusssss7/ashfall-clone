@@ -1634,3 +1634,6 @@ html[data-skin="a"] .pack-dialog {
   }
 }
 
+
+/* v1.9.5: five-slot primary hotbar fits the fixed-width touch bar without scrolling */
+html[data-skin="a"] .game-hud[data-touch="true"] .hotbar-row-1.equipment-bar>button { flex:1 1 0 !important; min-width:0 !important; width:auto !important; }

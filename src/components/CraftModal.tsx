@@ -783,7 +783,7 @@ export function CraftModal({
                   </div>
 
                   {renderDockRow([7, 8, 9, 10, 11, 12, 13], 'R2')}
-                  {renderDockRow([0, 1, 2, 3, 4, 5, 6], 'R1')}
+                  {renderDockRow([0, 1, 2, 3, 4], 'R1')}
                 </section>
               </div>
 
