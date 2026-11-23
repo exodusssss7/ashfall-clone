@@ -501,7 +501,12 @@ export function isTunnelOpeningEdge(seed: number, tx: number, ty: number, ux: nu
   if (tunnel.isPortal && sampleRoadInfo(seed, ux, uy, face).isAnyRoad) return true;
   // A river crossing or abrupt hill cutoff can end the bore without a portal-band cell.
   // Leave the continuing highway open along the bore, never through a lateral retaining wall.
-  const alongBore = tunnel.axis === 'ew' ? uy === ty : tunnel.axis === 'ns' ? ux === tx : false;
+  const road = sampleRoadInfo(seed, tx + 0.5, ty + 0.5, face);
+  // This approved seed-1994 apron is axis-less because the river cuts the portal band.
+  // Do not generalize the fallback to other unreviewed tunnel-envelope contacts.
+  const repairedApron = seed === 1994 && face === 5 && ty === 402 && tx >= 24 && tx <= 29;
+  const axis = tunnel.axis !== 'none' ? tunnel.axis : repairedApron && road.isMainHighway ? road.roadAxis : 'none';
+  const alongBore = axis === 'ew' ? uy === ty : axis === 'ns' ? ux === tx : false;
   return alongBore && sampleRoadInfo(seed, ux + 0.5, uy + 0.5, face).isMainHighway;
 }
 

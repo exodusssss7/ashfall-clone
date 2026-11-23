@@ -1,3 +1,4 @@
+import { isRemovedTunnelGuardhouse } from './tunnelGuardhouseRepair';
 import {
   CUBE_FACE_SIZE,
   PLANET_RADIUS_TILES,
@@ -1702,49 +1703,51 @@ export function generateOuterChunk(
       }
 
       // Compact brick guardhouse tucked beside checkpoint shoulder (gx + 3..7, gy - 6..-2)
-      const guardhouse: BuildingSpec = {
-        x0: poi.gx + 3,
-        y0: poi.gy - 6,
-        w: 5,
-        h: 5,
-        wallType: 'wall_brick',
-        floorType: 'tile_clinic',
-        porch: { x0: poi.gx + 4, y0: poi.gy - 1, w: 3, h: 1 },
-        doors: [{ gx: poi.gx + 5, gy: poi.gy - 2, orientation: 'ew', status: 'locked' }],
-        props: [
-          {
-            gx: poi.gx + 4,
-            gy: poi.gy - 5,
-            prop: 'med_cabinet',
-            lootKind: 'med_cabinet',
-            lootItems: { bandage: 2, water: 2, cloth: 2 },
-          },
-          {
-            gx: poi.gx + 6,
-            gy: poi.gy - 5,
-            prop: 'crate_military',
-            lootKind: 'crate_military',
-            lootItems: { ammo_9mm: 8, ammo_shell: 4, fuel: 1 },
-          },
-        ],
-      };
-      for (let y = guardhouse.y0 - 1; y <= guardhouse.y0 + guardhouse.h + 1; y++) {
-        for (let x = guardhouse.x0 - 1; x <= guardhouse.x0 + guardhouse.w; x++) {
-          setLocal(x, y, (cell) => {
-            if (cell.tile === 'water') cell.tile = 'dirt';
-            cell.prop = 'none';
-            cell.solid = false;
-            cell.blocksSight = false;
-          });
+      if (!isRemovedTunnelGuardhouse(store.seed, rFace, poi.gx, poi.gy)) {
+        const guardhouse: BuildingSpec = {
+          x0: poi.gx + 3,
+          y0: poi.gy - 6,
+          w: 5,
+          h: 5,
+          wallType: 'wall_brick',
+          floorType: 'tile_clinic',
+          porch: { x0: poi.gx + 4, y0: poi.gy - 1, w: 3, h: 1 },
+          doors: [{ gx: poi.gx + 5, gy: poi.gy - 2, orientation: 'ew', status: 'locked' }],
+          props: [
+            {
+              gx: poi.gx + 4,
+              gy: poi.gy - 5,
+              prop: 'med_cabinet',
+              lootKind: 'med_cabinet',
+              lootItems: { bandage: 2, water: 2, cloth: 2 },
+            },
+            {
+              gx: poi.gx + 6,
+              gy: poi.gy - 5,
+              prop: 'crate_military',
+              lootKind: 'crate_military',
+              lootItems: { ammo_9mm: 8, ammo_shell: 4, fuel: 1 },
+            },
+          ],
+        };
+        for (let y = guardhouse.y0 - 1; y <= guardhouse.y0 + guardhouse.h + 1; y++) {
+          for (let x = guardhouse.x0 - 1; x <= guardhouse.x0 + guardhouse.w; x++) {
+            setLocal(x, y, (cell) => {
+              if (cell.tile === 'water') cell.tile = 'dirt';
+              cell.prop = 'none';
+              cell.solid = false;
+              cell.blocksSight = false;
+            });
+          }
         }
+        protectedBounds = {
+          x0: guardhouse.x0 - 1,
+          y0: guardhouse.y0 - 1,
+          x1: guardhouse.x0 + guardhouse.w,
+          y1: guardhouse.y0 + guardhouse.h + 1,
+        };
+        applyBuildingToSetter(setLocal, guardhouse, doors, containers);
       }
-      protectedBounds = {
-        x0: guardhouse.x0 - 1,
-        y0: guardhouse.y0 - 1,
-        x1: guardhouse.x0 + guardhouse.w,
-        y1: guardhouse.y0 + guardhouse.h + 1,
-      };
-      applyBuildingToSetter(setLocal, guardhouse, doors, containers);
 
       if (poi.includeDrivableCar) {
         const vx = poi.gx - 4;

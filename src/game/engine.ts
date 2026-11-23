@@ -1,3 +1,4 @@
+import { removeObsoleteGuardhouseEntities } from './tunnelGuardhouseRepair';
 import { footstepSurfaceForTile } from './footstepSurfaces';
 import { BED_REST_COOLDOWN_SECONDS, formatRestCooldown, tickRestCooldown } from './restCooldown';
 import { vehicleRelativeTouchInput } from './drivingControls';
@@ -1178,6 +1179,7 @@ export class SurvivalEngine {
       savePersistedHotbarState(this.hotbar);
     }
 
+    save = removeObsoleteGuardhouseEntities(this.worldStore.seed, isValidCubeFace(save.activeFace) ? save.activeFace : 0, save);
     this.containers = save.containers.map((c) => ({ ...c, items: { ...c.items } }));
     this.structures = save.structures.map((s) => ({ ...s }));
     this.vehicles = save.vehicles.map((v) => ({
@@ -1209,13 +1211,14 @@ export class SurvivalEngine {
       for (const [k, b] of Object.entries(save.faceStates)) {
         const fNum = Number(k);
         if (isValidCubeFace(fNum) && fNum !== this.worldStore.activeFace && b) {
+          const cleaned = removeObsoleteGuardhouseEntities(this.worldStore.seed, fNum, { ...b, doors: Array.isArray(b.doors) ? b.doors : [], containers: Array.isArray(b.containers) ? b.containers : [] });
           this.faceEntityCache.set(fNum, {
-            containers: Array.isArray(b.containers) ? b.containers.map((c) => ({ ...c, items: { ...c.items } })) : [],
+            containers: Array.isArray(cleaned.containers) ? cleaned.containers.map((c) => ({ ...c, items: { ...c.items } })) : [],
             structures: Array.isArray(b.structures) ? b.structures.map((st) => ({ ...st })) : [],
             vehicles: Array.isArray(b.vehicles)
               ? b.vehicles.map((v) => ({ ...v, trunkItems: v.trunkItems ? { ...v.trunkItems } : undefined }))
               : [],
-            doors: Array.isArray(b.doors) ? b.doors.map((d) => ({ ...d })) : [],
+            doors: Array.isArray(cleaned.doors) ? cleaned.doors.map((d) => ({ ...d })) : [],
             zombies: Array.isArray(b.zombies) ? b.zombies.map((z) => ({ ...z, hitFlash: 0 })) : [],
           });
         }

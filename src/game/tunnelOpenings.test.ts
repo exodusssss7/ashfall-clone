@@ -3,7 +3,7 @@ import test from 'node:test';
 import { isTunnelEdgeWall, isTunnelOpeningEdge, isTerrainStepBlocked, isTunnelClaimedCell } from './terrainSystem';
 
 const seed = 1994;
-for (const [face,x,y,dx,dy] of [[4,433,26,1,0],[5,28,-315,0,-1],[5,-16,40,1,0]] as const) {
+for (const [face,x,y,dx,dy] of [[4,433,26,1,0],[5,28,-315,0,-1],[5,-16,40,1,0],[5,25,402,0,-1]] as const) {
   test(`continuing highway stays open at tunnel end face ${face} (${x},${y})`, () => {
     assert.equal(isTunnelClaimedCell(seed,x,y,face),true);
     assert.equal(isTunnelClaimedCell(seed,x+dx,y+dy,face),false);
@@ -29,4 +29,13 @@ test('longitudinal openings do not remove tunnel retaining side walls', () => {
     }
   }
   assert.ok(checked>0);
+});
+
+test('axis-less fallback stays scoped to the approved north apron',()=>{
+  assert.equal(isTunnelEdgeWall(seed,-24,30,-25,30,0),true);
+  assert.equal(isTunnelEdgeWall(seed,498,37,499,37,1),true);
+  for(let x=24;x<=28;x++){
+    assert.equal(isTunnelEdgeWall(seed,x,402,x,401,5),false);
+    assert.equal(isTunnelEdgeWall(seed,x,401,x,402,5),false);
+  }
 });
