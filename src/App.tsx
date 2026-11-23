@@ -1,3 +1,4 @@
+import { ReleaseControls } from './components/ReleaseControls';
 import { NavigationRadar } from './components/NavigationRadar';
 import { useEffect, useRef, useState } from 'react';
 import { CraftModal } from './components/CraftModal';
@@ -299,6 +300,7 @@ export default function App() {
 
   return (
     <main className="relative w-screen h-screen overflow-hidden bg-[#0b0d0e]">
+      {(phase === 'title' || phase === 'paused') && <ReleaseControls />}
       {/* Isolated Canvas Viewport */}
       <div className="absolute inset-0">
         <canvas

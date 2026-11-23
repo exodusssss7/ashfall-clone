@@ -1,3 +1,15 @@
+# The Alive Horde v1.9.10 test release
+
+Browser and Android test release from the main game, not the separate TEST 1 or TEST 2 snapshots.
+
+The world audit is incomplete. At publication preparation, 88 of 127 local one-way tunnel routes had been checked. Return travel, sidewalls, first-person clearance and connected-world coverage remain incomplete. This is not a fully checked final release. Android installation and phone performance have not been tested here.
+
+Adds a browser fullscreen button and accessible audio credits. Game balance, world generation, graphics quality and save format are unchanged from main source revision 41d4cbbe3ed939f3e19b5c50104038e451406f69. Android package remains com.exodus.ashfall, versionCode 29.
+
+Audio credits and individual licenses: public/audio/CREDITS.txt. Bundled font licenses: android/assets/fonts/*-OFL.txt. Restricted Mixkit heartbeat is excluded from public source and web output. No project-wide asset license is granted.
+
+Build: npm ci --legacy-peer-deps, npm run lint, npm run build. Android: JDK 17, Android SDK API 35 and build-tools 35.0.0, then sh android/build.sh. Signing keys are private and not included.
+
 # The Alive Horde v1.6
 
 Validation for v1.6: 108 automated tests pass (103 existing plus 5 new zombie

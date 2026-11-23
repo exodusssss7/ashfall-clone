@@ -34,7 +34,7 @@ interface StartScreenProps {
 /** Approved game badge: pixel field-badge ring around the ash-fall camp scene (user-approved artwork). */
 const AshEmblem: React.FC<{ size?: number }> = ({ size = 84 }) => (
   <img
-    src="/ui/the-alive-horde-badge.png"
+    src={`${import.meta.env.BASE_URL}ui/the-alive-horde-badge.png`}
     alt=""
     width={size}
     height={size}

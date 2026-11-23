@@ -105,6 +105,7 @@ lmg_fire01.mp3 -> lmg0.mp3 (as recorded) and lmg1.mp3 (0.92x pitch variant).
 Purpose-made realistic LMG shot; high-pass 75Hz, low-pass 10kHz, trimmed,
 short fades, mono 32kHz/96kbps MP3, -3dBFS peak. Runtime gain 0.5 with small
 pitch variation; full-auto cadence comes from the game's fire rate.
+License: https://creativecommons.org/licenses/by/4.0/
 Attribution required by CC-BY 4.0: "Light Machine Gun" by KuraiWolf.
 The rejected Tabasco SKS option is not bundled.
 
