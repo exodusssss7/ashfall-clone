@@ -22,6 +22,7 @@ const SAMPLE_NAMES = [
   'groan1', 'groan2', 'groan3', 'groan4', 'pistol0', 'pistol1', 'shotgun0', 'shotgun1',
   'reload', 'rack', 'day', 'night', 'breathing', 'heartbeat',
   'lmg0', 'lmg1', 'zombiedie0', 'zombiedie1', 'carhit0', 'carhit1', 'zhurt0', 'zhurt1', 'zhurt2', 'zmoan0', 'zmoan1', 'zmoan2',
+  'fireplace', 'thunder',
 ];
 
 /** Recorded foley/weapon banks, with quiet continuous day/night soundscapes and 3D HRTF spatialization.
@@ -398,6 +399,7 @@ class SurvivalSoundEngine {
     this.updateAmbience(false, this.timeMinutes);
     this.updateEngineSound(false, 0, false);
     this.updateWeatherAudio(false, 0, 0, false, 0);
+    this.stopFireplaceLoop();
     this.stopEffects();
   }
 
@@ -494,6 +496,72 @@ class SurvivalSoundEngine {
     }
   }
   playCampfireCrackle(): void { this.texture(3300, 0.035, 0.045); }
+
+  // Real fireplace recording as a continuous positional loop at the nearest campfire.
+  // The spatial panner makes it louder as the player approaches and fade with distance.
+  private static readonly FIREPLACE_VOLUME = 0.85;
+  private fireplaceSource: AudioBufferSourceNode | null = null;
+  private fireplaceGain: GainNode | null = null;
+  private fireplacePanner: PannerNode | null = null;
+  private fireplacePos: { x: number; y: number } | null = null;
+
+  updateFireplaceLoop(target: SpatialPosition | null): void {
+    if (!this.ctx || !this.dryGain) return;
+    const now = this.ctx.currentTime;
+    if (!target) {
+      if (this.fireplaceGain) this.fireplaceGain.gain.setTargetAtTime(0.0001, now, 0.18);
+      return;
+    }
+    const buffer = this.buffers.get('fireplace');
+    if (!buffer) return;
+    if (!this.fireplaceSource) {
+      const panner = this.createSpatialPanner(target);
+      if (!panner) return;
+      const source = this.ctx.createBufferSource();
+      source.buffer = buffer;
+      source.loop = true;
+      const gain = this.ctx.createGain();
+      gain.gain.value = 0.0001;
+      source.connect(gain);
+      gain.connect(panner);
+      this.fireplaceSource = source;
+      this.fireplaceGain = gain;
+      this.fireplacePanner = panner;
+      this.fireplacePos = { x: target.x, y: target.y };
+      source.start(now);
+    } else if (
+      this.fireplacePanner &&
+      this.fireplacePos &&
+      (Math.abs(this.fireplacePos.x - target.x) > 0.01 || Math.abs(this.fireplacePos.y - target.y) > 0.01)
+    ) {
+      const coords = worldToAudioPosition(target);
+      const p = this.fireplacePanner;
+      if (p.positionX) {
+        p.positionX.setTargetAtTime(coords.x, now, 0.12);
+        p.positionY.setTargetAtTime(coords.y, now, 0.12);
+        p.positionZ.setTargetAtTime(coords.z, now, 0.12);
+      } else {
+        p.setPosition?.(coords.x, coords.y, coords.z);
+      }
+      this.fireplacePos = { x: target.x, y: target.y };
+    }
+    if (this.fireplaceGain) this.fireplaceGain.gain.setTargetAtTime(SurvivalSoundEngine.FIREPLACE_VOLUME, now, 0.18);
+  }
+
+  stopFireplaceLoop(): void {
+    if (this.fireplaceSource) {
+      try { this.fireplaceSource.stop(); } catch { /* already stopped */ }
+      try { this.fireplaceSource.disconnect(); } catch { /* already disconnected */ }
+      this.fireplaceSource = null;
+    }
+    if (this.fireplaceGain) {
+      try { this.fireplaceGain.disconnect(); } catch { /* already disconnected */ }
+      this.fireplaceGain = null;
+    }
+    this.releasePanner(this.fireplacePanner);
+    this.fireplacePanner = null;
+    this.fireplacePos = null;
+  }
   playSpitHiss(pos?: SpatialPosition): void {
     this.texture(2200, 0.27, 0.19, 0, pos, 1.25);
   }
@@ -779,25 +847,10 @@ class SurvivalSoundEngine {
     this.rainFilter.frequency.setTargetAtTime(targetCutoff, now, 0.22);
     this.rainGain.gain.setTargetAtTime(targetGain, now, 0.25);
 
-    // Occasional deep distant thunder rumble on storm lightning
+    // Recorded thunder crack on storm lightning, rolling in 0.35s after the flash.
     if (lightningFlash > 0.42 && now - this.lastThunderTime > 8.5) {
       this.lastThunderTime = now;
-      const osc = this.ctx.createOscillator();
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(64, now + 0.35);
-      osc.frequency.exponentialRampToValueAtTime(28, now + 2.1);
-      const tFilter = this.ctx.createBiquadFilter();
-      tFilter.type = 'lowpass';
-      tFilter.frequency.value = sheltered ? 110 : 190;
-      const tGain = this.ctx.createGain();
-      tGain.gain.setValueAtTime(0.0001, now + 0.35);
-      tGain.gain.linearRampToValueAtTime(sheltered ? 0.11 : 0.18, now + 0.65);
-      tGain.gain.exponentialRampToValueAtTime(0.0001, now + 2.3);
-      osc.connect(tFilter);
-      tFilter.connect(tGain);
-      tGain.connect(this.masterGain);
-      osc.start(now + 0.35);
-      osc.stop(now + 2.35);
+      this.sample('thunder', sheltered ? 0.4 : 0.7, 1, 0.35);
     }
   }
 

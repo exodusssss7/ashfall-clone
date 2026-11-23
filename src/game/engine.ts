@@ -2473,9 +2473,11 @@ export class SurvivalEngine {
       this.saveNow();
     }
 
-    // Advance Day-Night clock (1 full 24h cycle = ~9.6 real minutes)
+    // Advance Day-Night clock. Dawn, dusk and night keep the base rate (2.5 game-min/s);
+    // daylight (07:30-18:00) runs faster so it lasts 3 min 48 s real time (1 full cycle = 9 min 12 s).
     const prevTime = this.timeMinutes;
-    this.timeMinutes += dt * 2.5;
+    const inDaylight = prevTime >= 450 && prevTime < 1080;
+    this.timeMinutes += dt * (inDaylight ? 2.7631578947368425 : 2.5);
     if (this.timeMinutes >= 1440) {
       this.timeMinutes -= 1440;
       this.day += 1;
@@ -2987,6 +2989,21 @@ export class SurvivalEngine {
         soundEngine.playCampfireCrackle();
       }
     }
+    // Real fireplace loop at the nearest campfire: positional, louder as the player approaches
+    let fireplaceTarget: { x: number; y: number } | null = null;
+    let fireplaceBest = 16;
+    for (const s of this.structures) {
+      if (s.kind !== 'campfire') continue;
+      const d = dist(s.gx + 0.5, s.gy + 0.5, p.x, p.y);
+      if (
+        d < fireplaceBest &&
+        Math.abs(sampleTerrainHeight(this.worldStore.seed, s.gx + 0.5, s.gy + 0.5, this.worldStore.activeFace ?? 0) - p.elevation) < 1.8
+      ) {
+        fireplaceBest = d;
+        fireplaceTarget = { x: s.gx + 0.5, y: s.gy + 0.5 };
+      }
+    }
+    soundEngine.updateFireplaceLoop(fireplaceTarget);
     // Auto-collect zombie loot pouches when walking directly over them
     for (const c of this.containers) {
       if (c.kind === 'zombie_drop' && !c.searched && dist(this.player.x, this.player.y, c.gx + 0.5, c.gy + 0.5) <= 0.78) {
