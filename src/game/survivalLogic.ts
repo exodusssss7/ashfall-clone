@@ -1,3 +1,4 @@
+import { cubeChunkKey, resolveCubeSphereTile, type CubeFaceId } from './cubeSphere';
 import { CHUNK_SIZE, MAP_SIZE, angleDiff, clamp, dist, readCellFromSource } from './isometric';
 import type { CellSource } from './isometric';
 import { STRUCTURES } from './recipes';
@@ -191,21 +192,27 @@ export function generateChunk(
   store: WorldStore,
   cx: number,
   cy: number,
-  nextVehicleIdRef: { nextId: number }
+  nextVehicleIdRef: { nextId: number },
+  face: CubeFaceId = store.activeFace ?? 0
 ): ChunkSpawnResult {
-  const key = chunkKey(cx, cy);
+  // Resolve onto canonical finite Cube-Sphere face & chunk (6 faces x 12x12 = 864 chunks max)
+  const resolved = resolveCubeSphereTile(face, cx * CHUNK_SIZE + 8, cy * CHUNK_SIZE + 8);
+  const rFace = resolved.face;
+  const rCX = Math.floor(resolved.gx / CHUNK_SIZE);
+  const rCY = Math.floor(resolved.gy / CHUNK_SIZE);
+  const key = cubeChunkKey(rFace, rCX, rCY);
   const existing = store.chunks.get(key);
   if (existing) {
     return { chunk: existing, containers: [], structures: [], vehicles: [], doors: [] };
   }
 
-  if (!isOriginSectorChunk(cx, cy)) {
-    return generateOuterChunk(store, cx, cy, nextVehicleIdRef);
+  if (!isOriginSectorChunk(rCX, rCY, rFace)) {
+    return generateOuterChunk(store, rCX, rCY, nextVehicleIdRef, rFace);
   }
 
   const cells: TileCell[][] = [];
-  const startGX = cx * CHUNK_SIZE;
-  const startGY = cy * CHUNK_SIZE;
+  const startGX = rCX * CHUNK_SIZE;
+  const startGY = rCY * CHUNK_SIZE;
   for (let ly = 0; ly < CHUNK_SIZE; ly++) {
     const row: TileCell[] = [];
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -214,19 +221,26 @@ export function generateChunk(
     cells.push(row);
   }
 
-  const chunk: WorldChunk = { cx, cy, key, cells };
+  const chunk: WorldChunk = { face: rFace, cx: rCX, cy: rCY, key, cells };
   store.chunks.set(key, chunk);
   store.populatedChunks.add(key);
 
   return { chunk, containers: [], structures: [], vehicles: [], doors: [] };
 }
 
-export function getWorldCell(store: WorldStore, gx: number, gy: number): TileCell {
-  const cx = Math.floor(gx / CHUNK_SIZE);
-  const cy = Math.floor(gy / CHUNK_SIZE);
-  let chunk = store.chunks.get(chunkKey(cx, cy));
+export function getWorldCell(
+  store: WorldStore,
+  gx: number,
+  gy: number,
+  face: CubeFaceId = store.activeFace ?? 0
+): TileCell {
+  const resolved = resolveCubeSphereTile(face, gx, gy);
+  const cx = Math.floor(resolved.gx / CHUNK_SIZE);
+  const cy = Math.floor(resolved.gy / CHUNK_SIZE);
+  const key = cubeChunkKey(resolved.face, cx, cy);
+  let chunk = store.chunks.get(key);
   if (!chunk) {
-    const spawned = generateChunk(store, cx, cy, store.nextVehicleIdRef ?? { nextId: 10000 });
+    const spawned = generateChunk(store, cx, cy, store.nextVehicleIdRef ?? { nextId: 10000 }, resolved.face);
     chunk = spawned.chunk;
     if (
       store.pendingSpawns &&
@@ -236,6 +250,7 @@ export function getWorldCell(store: WorldStore, gx: number, gy: number): TileCel
         spawned.doors.length)
     ) {
       store.pendingSpawns.push({
+        face: resolved.face,
         containers: spawned.containers,
         structures: spawned.structures,
         vehicles: spawned.vehicles,
@@ -243,8 +258,8 @@ export function getWorldCell(store: WorldStore, gx: number, gy: number): TileCel
       });
     }
   }
-  const lx = ((gx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-  const ly = ((gy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+  const lx = ((resolved.gx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+  const ly = ((resolved.gy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
   return chunk.cells[ly][lx];
 }
 
@@ -258,6 +273,7 @@ export function generateWorld(seed = 1994): GeneratedWorld {
 
   const worldStore: WorldStore = {
     seed,
+    activeFace: 0,
     chunks: new Map(),
     populatedChunks: new Set(),
     landmarks: new Map(),
@@ -278,7 +294,7 @@ export function generateWorld(seed = 1994): GeneratedWorld {
         cells.push(row);
       }
       const key = chunkKey(cx, cy);
-      worldStore.chunks.set(key, { cx, cy, key, cells });
+      worldStore.chunks.set(key, { face: 0, cx, cy, key, cells });
       worldStore.populatedChunks.add(key);
     }
   }
@@ -773,8 +789,9 @@ export function generateWorld(seed = 1994): GeneratedWorld {
         const dPier = dist(gx + 0.5, gy + 0.5, 40.5, 12.5);
         if (dSpawn > 6.5 && dPier > 3.2) {
           const r = rng();
-          if (r < 0.08) {
-            cell.prop = rng() < 0.72 ? 'tree_pine' : 'tree_dead';
+          if (r < 0.042) {
+            const tr = rng();
+            cell.prop = tr < 0.45 ? 'tree_oak' : tr < 0.85 ? 'tree_pine' : 'tree_dead';
             cell.solid = true;
             cell.blocksSight = true;
           } else if (r < 0.089) {
@@ -1071,6 +1088,9 @@ const PROP_HALF_EXTENTS: Record<PropKind, { hx: number; hy: number }> = {
   barrel_burn: { hx: 0.24, hy: 0.24 },
   tree_pine: { hx: 0.2, hy: 0.2 },
   tree_dead: { hx: 0.2, hy: 0.2 },
+  tree_oak: { hx: 0.22, hy: 0.22 },
+  tree_willow: { hx: 0.22, hy: 0.22 },
+  tree_palm: { hx: 0.18, hy: 0.18 },
   hydrant: { hx: 0.13, hy: 0.13 },
   streetlamp: { hx: 0.13, hy: 0.13 },
   car_police: { hx: 0.45, hy: 0.34 },

@@ -62,6 +62,12 @@ export interface VehicleRig3D {
   root: THREE.Group;
   bodyGroup: THREE.Group;
   cabGroup: THREE.Group;
+  cockpitGroup: THREE.Group;
+  steeringWheel: THREE.Group;
+  speedBar: THREE.Mesh;
+  fuelBar: THREE.Mesh;
+  boostLed: THREE.Mesh;
+  headLights: THREE.Mesh[];
   wheelFL: THREE.Group;
   wheelFR: THREE.Group;
   wheelMeshes: THREE.Mesh[];
@@ -70,6 +76,8 @@ export interface VehicleRig3D {
   sirenRed?: THREE.Mesh;
   sirenBlue?: THREE.Mesh;
   glintMesh: THREE.Mesh;
+  prevAngle: number;
+  steerSmooth: number;
 }
 
 export interface FirstPersonViewmodelRig {
@@ -125,6 +133,7 @@ export class ThreeModelFactory {
   private unitBox: THREE.BoxGeometry;
   private unitCylX: THREE.CylinderGeometry;
   private unitWheelGeo: THREE.CylinderGeometry;
+  private unitSphereGeo: THREE.SphereGeometry;
   private supercarHullGeo: THREE.BufferGeometry;
   private supercarCanopyGeo: THREE.BufferGeometry;
   private wreckedHullGeo: THREE.BufferGeometry;
@@ -157,6 +166,7 @@ export class ThreeModelFactory {
     const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 24);
     wheelGeo.rotateX(Math.PI * 0.5);
     this.unitWheelGeo = this.trackGeo(wheelGeo);
+    this.unitSphereGeo = this.trackGeo(new THREE.SphereGeometry(1, 10, 8));
 
     this.supercarHullGeo = this.trackGeo(
       createSculptedProfileGeometry(SUPERCAR_HULL_PROFILE, 0.88, {
@@ -418,6 +428,23 @@ export class ThreeModelFactory {
   ): THREE.Mesh {
     const m = new THREE.Mesh(this.unitWheelGeo, mat);
     m.scale.set(diameter, diameter, width);
+    m.position.set(x, y, z);
+    m.castShadow = castShadow;
+    m.receiveShadow = receiveShadow;
+    return m;
+  }
+
+  private sphere(
+    radius: number,
+    mat: THREE.Material | THREE.Material[],
+    x = 0,
+    y = 0,
+    z = 0,
+    castShadow = true,
+    receiveShadow = true
+  ): THREE.Mesh {
+    const m = new THREE.Mesh(this.unitSphereGeo, mat);
+    m.scale.set(radius, radius, radius);
     m.position.set(x, y, z);
     m.castShadow = castShadow;
     m.receiveShadow = receiveShadow;
@@ -829,6 +856,145 @@ export class ThreeModelFactory {
       spire.castShadow = true;
       spire.receiveShadow = true;
       g.add(spire);
+      return g;
+    }
+
+    if (kind === 'tree_oak') {
+      // Sculpted broadleaf meadow oak with branching crown and sunlit layered emerald/gold canopy clusters
+      this.addContactShadow(g, 1.65, 1.65);
+      const barkMat = this.getMat(0xffffff, { map: this.atlas.barkTex, roughness: 0.92 });
+      const leafMain = this.getMat('#4d8f37', { roughness: 0.84 });
+      const leafSun = this.getMat('#73b548', { roughness: 0.82 });
+      const leafShade = this.getMat('#2e6126', { roughness: 0.90 });
+
+      const trunk = new THREE.Mesh(this.pineTrunkGeo, barkMat);
+      trunk.scale.set(1.22, 1.05, 1.22);
+      trunk.position.set(0, 0.58, 0);
+      trunk.castShadow = true;
+      trunk.receiveShadow = true;
+      g.add(trunk);
+
+      // Flared oak roots + 3 sturdy spreading limbs
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + 0.5;
+        const root = this.taperedMesh(0.06, 0.10, 0.12, 0.24, 0.26, barkMat, Math.cos(a) * 0.14, 0, Math.sin(a) * 0.14);
+        root.rotation.y = -a + Math.PI * 0.5;
+        g.add(root);
+      }
+      const canopySpheres: Array<[number, number, number, number, THREE.Material]> = [
+        [0, 1.62, 0, 0.62, leafMain],
+        [-0.36, 1.46, 0.18, 0.46, leafShade],
+        [0.38, 1.48, -0.16, 0.48, leafMain],
+        [0.10, 1.50, 0.36, 0.44, leafSun],
+        [-0.18, 1.52, -0.34, 0.42, leafShade],
+        [0.08, 1.94, 0.04, 0.44, leafSun],
+      ];
+      for (const [cx, cy, cz, rad, mat] of canopySpheres) {
+        const puff = this.sphere(rad, mat, cx, cy, cz, true, true);
+        puff.scale.set(1.15, 0.82, 1.15);
+        g.add(puff);
+      }
+      return g;
+    }
+
+    if (kind === 'tree_willow') {
+      // Graceful river-valley weeping willow with leaning trunk & drooping moss-green foliage curtains
+      this.addContactShadow(g, 1.75, 1.75);
+      const barkMat = this.getMat('#5a4636', { map: this.atlas.barkTex, roughness: 0.94 });
+      const willowMain = this.getMat('#548c4c', { roughness: 0.86 });
+      const willowTip = this.getMat('#78ab5e', { roughness: 0.84 });
+      const willowShade = this.getMat('#356137', { roughness: 0.90 });
+
+      const trunk = new THREE.Mesh(this.pineTrunkGeo, barkMat);
+      trunk.scale.set(1.18, 1.0, 1.18);
+      trunk.position.set(0.04, 0.56, 0);
+      trunk.rotation.z = -0.10;
+      trunk.castShadow = true;
+      trunk.receiveShadow = true;
+      g.add(trunk);
+
+      const crown = this.sphere(0.66, willowMain, 0.08, 1.66, 0, true, true);
+      crown.scale.set(1.25, 0.72, 1.25);
+      g.add(crown);
+      const topCrown = this.sphere(0.45, willowTip, 0.06, 1.96, 0, true, true);
+      topCrown.scale.set(1.15, 0.68, 1.15);
+      g.add(topCrown);
+
+      // 8 drooping willow curtain fronds ringing the canopy
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + 0.2;
+        const r = 0.60 + (i % 2) * 0.14;
+        const droopH = 0.82 + (i % 3) * 0.14;
+        const curtain = this.box(
+          0.14,
+          droopH,
+          0.14,
+          i % 2 === 0 ? willowTip : willowShade,
+          0.08 + Math.cos(a) * r,
+          1.52 - droopH * 0.45,
+          Math.sin(a) * r,
+          true,
+          true
+        );
+        curtain.rotation.y = -a;
+        curtain.rotation.z = -Math.cos(a) * 0.08;
+        g.add(curtain);
+      }
+      return g;
+    }
+
+    if (kind === 'tree_palm') {
+      // Coastal beach palm tree: gracefully curved segmented trunk + 6 arching tropical fronds + coconuts
+      this.addContactShadow(g, 1.35, 1.35);
+      const palmBark = this.getMat('#8c6b4a', { roughness: 0.92 });
+      const palmDark = this.getMat('#6b4f34', { roughness: 0.94 });
+      const frondMain = this.getMat('#4c9a36', { roughness: 0.78 });
+      const frondTip = this.getMat('#76ba45', { roughness: 0.76 });
+      const coconutMat = this.getMat('#4d331d', { roughness: 0.88 });
+
+      // Curved 5-segment leaning trunk
+      let curX = 0;
+      let curY = 0;
+      for (let s = 0; s < 5; s++) {
+        const segH = 0.42;
+        const lean = 0.08 + s * 0.055;
+        const seg = this.taperedMesh(
+          0.115 - s * 0.011,
+          0.105 - s * 0.011,
+          0.115 - s * 0.011,
+          0.105 - s * 0.011,
+          segH,
+          s % 2 === 0 ? palmBark : palmDark,
+          curX + Math.sin(lean) * segH * 0.5,
+          curY,
+          0
+        );
+        seg.rotation.z = -lean;
+        g.add(seg);
+        curX += Math.sin(lean) * segH;
+        curY += Math.cos(lean) * segH;
+      }
+
+      // Coconut cluster under the crown
+      for (let c = 0; c < 3; c++) {
+        const ca = (c / 3) * Math.PI * 2;
+        g.add(this.sphere(0.068, coconutMat, curX + Math.cos(ca) * 0.11, curY - 0.04, Math.sin(ca) * 0.11, false, false));
+      }
+
+      // 6 radiating arched palm fronds (inner blade + drooping outer tip)
+      for (let f = 0; f < 6; f++) {
+        const fa = (f / 6) * Math.PI * 2 + 0.25;
+        const frondGroup = new THREE.Group();
+        frondGroup.position.set(curX, curY + 0.04, 0);
+        frondGroup.rotation.y = fa;
+
+        const inner = this.box(0.62, 0.032, 0.24, frondMain, 0.30, 0.08, 0, true, true);
+        inner.rotation.z = 0.22;
+        const outer = this.box(0.56, 0.026, 0.18, frondTip, 0.78, -0.02, 0, true, true);
+        outer.rotation.z = -0.34;
+        frondGroup.add(inner, outer);
+        g.add(frondGroup);
+      }
       return g;
     }
 
@@ -1518,26 +1684,69 @@ export class ThreeModelFactory {
     return g;
   }
 
+  /**
+   * Injects automotive Fresnel clearcoat sheen & metallic micro-flake sparkle into MeshPhysicalMaterial
+   * so car bodywork gleams realistically under sun, dusk, rain, and streetlamps.
+   */
+  private applyAutomotivePaintShader(mat: THREE.MeshPhysicalMaterial, flakeStrength = 0.08): THREE.MeshPhysicalMaterial {
+    mat.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        `vec3 vDirAuto = normalize(vViewPosition);
+        float fresAuto = pow(1.0 - max(dot(normalize(normal), vDirAuto), 0.0), 3.4);
+        float flakeN = fract(sin(dot(floor(gl_FragCoord.xy * 0.85), vec2(12.9898, 78.233))) * 43758.5453);
+        float flakeSpark = smoothstep(0.84, 0.99, flakeN) * ${flakeStrength.toFixed(3)};
+        gl_FragColor.rgb += vec3(0.82, 0.90, 1.0) * fresAuto * 0.16 + vec3(flakeSpark);
+        #include <dithering_fragment>`
+      );
+    };
+    mat.customProgramCacheKey = () => `ashfall_auto_paint_${flakeStrength.toFixed(2)}`;
+    return mat;
+  }
+
   public createVehicleRig(kind: 'sedan' | 'police'): VehicleRig3D {
     const police = kind === 'police';
     const vTex = this.atlas.vehicleTex[kind];
     const root = new THREE.Group();
-    this.addContactShadow(root, 2.15, 1.25);
+    this.addContactShadow(root, 2.22, 1.32);
 
     const bodyGroup = new THREE.Group();
     root.add(bodyGroup);
 
-    const sideMat = this.getPhysicalMat(0xffffff, { map: vTex.side, roughness: 0.24, metalness: 0.48, clearcoat: 1.0, clearcoatRoughness: 0.08, envMapIntensity: 1.25 });
-    const roofMat = this.getPhysicalMat(0xffffff, { map: vTex.roof, roughness: 0.22, metalness: 0.46, clearcoat: 1.0, clearcoatRoughness: 0.08, envMapIntensity: 1.25 });
-    const frontMat = this.getPhysicalMat(0xffffff, { map: vTex.front, roughness: 0.28, metalness: 0.42, clearcoat: 0.9, clearcoatRoughness: 0.1, envMapIntensity: 1.2 });
-    const rearMat = this.getPhysicalMat(0xffffff, { map: vTex.rear, roughness: 0.30, metalness: 0.42, clearcoat: 0.9, clearcoatRoughness: 0.1, envMapIntensity: 1.2 });
-    const glassMat = this.getPhysicalMat(0xffffff, { map: vTex.glass, roughness: 0.08, metalness: 0.35, clearcoat: 1.0, clearcoatRoughness: 0.04, envMapIntensity: 1.35 });
-    const carbonMat = this.getMat('#171a20', { roughness: 0.55, metalness: 0.45 });
+    const sideMat = this.applyAutomotivePaintShader(
+      this.getPhysicalMat(0xffffff, { map: vTex.side, roughness: 0.17, metalness: 0.62, clearcoat: 1.0, clearcoatRoughness: 0.05, envMapIntensity: 1.55 })
+    );
+    const roofMat = this.applyAutomotivePaintShader(
+      this.getPhysicalMat(0xffffff, { map: vTex.roof, roughness: 0.16, metalness: 0.60, clearcoat: 1.0, clearcoatRoughness: 0.05, envMapIntensity: 1.55 })
+    );
+    const frontMat = this.applyAutomotivePaintShader(
+      this.getPhysicalMat(0xffffff, { map: vTex.front, roughness: 0.20, metalness: 0.56, clearcoat: 0.95, clearcoatRoughness: 0.07, envMapIntensity: 1.45 })
+    );
+    const rearMat = this.applyAutomotivePaintShader(
+      this.getPhysicalMat(0xffffff, { map: vTex.rear, roughness: 0.22, metalness: 0.54, clearcoat: 0.95, clearcoatRoughness: 0.07, envMapIntensity: 1.45 })
+    );
+    const glassMat = this.getPhysicalMat(0xffffff, {
+      map: vTex.glass,
+      roughness: 0.04,
+      metalness: 0.42,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.02,
+      envMapIntensity: 1.75,
+    });
+    const carbonMat = this.getMat('#161920', { roughness: 0.42, metalness: 0.55 });
+    const leatherMat = this.getMat('#1b1d22', { roughness: 0.78, metalness: 0.08 });
+    const grilleMat = this.getMat('#0e1014', { roughness: 0.65, metalness: 0.68 });
     const tireMat = this.getMat('#101214', { roughness: 0.92 });
-    const wheelFaceMat = this.getMat(0xffffff, { map: vTex.wheel, roughness: 0.36, metalness: 0.52 });
-    const paintRoof = this.getPhysicalMat(police ? '#f4f8fc' : '#d92b24', { roughness: 0.24, metalness: 0.46, clearcoat: 1.0, clearcoatRoughness: 0.08, envMapIntensity: 1.25 });
-    const paintMain = this.getPhysicalMat(police ? '#1e3c72' : '#d92b24', { roughness: 0.24, metalness: 0.48, clearcoat: 1.0, clearcoatRoughness: 0.08, envMapIntensity: 1.25 });
-    const chromeMat = this.getMat('#cfd8e0', { roughness: 0.18, metalness: 0.92 });
+    const wheelFaceMat = this.getMat(0xffffff, { map: vTex.wheel, roughness: 0.28, metalness: 0.72 });
+    const rotorMat = this.getMat('#aeb7c2', { roughness: 0.24, metalness: 0.88 });
+    const caliperMat = this.getMat(police ? '#2f8cff' : '#e02820', { roughness: 0.28, metalness: 0.55 });
+    const paintRoof = this.applyAutomotivePaintShader(
+      this.getPhysicalMat(police ? '#f4f8fc' : '#d92b24', { roughness: 0.17, metalness: 0.58, clearcoat: 1.0, clearcoatRoughness: 0.05, envMapIntensity: 1.55 })
+    );
+    const paintMain = this.applyAutomotivePaintShader(
+      this.getPhysicalMat(police ? '#1b3a70' : '#d92b24', { roughness: 0.17, metalness: 0.62, clearcoat: 1.0, clearcoatRoughness: 0.05, envMapIntensity: 1.55 })
+    );
+    const chromeMat = this.getMat('#dce5ee', { roughness: 0.12, metalness: 0.96 });
 
     // Sculpted wedge supercar lower chassis [side, top/bot, front, rear]
     const hullMesh = new THREE.Mesh(this.supercarHullGeo, [sideMat, roofMat, frontMat, rearMat]);
@@ -1545,37 +1754,58 @@ export class ThreeModelFactory {
     hullMesh.receiveShadow = true;
     bodyGroup.add(hullMesh);
 
-    // Carbon-fiber aerodynamic ground effects: chin splitter, side skirts & rear diffuser fins
+    // Carbon-fiber aerodynamic ground effects: chin splitter, side skirts, fender flares & rear diffuser fins
     bodyGroup.add(
-      this.box(0.22, 0.03, 0.90, carbonMat, 0.82, 0.12, 0),
-      this.box(1.12, 0.04, 0.04, carbonMat, 0, 0.13, -0.45),
-      this.box(1.12, 0.04, 0.04, carbonMat, 0, 0.13, 0.45),
-      this.box(0.14, 0.05, 0.82, carbonMat, -0.84, 0.13, 0)
+      this.box(0.24, 0.032, 0.92, carbonMat, 0.83, 0.115, 0),
+      this.box(1.16, 0.042, 0.045, carbonMat, 0, 0.125, -0.455),
+      this.box(1.16, 0.042, 0.045, carbonMat, 0, 0.125, 0.455),
+      this.box(0.15, 0.055, 0.84, carbonMat, -0.85, 0.125, 0)
     );
-    for (const fz of [-0.18, 0, 0.18]) {
-      bodyGroup.add(this.box(0.12, 0.07, 0.025, carbonMat, -0.88, 0.14, fz, false, false));
+    // Front honeycomb intake grille + chrome badge bar + twin hood aero vents
+    bodyGroup.add(
+      this.box(0.04, 0.11, 0.52, grilleMat, 0.885, 0.20, 0, false, false),
+      this.box(0.045, 0.022, 0.28, chromeMat, 0.895, 0.22, 0, false, false),
+      this.box(0.20, 0.018, 0.14, grilleMat, 0.56, 0.372, -0.18, false, false),
+      this.box(0.20, 0.018, 0.14, grilleMat, 0.56, 0.372, 0.18, false, false)
+    );
+    // Widebody carbon wheel-arch flares over all 4 wheels
+    for (const wx of [0.55, -0.55]) {
+      for (const wz of [-0.45, 0.45]) {
+        bodyGroup.add(this.box(0.36, 0.045, 0.055, carbonMat, wx, 0.345, wz, false, false));
+      }
+    }
+    // Flush chrome door handles + fuel filler cap
+    bodyGroup.add(
+      this.box(0.09, 0.018, 0.022, chromeMat, -0.06, 0.38, -0.455, false, false),
+      this.box(0.09, 0.018, 0.022, chromeMat, -0.06, 0.38, 0.455, false, false),
+      this.box(0.06, 0.04, 0.015, chromeMat, -0.36, 0.39, 0.452, false, false)
+    );
+    // Rear license plate + diffuser strakes
+    bodyGroup.add(this.box(0.02, 0.065, 0.19, chromeMat, -0.90, 0.23, 0, false, false));
+    for (const fz of [-0.22, -0.08, 0.08, 0.22]) {
+      bodyGroup.add(this.box(0.13, 0.075, 0.022, carbonMat, -0.88, 0.14, fz, false, false));
     }
 
     // Quad cylindrical chrome performance exhaust tips
-    for (const ez of [-0.23, -0.16, 0.16, 0.23]) {
-      bodyGroup.add(this.cylX(0.022, 0.11, chromeMat, -0.89, 0.17, ez, false, true));
+    for (const ez of [-0.24, -0.17, 0.17, 0.24]) {
+      bodyGroup.add(this.cylX(0.024, 0.12, chromeMat, -0.90, 0.165, ez, false, true));
     }
 
     // Sculpted rear GT wing spoiler on twin pylons + aerodynamic endplates
-    const wingBlade = this.box(0.15, 0.028, 0.90, carbonMat, -0.82, 0.51, 0);
-    wingBlade.rotation.z = -0.08;
+    const wingBlade = this.box(0.16, 0.028, 0.92, carbonMat, -0.82, 0.52, 0);
+    wingBlade.rotation.z = -0.09;
     bodyGroup.add(
       wingBlade,
-      this.box(0.07, 0.11, 0.03, carbonMat, -0.80, 0.44, -0.22),
-      this.box(0.07, 0.11, 0.03, carbonMat, -0.80, 0.44, 0.22),
-      this.box(0.17, 0.08, 0.022, paintMain, -0.82, 0.51, -0.45),
-      this.box(0.17, 0.08, 0.022, paintMain, -0.82, 0.51, 0.45)
+      this.box(0.07, 0.12, 0.03, carbonMat, -0.80, 0.44, -0.22),
+      this.box(0.07, 0.12, 0.03, carbonMat, -0.80, 0.44, 0.22),
+      this.box(0.18, 0.085, 0.022, paintMain, -0.82, 0.52, -0.46),
+      this.box(0.18, 0.085, 0.022, paintMain, -0.82, 0.52, 0.46)
     );
 
-    // Teardrop aero side mirrors
+    // Teardrop aero side mirrors with painted caps
     bodyGroup.add(
-      this.box(0.09, 0.045, 0.11, carbonMat, 0.30, 0.44, -0.46),
-      this.box(0.09, 0.045, 0.11, carbonMat, 0.30, 0.44, 0.46)
+      this.box(0.095, 0.046, 0.115, paintMain, 0.30, 0.445, -0.47),
+      this.box(0.095, 0.046, 0.115, paintMain, 0.30, 0.445, 0.47)
     );
 
     // Mid-engine V8 valve covers tucked beneath the rear clamshell deck
@@ -1585,19 +1815,109 @@ export class ThreeModelFactory {
       this.box(0.24, 0.03, 0.12, paintMain, -0.62, 0.41, 0.11, false, false)
     );
 
-    // Sleek teardrop cockpit canopy (isolated in cabGroup so FPS cockpit view hides interior glass)
+    // Sleek teardrop cockpit canopy (hidden in FPS when driving so custom interior cockpitGroup takes over)
     const cabGroup = new THREE.Group();
     const canopyMesh = new THREE.Mesh(this.supercarCanopyGeo, [glassMat, paintRoof, glassMat, glassMat]);
     canopyMesh.castShadow = true;
     canopyMesh.receiveShadow = true;
     cabGroup.add(canopyMesh);
 
-    // Painted roof cap & NACA roof air scoop
-    cabGroup.add(this.box(0.36, 0.022, 0.66, paintRoof, -0.02, 0.625, 0));
+    // Painted roof cap, twin windshield wipers & shark-fin antenna / roof air scoop
+    cabGroup.add(
+      this.box(0.36, 0.022, 0.66, paintRoof, -0.02, 0.625, 0),
+      this.box(0.14, 0.012, 0.014, carbonMat, 0.42, 0.415, -0.13, false, false),
+      this.box(0.14, 0.012, 0.014, carbonMat, 0.42, 0.415, 0.11, false, false)
+    );
     if (!police) {
-      cabGroup.add(this.box(0.18, 0.042, 0.16, carbonMat, -0.08, 0.648, 0));
+      cabGroup.add(
+        this.box(0.18, 0.042, 0.16, carbonMat, -0.08, 0.648, 0),
+        this.box(0.09, 0.045, 0.018, carbonMat, -0.24, 0.645, 0, false, false)
+      );
     }
     bodyGroup.add(cabGroup);
+
+    // =========================================================================
+    // IMMERSIVE 3D FIRST-PERSON INTERIOR COCKPIT (shown ONLY when driving in FPS)
+    // Driver eye sits at local (+0.08, 0.92, 0) looking forward (+X).
+    // =========================================================================
+    const cockpitGroup = new THREE.Group();
+    cockpitGroup.visible = false;
+
+    // Soft-touch leather/carbon dashboard + hooded instrument binnacle + center tunnel
+    cockpitGroup.add(
+      this.box(0.26, 0.13, 0.88, leatherMat, 0.47, 0.65, 0, false, false),
+      this.box(0.22, 0.022, 0.86, carbonMat, 0.45, 0.72, 0, false, false),
+      this.box(0.14, 0.075, 0.30, carbonMat, 0.42, 0.745, 0, false, false),
+      this.box(0.55, 0.12, 0.18, leatherMat, 0.14, 0.56, 0.24, false, false)
+    );
+
+    // Illuminated digital instrument cluster backdrop
+    const clusterBgMat = this.getMat('#091018', { emissive: '#0c1b28', emissiveIntensity: 0.75, roughness: 0.2 });
+    cockpitGroup.add(this.box(0.015, 0.062, 0.25, clusterBgMat, 0.352, 0.742, 0, false, false));
+
+    // Live speedometer bar (scales with speed) & fuel bar (scales with fuel) & boost LED
+    const speedMat = this.getMat('#5ce6ff', { emissive: '#4cd8ff', emissiveIntensity: 1.6, roughness: 0.15 }).clone();
+    const fuelMat = this.getMat('#5ef28f', { emissive: '#5ef28f', emissiveIntensity: 1.4, roughness: 0.15 }).clone();
+    const boostMat = this.getMat('#38bdf8', { emissive: '#38bdf8', emissiveIntensity: 0.15, roughness: 0.15 }).clone();
+    this.materials.push(speedMat, fuelMat, boostMat);
+    const speedBar = this.box(0.012, 0.016, 0.18, speedMat, 0.344, 0.754, 0, false, false);
+    const fuelBar = this.box(0.012, 0.012, 0.14, fuelMat, 0.344, 0.731, 0, false, false);
+    const boostLed = this.box(0.012, 0.014, 0.032, boostMat, 0.344, 0.731, 0.10, false, false);
+    cockpitGroup.add(speedBar, fuelBar, boostLed);
+
+    // Sculpted 3D Sport Steering Wheel (torus rim + 3 spokes + red 12-o'clock racing stripe + horn boss)
+    const steeringWheel = new THREE.Group();
+    steeringWheel.position.set(0.32, 0.73, 0);
+    steeringWheel.rotation.z = -0.28; // Ergonomic tilt toward driver
+    const wheelRimGeo = new THREE.TorusGeometry(0.105, 0.013, 10, 24);
+    wheelRimGeo.rotateY(Math.PI * 0.5);
+    this.geometries.push(wheelRimGeo);
+    const wheelRim = new THREE.Mesh(wheelRimGeo, leatherMat);
+    const stripeMat = this.getMat('#ff3b30', { emissive: '#ff3b30', emissiveIntensity: 0.35, roughness: 0.3 });
+    steeringWheel.add(
+      wheelRim,
+      // 12-o'clock racing stripe
+      this.box(0.022, 0.022, 0.024, stripeMat, 0, 0.105, 0, false, false),
+      // 3-spoke alloy hub
+      this.box(0.014, 0.020, 0.19, chromeMat, 0, 0, 0, false, false),
+      this.box(0.014, 0.095, 0.022, chromeMat, 0, -0.05, 0, false, false),
+      // Center horn boss
+      this.cylX(0.032, 0.026, carbonMat, -0.008, 0, 0, false, false)
+    );
+    cockpitGroup.add(steeringWheel);
+    // Steering column shaft
+    const colShaft = this.cylX(0.024, 0.14, carbonMat, 0.39, 0.71, 0, false, false);
+    colShaft.rotation.z = -0.28;
+    cockpitGroup.add(colShaft);
+
+    // Angled Left & Right A-Pillars + Upper Windshield Header + Rearview Mirror
+    for (const side of [-1, 1]) {
+      const pillar = this.box(0.042, 0.54, 0.038, carbonMat, 0.33, 0.94, side * 0.42, false, false);
+      pillar.rotation.z = 0.52;
+      cockpitGroup.add(pillar);
+    }
+    cockpitGroup.add(
+      this.box(0.08, 0.042, 0.88, carbonMat, 0.17, 1.175, 0, false, false),
+      // Hanging Rearview Mirror
+      this.box(0.018, 0.055, 0.016, carbonMat, 0.24, 1.135, 0, false, false),
+      this.box(0.022, 0.046, 0.15, carbonMat, 0.25, 1.095, 0, false, false),
+      this.box(0.010, 0.038, 0.138, chromeMat, 0.238, 1.095, 0, false, false)
+    );
+
+    // Police Cruiser Tactical MDT Dispatch Console on passenger dash
+    if (police) {
+      const mdtScreenMat = this.getMat('#38bdf8', { emissive: '#38bdf8', emissiveIntensity: 1.1, roughness: 0.15 });
+      const mdtGroup = new THREE.Group();
+      mdtGroup.position.set(0.39, 0.77, 0.24);
+      mdtGroup.rotation.y = 0.35;
+      mdtGroup.add(
+        this.box(0.024, 0.095, 0.14, carbonMat, 0, 0, 0, false, false),
+        this.box(0.010, 0.078, 0.122, mdtScreenMat, -0.011, 0, 0, false, false)
+      );
+      cockpitGroup.add(mdtGroup);
+    }
+
+    bodyGroup.add(cockpitGroup);
 
     // Hinged rear mid-engine clamshell deck (-0.43, 0.41, 0) lifts upward when searched
     const trunkPivot = new THREE.Group();
@@ -1609,40 +1929,49 @@ export class ThreeModelFactory {
     );
     bodyGroup.add(trunkPivot);
 
-    // Emissive LED DRL headlight blades
-    const headMat = this.getMat('#fff5c2', { emissive: '#fff0a3', emissiveIntensity: 1.4, roughness: 0.18 });
-    const hlL = this.box(0.05, 0.042, 0.19, headMat, 0.87, 0.25, -0.30, false, false);
+    // Emissive LED DRL headlight blades (intensity dynamically synced to v.headlightsOn)
+    const headMat = this.getMat('#fff6cc', { emissive: '#fff0a8', emissiveIntensity: 1.4, roughness: 0.14 }).clone();
+    this.materials.push(headMat);
+    const hlL = this.box(0.055, 0.044, 0.20, headMat, 0.875, 0.255, -0.30, false, false);
     hlL.rotation.y = 0.20;
-    const hlR = this.box(0.05, 0.042, 0.19, headMat, 0.87, 0.25, 0.30, false, false);
+    const hlR = this.box(0.055, 0.044, 0.20, headMat, 0.875, 0.255, 0.30, false, false);
     hlR.rotation.y = -0.20;
     bodyGroup.add(hlL, hlR);
 
     // Twin rear LED taillight strips (pulsed on brake/drift)
-    const tailMatL = this.getMat('#ff3b30', { emissive: '#ff3b30', emissiveIntensity: 0.5, roughness: 0.22 });
+    const tailMatL = this.getMat('#ff3b30', { emissive: '#ff3b30', emissiveIntensity: 0.5, roughness: 0.18 }).clone();
     const tailMatR = tailMatL.clone();
-    this.materials.push(tailMatR);
-    const tl = this.box(0.045, 0.048, 0.24, tailMatL, -0.89, 0.33, -0.27, false, false);
-    const tr = this.box(0.045, 0.048, 0.24, tailMatR, -0.89, 0.33, 0.27, false, false);
+    this.materials.push(tailMatL, tailMatR);
+    const tl = this.box(0.048, 0.050, 0.25, tailMatL, -0.895, 0.33, -0.27, false, false);
+    const tr = this.box(0.048, 0.050, 0.25, tailMatR, -0.895, 0.33, 0.27, false, false);
     bodyGroup.add(tl, tr);
 
-    // Wide low-profile supercar tires & 10-spoke Y-alloy wheels
+    // Wide low-profile supercar tires, 10-spoke Y-alloy wheels + ventilated brake rotors & calipers
     const wheelMats = [tireMat, wheelFaceMat, wheelFaceMat];
-    const makeWheel = () => this.cylinderWheel(0.34, 0.15, wheelMats, 0, 0, 0);
+    const makeWheel = () => this.cylinderWheel(0.34, 0.155, wheelMats, 0, 0, 0);
+    const addBrakeAssembly = (parent: THREE.Object3D, zSign: number) => {
+      parent.add(
+        this.box(0.14, 0.14, 0.03, rotorMat, 0, 0, -zSign * 0.04, false, false),
+        this.box(0.055, 0.09, 0.045, caliperMat, -0.05, 0.02, -zSign * 0.04, false, false)
+      );
+    };
 
     const wheelFL = new THREE.Group();
-    wheelFL.position.set(0.55, 0.17, -0.42);
+    wheelFL.position.set(0.55, 0.17, -0.425);
     const wFL = makeWheel();
     wheelFL.add(wFL);
+    addBrakeAssembly(wheelFL, -1);
 
     const wheelFR = new THREE.Group();
-    wheelFR.position.set(0.55, 0.17, 0.42);
+    wheelFR.position.set(0.55, 0.17, 0.425);
     const wFR = makeWheel();
     wheelFR.add(wFR);
+    addBrakeAssembly(wheelFR, 1);
 
     const wRL = makeWheel();
-    wRL.position.set(-0.55, 0.17, -0.42);
+    wRL.position.set(-0.55, 0.17, -0.425);
     const wRR = makeWheel();
-    wRR.position.set(-0.55, 0.17, 0.42);
+    wRR.position.set(-0.55, 0.17, 0.425);
 
     bodyGroup.add(wheelFL, wheelFR, wRL, wRR);
 
@@ -1651,20 +1980,20 @@ export class ThreeModelFactory {
     if (police) {
       // Matte-steel interceptor push-bar on front fascia
       bodyGroup.add(
-        this.box(0.045, 0.15, 0.48, carbonMat, 0.91, 0.21, 0),
-        this.box(0.05, 0.18, 0.04, carbonMat, 0.91, 0.22, -0.15),
-        this.box(0.05, 0.18, 0.04, carbonMat, 0.91, 0.22, 0.15)
+        this.box(0.048, 0.155, 0.50, carbonMat, 0.915, 0.21, 0),
+        this.box(0.052, 0.185, 0.042, carbonMat, 0.915, 0.22, -0.16),
+        this.box(0.052, 0.185, 0.042, carbonMat, 0.915, 0.22, 0.16)
       );
 
       // Low-profile aerodynamic LED lightbar on cab roof
       cabGroup.add(this.box(0.12, 0.045, 0.58, carbonMat, -0.02, 0.652, 0));
-      const redMat = this.getMat('#ff4a42', { emissive: '#ff4a42', emissiveIntensity: 0.25, roughness: 0.18 }).clone();
-      const blueMat = this.getMat('#4da3ff', { emissive: '#4da3ff', emissiveIntensity: 0.25, roughness: 0.18 }).clone();
+      const redMat = this.getMat('#ff4a42', { emissive: '#ff4a42', emissiveIntensity: 0.25, roughness: 0.16 }).clone();
+      const blueMat = this.getMat('#4da3ff', { emissive: '#4da3ff', emissiveIntensity: 0.25, roughness: 0.16 }).clone();
       this.materials.push(redMat, blueMat);
       sirenRed = this.box(0.11, 0.055, 0.22, redMat, -0.02, 0.665, -0.17, false, false);
       sirenBlue = this.box(0.11, 0.055, 0.22, blueMat, -0.02, 0.665, 0.17, false, false);
       cabGroup.add(sirenRed, sirenBlue);
-      cabGroup.add(this.box(0.11, 0.055, 0.12, this.getMat('#dce8f5', { roughness: 0.22 }), -0.02, 0.665, 0, false, false));
+      cabGroup.add(this.box(0.11, 0.055, 0.12, this.getMat('#dce8f5', { roughness: 0.18 }), -0.02, 0.665, 0, false, false));
     }
 
     const glintMesh = this.box(
@@ -1686,6 +2015,12 @@ export class ThreeModelFactory {
       root,
       bodyGroup,
       cabGroup,
+      cockpitGroup,
+      steeringWheel,
+      speedBar,
+      fuelBar,
+      boostLed,
+      headLights: [hlL, hlR],
       wheelFL,
       wheelFR,
       wheelMeshes: [wFL, wFR, wRL, wRR],
@@ -1694,6 +2029,8 @@ export class ThreeModelFactory {
       sirenRed,
       sirenBlue,
       glintMesh,
+      prevAngle: 0,
+      steerSmooth: 0,
     };
   }
 

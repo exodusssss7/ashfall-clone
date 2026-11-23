@@ -1,3 +1,6 @@
+import type { CubeFaceId } from './cubeSphere';
+export type { CubeFaceId };
+
 export type GamePhase = 'title' | 'playing' | 'paused' | 'gameover';
 
 export type TileKind =
@@ -33,6 +36,9 @@ export type PropKind =
   | 'fishing_post'
   | 'tree_pine'
   | 'tree_dead'
+  | 'tree_oak'
+  | 'tree_willow'
+  | 'tree_palm'
   | 'car_sedan'
   | 'car_police'
   | 'crate_wood'
@@ -78,7 +84,11 @@ export type LandmarkKind =
   | 'outpost'
   | 'cabin'
   | 'cave'
-  | 'tunnel';
+  | 'tunnel'
+  | 'gas_station'
+  | 'bunker'
+  | 'farmstead'
+  | 'watchtower';
 
 export type StructureKind = 'barricade' | 'spike_trap' | 'campfire';
 
@@ -132,6 +142,7 @@ export interface TileCell {
 }
 
 export interface WorldChunk {
+  face?: CubeFaceId;
   cx: number;
   cy: number;
   key: string;
@@ -140,6 +151,7 @@ export interface WorldChunk {
 
 export interface WorldLandmark {
   id: string;
+  face?: CubeFaceId;
   kind: LandmarkKind;
   name: string;
   biome: BiomeKind;
@@ -169,10 +181,13 @@ export interface WeatherSnapshot {
 
 export interface WorldStore {
   seed: number;
+  /** Active Cube-Sphere face (0..5); Face 0 (+Y) is Ashfall Crown containing starter town. */
+  activeFace: CubeFaceId;
   chunks: Map<string, WorldChunk>;
   populatedChunks: Set<string>;
   landmarks: Map<string, WorldLandmark>;
   pendingSpawns?: Array<{
+    face?: CubeFaceId;
     containers: LootContainer[];
     structures: WorldStructure[];
     vehicles: Vehicle[];
@@ -508,6 +523,17 @@ export interface HudSnapshot {
   bestScore: number;
   zombiesAlive: number;
   worldCoords: { gx: number; gy: number };
+  planetCoords?: {
+    face: CubeFaceId;
+    faceCode: string;
+    faceName: string;
+    latDeg: number;
+    lonDeg: number;
+    latLonLabel: string;
+    exploredChunks: number;
+    totalChunks: number;
+    exploredPct: number;
+  };
   nearCookingHeat: boolean;
   fishing: {
     phase: FishingPhase;
@@ -550,6 +576,7 @@ export interface HudSnapshot {
   weather: WeatherSnapshot;
   discoveredLandmarks: Array<{
     id: string;
+    face?: CubeFaceId;
     name: string;
     kind: LandmarkKind;
     x: number;

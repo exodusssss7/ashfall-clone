@@ -1,3 +1,16 @@
+import {
+  CUBE_FACE_SIZE,
+  PLANET_RADIUS_TILES,
+  SPHERE_NOISE_SCALE,
+  cubeChunkKey,
+  cubeFaceToSphere,
+  fbm3D,
+  isInsideCubeFaceTile,
+  resolveCubeSphereCoord,
+  resolveCubeSphereTile,
+  samplePlanetTelemetry,
+  type CubeFaceId,
+} from './cubeSphere';
 import { CHUNK_SIZE, MAP_SIZE, clamp } from './isometric';
 import { STRUCTURES } from './recipes';
 import {
@@ -307,12 +320,12 @@ export function applyBuildingToSetter(
   }
 }
 
-export function chunkKey(cx: number, cy: number): string {
-  return `${cx},${cy}`;
+export function chunkKey(cx: number, cy: number, face: CubeFaceId = 0): string {
+  return cubeChunkKey(face, cx, cy);
 }
 
-export function isOriginSectorChunk(cx: number, cy: number): boolean {
-  return cx >= 0 && cx <= 3 && cy >= 0 && cy <= 3;
+export function isOriginSectorChunk(cx: number, cy: number, face: CubeFaceId = 0): boolean {
+  return face === 0 && cx >= 0 && cx <= 3 && cy >= 0 && cy <= 3;
 }
 
 export function mainEwHighwayY(seed: number, gx: number): number {
@@ -377,11 +390,21 @@ export interface RoadSample {
   centerOffset: number;
 }
 
-export function sampleRoadInfo(seed: number, gx: number, gy: number): RoadSample {
-  // Starter town sector (0..63, 0..63) stays aligned to town crossroads
-  if (gx >= 0 && gx < 64 && gy >= 0 && gy < 64) {
-    const dx = Math.abs(gx - 28);
-    const dy = Math.abs(gy - 28);
+export function sampleRoadInfo(
+  seed: number,
+  gx: number,
+  gy: number,
+  face: CubeFaceId = 0
+): RoadSample {
+  const res = isInsideCubeFaceTile(gx, gy) ? { face, gx, gy } : resolveCubeSphereCoord(face, gx, gy);
+  const rFace = res.face;
+  const rx = res.gx;
+  const ry = res.gy;
+
+  // Starter town sector (0..63, 0..63) on Face 0 (Ashfall Crown) stays aligned to town crossroads
+  if (rFace === 0 && rx >= 0 && rx < 64 && ry >= 0 && ry < 64) {
+    const dx = Math.abs(rx - 28);
+    const dy = Math.abs(ry - 28);
     const d = Math.min(dx, dy);
     return {
       isMainHighway: d <= 2.1,
@@ -390,72 +413,84 @@ export function sampleRoadInfo(seed: number, gx: number, gy: number): RoadSample
       isShoulder: d > 2.1 && d <= 3.1,
       highwayDist: d,
       roadAxis: dx <= 3 && dy <= 3 ? 'junction' : dy <= 3 ? 'ew' : dx <= 3 ? 'ns' : 'none',
-      centerOffset: dy <= dx ? gy - 28 : gx - 28,
+      centerOffset: dy <= dx ? ry - 28 : rx - 28,
     };
   }
 
-  const ewY = mainEwHighwayY(seed, gx);
-  const ewSlope = (mainEwHighwayY(seed, gx + 1) - mainEwHighwayY(seed, gx - 1)) * 0.5;
-  const ewDist = Math.abs(gy - ewY) / Math.hypot(1, ewSlope);
+  // Project onto the 3D unit sphere S^2 so planetary ring highways loop seamlessly around all 6 faces
+  const p = cubeFaceToSphere(rFace, rx, ry);
 
-  const nsX = mainNsHighwayX(seed, gy);
-  const nsSlope = (mainNsHighwayX(seed, gy + 1) - mainNsHighwayX(seed, gy - 1)) * 0.5;
-  const nsDist = Math.abs(gx - nsX) / Math.hypot(1, nsSlope);
+  // Smooth organic great-circle highway warping in 3D sphere space (scaled to massive 2,048-tile globe)
+  const warpScale = 2.4 * SPHERE_NOISE_SCALE;
+  const warpAmp = 0.22 / SPHERE_NOISE_SCALE;
+  const warpZ = (fbm3D(seed + 101, p.x * warpScale, p.y * warpScale, p.z * warpScale, 2) - 0.5) * warpAmp;
+  const warpX = (fbm3D(seed + 202, p.x * warpScale + 4.3, p.y * warpScale - 2.1, p.z * warpScale, 2) - 0.5) * warpAmp;
+  const warpY = (fbm3D(seed + 313, p.x * warpScale - 3.1, p.y * warpScale + 5.7, p.z * warpScale, 2) - 0.5) * warpAmp * 1.1;
 
-  let bestHwyDist = Math.min(ewDist, nsDist);
-  let bestAxis: 'ew' | 'ns' = ewDist <= nsDist ? 'ew' : 'ns';
-  let bestOffset = ewDist <= nsDist ? gy - ewY : gx - nsX;
+  // Near starter town on Face 0, smoothly blend the two prime meridians from town crossroads (gx=28, gy=28)
+  let townBlend = 0;
+  if (rFace === 0) {
+    const distFromTown = Math.hypot(rx - 31.5, ry - 31.5);
+    townBlend = 1 - smoothstep(32, 84, distFromTown);
+  }
+  const townOffsetZ = -4 / (CUBE_FACE_SIZE * 0.5); // gy=28 sits 4 tiles north of Face 0 center (gy=32)
+  const townOffsetX = -4 / (CUBE_FACE_SIZE * 0.5); // gx=28 sits 4 tiles west of Face 0 center (gx=32)
 
-  // Periodic outer winding highways / beltways every ~108 tiles
-  const bandY = Math.round((gy - 28) / 108);
-  if (bandY !== 0) {
-    const sy = secondaryEwHighwayY(seed, gx, bandY);
-    const sSlope = (secondaryEwHighwayY(seed, gx + 1, bandY) - secondaryEwHighwayY(seed, gx - 1, bandY)) * 0.5;
-    const d = Math.abs(gy - sy) / Math.hypot(1, sSlope);
-    if (d < bestHwyDist) {
-      bestHwyDist = d;
-      bestAxis = 'ew';
-      bestOffset = gy - sy;
-    }
+  // Planetary Great-Circle & Continental Ring Highway Network:
+  // 1) East-West Prime Meridian (p.z ~ 0)
+  // 2) North-South Prime Meridian (p.x ~ 0)
+  // 3) Equatorial Beltway (p.y ~ 0) + Northern/Southern Continental Ring Highways (p.y ~ +/-0.55)
+  const zTarget = townOffsetZ * townBlend + warpZ * (1 - townBlend);
+  const xTarget = townOffsetX * townBlend + warpX * (1 - townBlend);
+  const yTarget = warpY;
+
+  const distMercEW = Math.abs(p.z - zTarget) * PLANET_RADIUS_TILES;
+  const distMercNS = Math.abs(p.x - xTarget) * PLANET_RADIUS_TILES;
+  const distEquator = Math.abs(p.y - yTarget) * PLANET_RADIUS_TILES;
+  const distNorthRing = Math.abs(p.y - (0.55 + warpY * 0.8)) * PLANET_RADIUS_TILES;
+  const distSouthRing = Math.abs(p.y - (-0.55 + warpY * 0.8)) * PLANET_RADIUS_TILES;
+  const distLatRing = Math.min(distEquator, distNorthRing, distSouthRing);
+
+  let bestHwyDist = distMercEW;
+  let bestAxis: 'ew' | 'ns' = 'ew';
+  let bestOffset = (p.z - zTarget) * PLANET_RADIUS_TILES;
+
+  if (distMercNS < bestHwyDist) {
+    bestHwyDist = distMercNS;
+    bestAxis = 'ns';
+    bestOffset = (p.x - xTarget) * PLANET_RADIUS_TILES;
+  }
+  if (distLatRing < bestHwyDist) {
+    bestHwyDist = distLatRing;
+    bestAxis = rFace === 1 || rFace === 2 ? 'ns' : 'ew';
+    bestOffset = (p.y - yTarget) * PLANET_RADIUS_TILES;
   }
 
-  const bandX = Math.round((gx - 28) / 108);
-  if (bandX !== 0) {
-    const sx = secondaryNsHighwayX(seed, gy, bandX);
-    const sSlope = (secondaryNsHighwayX(seed, gy + 1, bandX) - secondaryNsHighwayX(seed, gy - 1, bandX)) * 0.5;
-    const d = Math.abs(gx - sx) / Math.hypot(1, sSlope);
-    if (d < bestHwyDist) {
-      bestHwyDist = d;
-      bestAxis = 'ns';
-      bestOffset = gx - sx;
-    }
-  }
-
-  // Directional winding country gravel backroads midway between highways (crosses rivers cleanly)
-  const nearTownSafe = smoothstep(46, 62, Math.hypot(gx - 31.5, gy - 31.5));
+  // Diagonal spherical country gravel backroads connecting rural interiors (away from starter town)
   let countryDist = 99;
+  const nearTownSafe = rFace === 0 ? smoothstep(46, 62, Math.hypot(rx - 31.5, ry - 31.5)) : 1;
   if (nearTownSafe >= 0.9) {
-    const laneYIdx = Math.round((gy - 82) / 108);
-    const cy = countryEwLaneY(seed, gx, laneYIdx);
-    const cySlope = (countryEwLaneY(seed, gx + 1, laneYIdx) - countryEwLaneY(seed, gx - 1, laneYIdx)) * 0.5;
-    const cEwDist = Math.abs(gy - cy) / Math.hypot(1, cySlope);
-
-    const laneXIdx = Math.round((gx - 82) / 108);
-    const cx = countryNsLaneX(seed, gy, laneXIdx);
-    const cxSlope = (countryNsLaneX(seed, gy + 1, laneXIdx) - countryNsLaneX(seed, gy - 1, laneXIdx)) * 0.5;
-    const cNsDist = Math.abs(gx - cx) / Math.hypot(1, cxSlope);
-
-    countryDist = Math.min(cEwDist, cNsDist);
-    if (countryDist < bestHwyDist) {
-      bestAxis = cEwDist <= cNsDist ? 'ew' : 'ns';
-    }
+    const cFreq = 3.2 * SPHERE_NOISE_SCALE;
+    const cAmp = 0.16 / SPHERE_NOISE_SCALE;
+    const cWarpA = (fbm3D(seed + 557, p.x * cFreq, p.y * cFreq, p.z * cFreq, 2) - 0.5) * cAmp;
+    const cWarpB = (fbm3D(seed + 661, p.x * cFreq + 2.9, p.y * cFreq - 4.1, p.z * cFreq, 2) - 0.5) * cAmp;
+    const dDiagA = Math.abs((p.x - p.z) * 0.70710678 - cWarpA) * PLANET_RADIUS_TILES;
+    const dDiagB = Math.abs((p.x + p.z) * 0.70710678 - cWarpB) * PLANET_RADIUS_TILES;
+    countryDist = Math.min(dDiagA, dDiagB);
   }
 
   const isMainHighway = bestHwyDist <= 2.35;
   const isCountryRoad = !isMainHighway && countryDist <= 1.35;
   const isShoulder = !isMainHighway && !isCountryRoad && (bestHwyDist <= 3.35 || countryDist <= 2.05);
-  const roadAxis: RoadSample['roadAxis'] =
-    ewDist <= 3.2 && nsDist <= 3.2 ? 'junction' : isMainHighway || isCountryRoad ? bestAxis : 'none';
+  const nearJunction =
+    (distMercEW <= 3.2 && distMercNS <= 3.2) ||
+    (distMercEW <= 3.2 && distEquator <= 3.2) ||
+    (distMercNS <= 3.2 && distEquator <= 3.2);
+  const roadAxis: RoadSample['roadAxis'] = nearJunction
+    ? 'junction'
+    : isMainHighway || isCountryRoad
+      ? bestAxis
+      : 'none';
 
   return {
     isMainHighway,
@@ -468,6 +503,67 @@ export function sampleRoadInfo(seed: number, gx: number, gy: number): RoadSample
   };
 }
 
+export interface OceanSample {
+  inDeepSea: boolean;
+  inShallowSea: boolean;
+  inSeaWater: boolean;
+  inBeach: boolean;
+  inDune: boolean;
+  /** 0 in deep sea -> 1 far inland; used for smooth beach-to-inland elevation ramp */
+  landMask: number;
+  continentVal: number;
+}
+
+/**
+ * Evaluates 3D spherical continental shelves across the Cube-Sphere planet.
+ * Carves vast deep-sea ocean basins ringed by shallow surf zones, wide golden sandy beaches,
+ * and coastal dune transitions (while keeping Face 0 starter town & immediate ring dry).
+ */
+export function sampleOceanInfo(
+  seed: number,
+  gx: number,
+  gy: number,
+  face: CubeFaceId = 0
+): OceanSample {
+  const res = isInsideCubeFaceTile(gx, gy) ? { face, gx, gy } : resolveCubeSphereCoord(face, gx, gy);
+  const rFace = res.face;
+  const rx = res.gx;
+  const ry = res.gy;
+
+  // Keep Face 0 Ashfall Crossroads starter town and immediate highway exits safely inland
+  if (rFace === 0) {
+    const dTown = Math.hypot(rx - 31.5, ry - 31.5);
+    if (dTown < 92) {
+      return { inDeepSea: false, inShallowSea: false, inSeaWater: false, inBeach: false, inDune: false, landMask: 1, continentVal: 0.75 };
+    }
+  }
+
+  const p = cubeFaceToSphere(rFace, rx, ry);
+  const cFreq = 0.72 * SPHERE_NOISE_SCALE;
+  const warpFreq = 1.45 * SPHERE_NOISE_SCALE;
+  const wAmp = 0.14 / SPHERE_NOISE_SCALE;
+  const wx = (fbm3D(seed + 1151, p.x * warpFreq, p.y * warpFreq, p.z * warpFreq, 2) - 0.5) * wAmp;
+  const wy = (fbm3D(seed + 1163, p.x * warpFreq + 3.1, p.y * warpFreq - 2.4, p.z * warpFreq + 1.7, 2) - 0.5) * wAmp;
+  const wz = (fbm3D(seed + 1171, p.x * warpFreq - 2.2, p.y * warpFreq + 4.2, p.z * warpFreq - 3.3, 2) - 0.5) * wAmp;
+
+  let cont = fbm3D(seed + 1187, (p.x + wx) * cFreq, (p.y + wy) * cFreq, (p.z + wz) * cFreq, 3);
+  // Gently lift Face 0 around the starter town so the continent transitions smoothly into coastal beaches
+  if (rFace === 0) {
+    const dTown = Math.hypot(rx - 31.5, ry - 31.5);
+    const townLift = (1 - smoothstep(92, 160, dTown)) * 0.34;
+    cont = clamp(cont + townLift, 0, 1);
+  }
+
+  const inDeepSea = cont < 0.345;
+  const inShallowSea = !inDeepSea && cont < 0.378;
+  const inSeaWater = inDeepSea || inShallowSea;
+  const inBeach = !inSeaWater && cont < 0.425;
+  const inDune = !inSeaWater && !inBeach && cont < 0.455;
+  const landMask = smoothstep(0.405, 0.51, cont);
+
+  return { inDeepSea, inShallowSea, inSeaWater, inBeach, inDune, landMask, continentVal: cont };
+}
+
 export interface RiverSample {
   inWater: boolean;
   inBankSand: boolean;
@@ -475,36 +571,76 @@ export interface RiverSample {
   riverBand: number;
 }
 
-export function sampleRiverInfo(seed: number, gx: number, gy: number): RiverSample {
-  // Keep starter town (0..63) and immediate East exit highway (84, 28) dry
-  const distFromTown = Math.hypot(gx - 31.5, gy - 31.5);
-  const distFromEastExit = Math.hypot(gx - 84, gy - 28);
-  if (distFromTown < 48 || distFromEastExit < 10) {
-    return { inWater: false, inBankSand: false, inFloodMud: false, riverBand: 1 };
+export function sampleRiverInfo(
+  seed: number,
+  gx: number,
+  gy: number,
+  face: CubeFaceId = 0
+): RiverSample {
+  const res = isInsideCubeFaceTile(gx, gy) ? { face, gx, gy } : resolveCubeSphereCoord(face, gx, gy);
+  const rFace = res.face;
+  const rx = res.gx;
+  const ry = res.gy;
+
+  // Keep starter town (0..63) and immediate East exit highway (84, 28) on Face 0 dry
+  if (rFace === 0) {
+    const distFromTown = Math.hypot(rx - 31.5, ry - 31.5);
+    const distFromEastExit = Math.hypot(rx - 84, ry - 28);
+    if (distFromTown < 48 || distFromEastExit < 10) {
+      return { inWater: false, inBankSand: false, inFloodMud: false, riverBand: 1 };
+    }
   }
 
-  const warpX = (fbm2D(seed + 601, gx * 0.014, gy * 0.014, 2) - 0.5) * 18;
-  const warpY = (fbm2D(seed + 607, gx * 0.014 + 13.7, gy * 0.014 - 8.1, 2) - 0.5) * 18;
-  const n = fbm2D(seed + 409, (gx + warpX) * 0.0095, (gy + warpY) * 0.0095, 3);
+  // Domain-warped 3D spherical noise scaled proportionally to planet radius
+  const p = cubeFaceToSphere(rFace, rx, ry);
+  const wFreq = 2.8 * SPHERE_NOISE_SCALE;
+  const wAmp = 0.26 / SPHERE_NOISE_SCALE;
+  const warpX = (fbm3D(seed + 601, p.x * wFreq, p.y * wFreq, p.z * wFreq, 2) - 0.5) * wAmp;
+  const warpY = (fbm3D(seed + 607, p.x * wFreq + 5.1, p.y * wFreq - 3.3, p.z * wFreq + 1.9, 2) - 0.5) * wAmp;
+  const warpZ = (fbm3D(seed + 613, p.x * wFreq - 2.7, p.y * wFreq + 4.4, p.z * wFreq - 3.8, 2) - 0.5) * wAmp;
+
+  const rFreq = 2.15 * SPHERE_NOISE_SCALE;
+  const n = fbm3D(seed + 409, (p.x + warpX) * rFreq, (p.y + warpY) * rFreq, (p.z + warpZ) * rFreq, 3);
   const band = Math.abs(n - 0.5);
 
-  const inWater = band < 0.025;
-  const inBankSand = !inWater && band < 0.039;
-  const inFloodMud = !inWater && !inBankSand && band < 0.056;
+  // Slightly wider braided river channels in the Emerald River Basin (+Z hemisphere)
+  const basinBonus = clamp(p.z * 0.005, 0, 0.005);
+  const inWater = band < 0.025 + basinBonus;
+  const inBankSand = !inWater && band < 0.039 + basinBonus;
+  const inFloodMud = !inWater && !inBankSand && band < 0.056 + basinBonus;
   return { inWater, inBankSand, inFloodMud, riverBand: band };
 }
 
-export function sampleBiomeAt(seed: number, gx: number, gy: number): BiomeKind {
-  if (gx >= 0 && gx < 64 && gy >= 0 && gy < 64) {
+export function sampleBiomeAt(
+  seed: number,
+  gx: number,
+  gy: number,
+  face: CubeFaceId = 0
+): BiomeKind {
+  const res = isInsideCubeFaceTile(gx, gy) ? { face, gx, gy } : resolveCubeSphereCoord(face, gx, gy);
+  const rFace = res.face;
+  const rx = res.gx;
+  const ry = res.gy;
+
+  if (rFace === 0 && rx >= 0 && rx < 64 && ry >= 0 && ry < 64) {
     return 'town_edge';
   }
-  const river = sampleRiverInfo(seed, gx, gy);
+  const river = sampleRiverInfo(seed, rx, ry, rFace);
   if (river.riverBand < 0.088) {
     return 'river_valley';
   }
-  const moisture = fbm2D(seed + 701, gx * 0.0072, gy * 0.0072, 3);
-  const heat = fbm2D(seed + 911, gx * 0.0072 + 21.4, gy * 0.0072 - 11.8, 3);
-  if (heat > 0.57 && moisture < 0.50) {
+
+  // Seamless 3D spherical climate (moisture & heat) scaled for grand continental biomes
+  const p = cubeFaceToSphere(rFace, rx, ry);
+  const bFreq = 1.95 * SPHERE_NOISE_SCALE;
+  const rawMoisture = fbm3D(seed + 701, p.x * bFreq, p.y * bFreq, p.z * bFreq, 3);
+  const rawHeat = fbm3D(seed + 911, p.x * bFreq + 6.4, p.y * bFreq - 3.8, p.z * bFreq + 2.2, 3);
+
+  // Smooth hemisphere climate biases (no hard face borders!)
+  const moisture = clamp(rawMoisture + p.x * 0.08 + p.z * 0.09 - (-p.x) * 0.07 - (-p.y) * 0.08, 0, 1);
+  const heat = clamp(rawHeat + (-p.x) * 0.10 + (-p.y) * 0.14 - p.z * 0.05 - (-p.z) * 0.08, 0, 1);
+
+  if (heat > 0.56 && moisture < 0.51) {
     return 'scorched_barrens';
   }
   if (moisture > 0.49) {
@@ -529,12 +665,12 @@ export function getBiomeDisplayName(biome: BiomeKind): string {
   }
 }
 
-export function createOuterBaseCell(seed: number, gx: number, gy: number): TileCell {
-  const h = hashCoords(seed, gx, gy);
+export function createOuterBaseCell(seed: number, gx: number, gy: number, face: CubeFaceId = 0): TileCell {
+  const h = hashCoords(seed + face * 10007, gx, gy);
   const r = (h % 1000) / 1000;
-  const biome = sampleBiomeAt(seed, gx, gy);
-  const road = sampleRoadInfo(seed, gx, gy);
-  const river = sampleRiverInfo(seed, gx, gy);
+  const biome = sampleBiomeAt(seed, gx, gy, face);
+  const road = sampleRoadInfo(seed, gx, gy, face);
+  const river = sampleRiverInfo(seed, gx, gy, face);
 
   // Smooth organic patch noise instead of white-noise 1x1 tile speckling
   const patch = fbm2D(seed + 111, gx * 0.14, gy * 0.14, 2) + (r - 0.5) * 0.14;
@@ -556,8 +692,19 @@ export function createOuterBaseCell(seed: number, gx: number, gy: number): TileC
   let prop: PropKind = 'none';
   let variant = h % 4;
 
-  // Carve winding river & banks first (water is wadeable)
-  if (river.inWater) {
+  const ocean = sampleOceanInfo(seed, gx, gy, face);
+
+  // Carve deep sea ocean basins, wide golden sandy beaches & winding rivers
+  if (ocean.inSeaWater) {
+    tile = 'water';
+    solid = false;
+  } else if (ocean.inBeach) {
+    tile = 'sand';
+    solid = false;
+  } else if (ocean.inDune) {
+    tile = patch < 0.64 ? 'sand' : 'grass';
+    solid = false;
+  } else if (river.inWater) {
     tile = 'water';
     solid = false;
   } else if (river.inBankSand) {
@@ -567,13 +714,13 @@ export function createOuterBaseCell(seed: number, gx: number, gy: number): TileC
   }
 
   // Overlay winding highways, country roads, and elevated bridges across rivers!
-  const bridge = sampleBridgeInfo(seed, gx + 0.5, gy + 0.5);
+  const bridge = sampleBridgeInfo(seed, gx + 0.5, gy + 0.5, face);
   if (bridge.isBridge) {
     tile = 'bridge_deck';
     solid = false;
     variant = bridge.axis === 'ns' ? 2 + (h % 2) : h % 2;
   } else if (road.isMainHighway) {
-    if (river.inWater || river.riverBand < 0.033) {
+    if (ocean.inSeaWater || river.inWater || river.riverBand < 0.033) {
       tile = 'bridge_deck';
       solid = false;
     } else {
@@ -587,7 +734,7 @@ export function createOuterBaseCell(seed: number, gx: number, gy: number): TileC
       solid = false;
     }
   } else if (road.isCountryRoad) {
-    if (river.inWater || river.riverBand < 0.033) {
+    if (ocean.inSeaWater || river.inWater || river.riverBand < 0.033) {
       tile = 'bridge_deck';
       solid = false;
     } else {
@@ -599,7 +746,7 @@ export function createOuterBaseCell(seed: number, gx: number, gy: number): TileC
   }
 
   // Stamp hidden Rocky Cliff Caves, solid tunnel retaining shoulders & impassable steep cliff escarpments
-  const caveHit = findRockyCaveAt(seed, gx + 0.5, gy + 0.5);
+  const caveHit = findRockyCaveAt(seed, gx + 0.5, gy + 0.5, face);
   if (caveHit && (caveHit.inInterior || caveHit.inMouth)) {
     tile = 'cave_floor';
     prop = 'none';
@@ -612,22 +759,22 @@ export function createOuterBaseCell(seed: number, gx: number, gy: number): TileC
     prop = caveHit.isFrontCutawayWall ? 'none' : 'cliff_rock';
     solid = true;
     blocksSight = true;
-  } else if (!bridge.isBridge && !river.inWater && isTunnelSideWallTile(seed, gx, gy)) {
+  } else if (!bridge.isBridge && !river.inWater && isTunnelSideWallTile(seed, gx, gy, face)) {
     tile = 'cliff_stone';
-    const tunNorth = sampleRoadTunnelInfo(seed, gx + 0.5, gy - 0.5).isTunnel;
-    const tunWest = sampleRoadTunnelInfo(seed, gx - 0.5, gy + 0.5).isTunnel;
+    const tunNorth = sampleRoadTunnelInfo(seed, gx + 0.5, gy - 0.5, face).isTunnel;
+    const tunWest = sampleRoadTunnelInfo(seed, gx - 0.5, gy + 0.5, face).isTunnel;
     // Camera-facing (+Z/+X) tunnel retaining wall stays low in ISO (rendered by threeRenderer cutaway curb + FPS upper wall)
     prop = tunNorth || tunWest ? 'none' : 'cliff_rock';
     solid = true;
     blocksSight = true;
   } else if (!bridge.isBridge && !river.inWater) {
-    const surf = sampleTerrainSurface(seed, gx + 0.5, gy + 0.5);
+    const surf = sampleTerrainSurface(seed, gx + 0.5, gy + 0.5, face);
     if (surf.isCliff) {
       const touchesBridge =
-        sampleBridgeInfo(seed, gx + 1.5, gy + 0.5).isBridge ||
-        sampleBridgeInfo(seed, gx - 0.5, gy + 0.5).isBridge ||
-        sampleBridgeInfo(seed, gx + 0.5, gy + 1.5).isBridge ||
-        sampleBridgeInfo(seed, gx + 0.5, gy - 0.5).isBridge;
+        sampleBridgeInfo(seed, gx + 1.5, gy + 0.5, face).isBridge ||
+        sampleBridgeInfo(seed, gx - 0.5, gy + 0.5, face).isBridge ||
+        sampleBridgeInfo(seed, gx + 0.5, gy + 1.5, face).isBridge ||
+        sampleBridgeInfo(seed, gx + 0.5, gy - 0.5, face).isBridge;
       tile = 'cliff_stone';
       prop = touchesBridge ? 'none' : 'cliff_rock';
       solid = true;
@@ -661,11 +808,12 @@ interface RegionPOIPlan {
   includeDrivableCar?: boolean;
 }
 
-function getMacroRegionPOI(seed: number, rx: number, ry: number): RegionPOIPlan | null {
-  // Never override the 4x4 origin sector (rx in 0..1, ry in 0..1)
-  if (rx >= 0 && rx <= 1 && ry >= 0 && ry <= 1) return null;
+function getMacroRegionPOI(seed: number, rx: number, ry: number, face: CubeFaceId = 0): RegionPOIPlan | null {
+  // Never override the 4x4 origin sector (rx in 0..1, ry in 0..1) on Face 0 (Ashfall Crown)
+  if (face === 0 && rx >= 0 && rx <= 1 && ry >= 0 && ry <= 1) return null;
 
-  const h = hashCoords(seed + 1337, rx, ry);
+  const h = hashCoords(seed + 1337 + face * 10007, rx, ry);
+  const lmPrefix = face === 0 ? 'lm' : `f${face}_lm`;
   const rng = createRng(h);
 
   // Leave ~18% of macro-regions as pure untamed wilderness
@@ -679,7 +827,7 @@ function getMacroRegionPOI(seed: number, rx: number, ry: number): RegionPOIPlan 
   let riverSpot: { gx: number; gy: number } | null = null;
   let drySpot: { gx: number; gy: number } | null = null;
 
-  const regionCave = getMacroRegionCave(seed, rx, ry);
+  const regionCave = getMacroRegionCave(seed, rx, ry, face);
 
   const isFootprintDryAndRoadFree = (cx: number, cy: number, pad = 6): boolean => {
     if (regionCave && Math.hypot(cx - regionCave.gx, cy - regionCave.gy) < 12) return false;
@@ -687,9 +835,9 @@ function getMacroRegionPOI(seed: number, rx: number, ry: number): RegionPOIPlan 
       for (let dx = -pad; dx <= pad; dx += 2) {
         const tx = cx + dx;
         const ty = cy + dy;
-        if (sampleRoadInfo(seed, tx, ty).isAnyRoad) return false;
-        if (sampleRiverInfo(seed, tx, ty).inWater) return false;
-        const surf = sampleTerrainSurface(seed, tx + 0.5, ty + 0.5);
+        if (sampleRoadInfo(seed, tx, ty, face).isAnyRoad) return false;
+        if (sampleRiverInfo(seed, tx, ty, face).inWater || sampleOceanInfo(seed, tx, ty, face).inSeaWater) return false;
+        const surf = sampleTerrainSurface(seed, tx + 0.5, ty + 0.5, face);
         if (surf.isCliff || surf.slope > 0.44) return false;
       }
     }
@@ -698,14 +846,14 @@ function getMacroRegionPOI(seed: number, rx: number, ry: number): RegionPOIPlan 
 
   for (let gy = regStartY + 8; gy <= regStartY + 23; gy += 2) {
     for (let gx = regStartX + 8; gx <= regStartX + 23; gx += 2) {
-      // Keep East highway starter test sector clean through gx = 90
-      if (gx >= 56 && gx <= 92 && gy >= 22 && gy <= 35) continue;
+      // Keep East highway starter test sector clean through gx = 90 on Face 0
+      if (face === 0 && gx >= 56 && gx <= 92 && gy >= 22 && gy <= 35) continue;
 
-      const road = sampleRoadInfo(seed, gx, gy);
-      const river = sampleRiverInfo(seed, gx, gy);
-      const tunnel = sampleRoadTunnelInfo(seed, gx + 0.5, gy + 0.5);
+      const road = sampleRoadInfo(seed, gx, gy, face);
+      const river = sampleRiverInfo(seed, gx, gy, face);
+      const tunnel = sampleRoadTunnelInfo(seed, gx + 0.5, gy + 0.5, face);
 
-      if (road.isMainHighway && !river.inWater && river.riverBand > 0.04 && !tunnel.isTunnel && !tunnel.isPortal) {
+      if (road.isMainHighway && !river.inWater && !sampleOceanInfo(seed, gx, gy, face).inSeaWater && river.riverBand > 0.04 && !tunnel.isTunnel && !tunnel.isPortal) {
         if (!highwaySpot || Math.abs(road.centerOffset) < highwaySpot.dist) {
           highwaySpot = { gx, gy, dist: Math.abs(road.centerOffset) };
         }
@@ -723,14 +871,15 @@ function getMacroRegionPOI(seed: number, rx: number, ry: number): RegionPOIPlan 
     }
   }
 
-  const distRing = Math.hypot(rx - 0.5, ry - 0.5);
+  const telemetryCenter = samplePlanetTelemetry(face, regStartX + 16, regStartY + 16);
+  const distRing = face === 0 ? Math.hypot(rx - 0.5, ry - 0.5) : 3.5 + telemetryCenter.threatFactor * 3;
   const roll = rng();
 
   // 1. Highway Pileups & Military Checkpoints on major curved highways
   if (highwaySpot && roll < 0.72) {
     const isCheckpoint = rng() < 0.48;
-    const biome = sampleBiomeAt(seed, highwaySpot.gx, highwaySpot.gy);
-    const id = `lm_${rx}_${ry}`;
+    const biome = sampleBiomeAt(seed, highwaySpot.gx, highwaySpot.gy, face);
+    const id = `${lmPrefix}_${rx}_${ry}`;
     if (isCheckpoint) {
       return {
         id,
@@ -767,9 +916,9 @@ function getMacroRegionPOI(seed: number, rx: number, ry: number): RegionPOIPlan 
 
   // 2. Riverside / Forest Campgrounds
   if (riverSpot && roll < 0.65) {
-    const biome = sampleBiomeAt(seed, riverSpot.gx, riverSpot.gy);
+    const biome = sampleBiomeAt(seed, riverSpot.gx, riverSpot.gy, face);
     return {
-      id: `lm_${rx}_${ry}`,
+      id: `${lmPrefix}_${rx}_${ry}`,
       kind: 'campground',
       name: `River Camp #${(h % 47) + 1}`,
       biome,
@@ -785,14 +934,14 @@ function getMacroRegionPOI(seed: number, rx: number, ry: number): RegionPOIPlan 
   if (!drySpot) return null;
   const anchor = drySpot;
   // Make sure anchor doesn't collide with East highway test coord (84, 28)
-  if (Math.hypot(anchor.gx - 84, anchor.gy - 28) < 12) return null;
+  if (face === 0 && Math.hypot(anchor.gx - 84, anchor.gy - 28) < 12) return null;
 
-  const biome = sampleBiomeAt(seed, anchor.gx, anchor.gy);
+  const biome = sampleBiomeAt(seed, anchor.gx, anchor.gy, face);
   const subRoll = rng();
 
   if (biome === 'pine_forest' && subRoll < 0.44) {
     return {
-      id: `lm_${rx}_${ry}`,
+      id: `${lmPrefix}_${rx}_${ry}`,
       kind: 'campground',
       name: `Pinewood Camp #${(h % 39) + 1}`,
       biome,
@@ -807,10 +956,12 @@ function getMacroRegionPOI(seed: number, rx: number, ry: number): RegionPOIPlan 
 
   const buildingPool: LandmarkKind[] =
     biome === 'scorched_barrens'
-      ? ['outpost', 'diner', 'clinic']
+      ? ['bunker', 'gas_station', 'outpost', 'diner', 'watchtower']
       : biome === 'pine_forest'
-        ? ['cabin', 'outpost', 'clinic']
-        : ['diner', 'clinic', 'cabin', 'outpost'];
+        ? ['watchtower', 'cabin', 'bunker', 'outpost', 'clinic']
+        : biome === 'river_valley'
+          ? ['farmstead', 'gas_station', 'cabin', 'diner', 'clinic']
+          : ['farmstead', 'gas_station', 'diner', 'clinic', 'watchtower', 'bunker', 'cabin', 'outpost'];
 
   const kind = buildingPool[h % buildingPool.length];
   const labelPrefix =
@@ -820,21 +971,35 @@ function getMacroRegionPOI(seed: number, rx: number, ry: number): RegionPOIPlan 
         ? 'Roadside Diner'
         : kind === 'outpost'
           ? 'Ranger Outpost'
-          : 'Timber Cabin';
+          : kind === 'gas_station'
+            ? 'Fuel Depot'
+            : kind === 'bunker'
+              ? 'Fallout Bunker'
+              : kind === 'farmstead'
+                ? 'Abandoned Farmstead'
+                : kind === 'watchtower'
+                  ? 'Fire Watchtower'
+                  : 'Timber Cabin';
 
+  const isHighThreat = kind === 'outpost' || kind === 'bunker' || distRing > 4.2;
   return {
-    id: `lm_${rx}_${ry}`,
+    id: `${lmPrefix}_${rx}_${ry}`,
     kind,
-    name: `${labelPrefix} ${(h % 19) + 1}`,
+    name: `${labelPrefix} ${(h % 29) + 1}`,
     biome,
     gx: anchor.gx,
     gy: anchor.gy,
-    radius: 8,
-    threatLevel: kind === 'outpost' ? 'high' : 'medium',
+    radius: kind === 'bunker' || kind === 'gas_station' ? 9 : 8,
+    threatLevel: isHighThreat ? 'high' : 'medium',
     hotspotPacks:
-      kind === 'outpost'
-        ? ['runner', 'spitter', 'bloater', 'walker']
-        : ['walker', 'walker', 'runner'],
+      kind === 'bunker'
+        ? ['runner', 'runner', 'bloater', 'spitter', 'walker', 'walker']
+        : kind === 'outpost' || kind === 'watchtower'
+          ? ['runner', 'spitter', 'bloater', 'walker']
+          : kind === 'gas_station'
+            ? ['runner', 'bloater', 'walker', 'walker']
+            : ['walker', 'walker', 'runner'],
+    includeDrivableCar: kind === 'gas_station' ? rng() < 0.72 : kind === 'farmstead' ? rng() < 0.35 : false,
   };
 }
 
@@ -988,6 +1153,191 @@ function createBuildingSpecForLandmark(poi: RegionPOIPlan, seed: number): Buildi
     };
   }
 
+  if (poi.kind === 'gas_station') {
+    // Highway Fuel Depot: convenience mart + repair garage bay + forecourt pump island apron
+    return {
+      x0: bx,
+      y0: by,
+      w: 12,
+      h: 9,
+      wallType: 'wall_brick',
+      floorType: 'tile_diner',
+      porch: { x0: bx + 2, y0: by + 9, w: 8, h: 1 },
+      doors: [
+        { gx: bx + 4, gy: by + 8, orientation: 'ew', status: 'closed' },
+        { gx: bx + 7, gy: by + 4, orientation: 'ns', status: 'closed' },
+        { gx: bx + 9, gy: by + 8, orientation: 'ew', status: h % 2 === 0 ? 'locked' : 'closed' },
+      ],
+      partitions: [{ x0: bx + 7, y0: by + 1, x1: bx + 7, y1: by + 7 }],
+      rooms: [
+        { x0: bx + 1, y0: by + 1, w: 6, h: 7, floorType: 'tile_diner' },
+        { x0: bx + 8, y0: by + 1, w: 3, h: 7, floorType: 'floor' },
+      ],
+      props: [
+        { gx: bx + 1, gy: by + 1, prop: 'counter' },
+        { gx: bx + 2, gy: by + 1, prop: 'counter' },
+        {
+          gx: bx + 5,
+          gy: by + 1,
+          prop: 'fridge',
+          lootKind: 'fridge',
+          lootItems: { food: 2, water: 3, hot_rations: 1 },
+        },
+        { gx: bx + 1, gy: by + 5, prop: 'table' },
+        { gx: bx + 5, gy: by + 5, prop: 'bookshelf' },
+        {
+          gx: bx + 10,
+          gy: by + 1,
+          prop: 'crate_wood',
+          lootKind: 'crate_wood',
+          lootItems: { fuel: 3 + (h % 3), scrap: 4, cloth: 2 },
+        },
+        {
+          gx: bx + 10,
+          gy: by + 5,
+          prop: 'crate_wood',
+          lootKind: 'crate_wood',
+          lootItems: { fuel: 2, molotov: 1, scrap: 3 },
+        },
+        { gx: bx + 8, gy: by + 1, prop: 'desk' },
+      ],
+    };
+  }
+
+  if (poi.kind === 'bunker') {
+    // Fortified Military Fallout Bunker: reinforced brick walls, armory, medbay & barracks
+    return {
+      x0: bx,
+      y0: by,
+      w: 12,
+      h: 9,
+      wallType: 'wall_brick',
+      floorType: 'tile_clinic',
+      porch: { x0: bx + 4, y0: by + 9, w: 4, h: 1 },
+      doors: [
+        { gx: bx + 5, gy: by + 8, orientation: 'ew', status: 'locked' },
+        { gx: bx + 5, gy: by + 4, orientation: 'ew', status: 'locked' },
+        { gx: bx + 7, gy: by + 2, orientation: 'ns', status: 'closed' },
+      ],
+      partitions: [
+        { x0: bx + 1, y0: by + 4, x1: bx + 10, y1: by + 4 },
+        { x0: bx + 7, y0: by + 1, x1: bx + 7, y1: by + 3 },
+      ],
+      rooms: [
+        { x0: bx + 1, y0: by + 5, w: 10, h: 3, floorType: 'tile_clinic' },
+        { x0: bx + 1, y0: by + 1, w: 6, h: 3, floorType: 'tile_clinic' },
+        { x0: bx + 8, y0: by + 1, w: 3, h: 3, floorType: 'floor_bath' },
+      ],
+      props: [
+        { gx: bx + 1, gy: by + 5, prop: 'desk' },
+        { gx: bx + 2, gy: by + 5, prop: 'counter' },
+        { gx: bx + 10, gy: by + 7, prop: 'bench' },
+        {
+          gx: bx + 1,
+          gy: by + 1,
+          prop: 'crate_military',
+          lootKind: 'crate_military',
+          lootItems: { ammo_9mm: 14, ammo_shell: 6, molotov: 1, scrap: 4 },
+        },
+        {
+          gx: bx + 3,
+          gy: by + 1,
+          prop: 'crate_military',
+          lootKind: 'crate_military',
+          lootItems: { ammo_9mm: 10, ammo_shell: 4, fuel: 2, hot_rations: 1 },
+        },
+        { gx: bx + 5, gy: by + 1, prop: 'bed' },
+        {
+          gx: bx + 10,
+          gy: by + 1,
+          prop: 'med_cabinet',
+          lootKind: 'med_cabinet',
+          lootItems: { bandage: 3, water: 2, cloth: 3 },
+        },
+        { gx: bx + 8, gy: by + 1, prop: 'sink_toilet' },
+      ],
+    };
+  }
+
+  if (poi.kind === 'farmstead') {
+    // Abandoned Rural Farmstead: warm timber farmhouse with kitchen, pantry & bedroom
+    return {
+      x0: bx,
+      y0: by,
+      w: 12,
+      h: 9,
+      wallType: 'wall_wood',
+      floorType: 'floor',
+      porch: { x0: bx + 3, y0: by + 9, w: 5, h: 1 },
+      doors: [
+        { gx: bx + 5, gy: by + 8, orientation: 'ew', status: 'closed' },
+        { gx: bx + 6, gy: by + 4, orientation: 'ns', status: 'closed' },
+        { gx: bx + 11, gy: by + 6, orientation: 'ns', status: 'closed' },
+      ],
+      partitions: [{ x0: bx + 6, y0: by + 1, x1: bx + 6, y1: by + 7 }],
+      rooms: [
+        { x0: bx + 1, y0: by + 1, w: 5, h: 7, floorType: 'floor', rug: { x0: bx + 2, y0: by + 3, w: 3, h: 2 } },
+        { x0: bx + 7, y0: by + 1, w: 4, h: 7, floorType: 'tile_diner' },
+      ],
+      props: [
+        { gx: bx + 1, gy: by + 1, prop: 'bed' },
+        { gx: bx + 4, gy: by + 1, prop: 'bookshelf' },
+        { gx: bx + 1, gy: by + 6, prop: 'couch' },
+        { gx: bx + 7, gy: by + 1, prop: 'stove' },
+        { gx: bx + 8, gy: by + 4, prop: 'table' },
+        {
+          gx: bx + 10,
+          gy: by + 1,
+          prop: 'fridge',
+          lootKind: 'fridge',
+          lootItems: { food: 3, raw_fish: 2, water: 2 },
+        },
+        {
+          gx: bx + 10,
+          gy: by + 7,
+          prop: 'crate_wood',
+          lootKind: 'crate_wood',
+          lootItems: { wood: 5, cloth: 3, fuel: 2, food: 2 },
+        },
+      ],
+    };
+  }
+
+  if (poi.kind === 'watchtower') {
+    // Elevated Fire Watchtower & Ranger Compound: compact fortified timber/brick lookout
+    return {
+      x0: bx + 1,
+      y0: by,
+      w: 9,
+      h: 9,
+      wallType: 'wall_wood',
+      floorType: 'floor',
+      porch: { x0: bx + 3, y0: by + 9, w: 5, h: 1 },
+      doors: [
+        { gx: bx + 5, gy: by + 8, orientation: 'ew', status: 'closed' },
+        { gx: bx + 5, gy: by + 4, orientation: 'ew', status: 'closed' },
+      ],
+      partitions: [{ x0: bx + 2, y0: by + 4, x1: bx + 8, y1: by + 4 }],
+      rooms: [
+        { x0: bx + 2, y0: by + 5, w: 7, h: 3, floorType: 'floor' },
+        { x0: bx + 2, y0: by + 1, w: 7, h: 3, floorType: 'floor', rug: { x0: bx + 4, y0: by + 2, w: 3, h: 1 } },
+      ],
+      props: [
+        { gx: bx + 2, gy: by + 5, prop: 'desk' },
+        { gx: bx + 8, gy: by + 5, prop: 'bookshelf' },
+        { gx: bx + 2, gy: by + 1, prop: 'bed' },
+        { gx: bx + 4, gy: by + 1, prop: 'stove' },
+        {
+          gx: bx + 8,
+          gy: by + 1,
+          prop: 'crate_military',
+          lootKind: 'crate_military',
+          lootItems: { ammo_9mm: 8, ammo_shell: 3, bandage: 2, water: 2, scrap: 3 },
+        },
+      ],
+    };
+  }
+
   // Timber Cabin (2-room homestead with clear front vestibule into living/kitchen & door to bedroom)
   return {
     x0: bx,
@@ -1036,22 +1386,33 @@ export function generateOuterChunk(
   store: WorldStore,
   cx: number,
   cy: number,
-  nextVehicleIdRef: { nextId: number }
+  nextVehicleIdRef: { nextId: number },
+  face: CubeFaceId = store.activeFace ?? 0
 ): OuterChunkSpawnResult {
-  const key = chunkKey(cx, cy);
+  // Snap any out-of-face chunk request onto its canonical finite Cube-Sphere face & chunk
+  const resolvedCenter = resolveCubeSphereTile(face, cx * CHUNK_SIZE + 8, cy * CHUNK_SIZE + 8);
+  const rFace = resolvedCenter.face;
+  const rCX = Math.floor(resolvedCenter.gx / CHUNK_SIZE);
+  const rCY = Math.floor(resolvedCenter.gy / CHUNK_SIZE);
+  const key = cubeChunkKey(rFace, rCX, rCY);
+  const existing = store.chunks.get(key);
+  if (existing) {
+    return { chunk: existing, containers: [], structures: [], vehicles: [], doors: [] };
+  }
+
   const cells: TileCell[][] = [];
-  const startGX = cx * CHUNK_SIZE;
-  const startGY = cy * CHUNK_SIZE;
+  const startGX = rCX * CHUNK_SIZE;
+  const startGY = rCY * CHUNK_SIZE;
 
   for (let ly = 0; ly < CHUNK_SIZE; ly++) {
     const row: TileCell[] = [];
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-      row.push(createOuterBaseCell(store.seed, startGX + lx, startGY + ly));
+      row.push(createOuterBaseCell(store.seed, startGX + lx, startGY + ly, rFace));
     }
     cells.push(row);
   }
 
-  const chunk: WorldChunk = { cx, cy, key, cells };
+  const chunk: WorldChunk = { face: rFace, cx: rCX, cy: rCY, key, cells };
   store.chunks.set(key, chunk);
   store.populatedChunks.add(key);
 
@@ -1071,11 +1432,12 @@ export function generateOuterChunk(
   // Identify macro-region covering this chunk (32x32 macro-regions = 2x2 chunks)
   const rx = Math.floor(startGX / 32);
   const ry = Math.floor(startGY / 32);
-  const poi = getMacroRegionPOI(store.seed, rx, ry);
+  const poi = getMacroRegionPOI(store.seed, rx, ry, rFace);
 
   if (poi && !store.landmarks.has(poi.id)) {
     store.landmarks.set(poi.id, {
       id: poi.id,
+      face: rFace,
       kind: poi.kind,
       name: poi.name,
       biome: poi.biome,
@@ -1091,15 +1453,16 @@ export function generateOuterChunk(
   }
 
   // Register & furnish hidden Rocky Cliff Cave shelter in this macro-region
-  const cavePlan = getMacroRegionCave(store.seed, rx, ry);
+  const cavePlan = getMacroRegionCave(store.seed, rx, ry, rFace);
   if (cavePlan) {
     const caveHash = hashCoords(store.seed + 5309, cavePlan.gx, cavePlan.gy);
     if (!store.landmarks.has(cavePlan.id)) {
       store.landmarks.set(cavePlan.id, {
         id: cavePlan.id,
+        face: rFace,
         kind: 'cave',
         name: cavePlan.name,
-        biome: sampleBiomeAt(store.seed, cavePlan.gx, cavePlan.gy),
+        biome: sampleBiomeAt(store.seed, cavePlan.gx, cavePlan.gy, rFace),
         gx: cavePlan.gx,
         gy: cavePlan.gy,
         radius: Math.ceil(cavePlan.chamberRadius) + 2,
@@ -1183,7 +1546,7 @@ export function generateOuterChunk(
     for (let lx = 0; lx < CHUNK_SIZE; lx += 2) {
       const gx = startGX + lx;
       const gy = startGY + ly;
-      const tun = sampleRoadTunnelInfo(store.seed, gx + 0.5, gy + 0.5);
+      const tun = sampleRoadTunnelInfo(store.seed, gx + 0.5, gy + 0.5, rFace);
       if (tun.isTunnel) {
         tunnelSumX += gx;
         tunnelSumY += gy;
@@ -1192,16 +1555,17 @@ export function generateOuterChunk(
     }
   }
   if (tunnelCount >= 3) {
-    const tunnelId = `tunnel_${rx}_${ry}`;
+    const tunnelId = rFace === 0 ? `tunnel_${rx}_${ry}` : `f${rFace}_tunnel_${rx}_${ry}`;
     if (!store.landmarks.has(tunnelId)) {
       const tgx = Math.round(tunnelSumX / tunnelCount);
       const tgy = Math.round(tunnelSumY / tunnelCount);
-      const th = hashCoords(store.seed + 7919, rx, ry);
+      const th = hashCoords(store.seed + 7919 + rFace * 10007, rx, ry);
       store.landmarks.set(tunnelId, {
         id: tunnelId,
+        face: rFace,
         kind: 'tunnel',
         name: `Ridge Tunnel #${(th % 19) + 1}`,
-        biome: sampleBiomeAt(store.seed, tgx, tgy),
+        biome: sampleBiomeAt(store.seed, tgx, tgy, rFace),
         gx: tgx,
         gy: tgy,
         radius: 8,
@@ -1538,15 +1902,56 @@ export function generateOuterChunk(
         }
       }
       applyBuildingToSetter(setLocal, spec, doors, containers);
+      // Add forecourt fuel-island props & parked drivable vehicles at Fuel Depots / Bunkers / Farmsteads
+      if (poi.kind === 'gas_station') {
+        setLocal(spec.x0 + 1, spec.y0 + spec.h + 1, (c) => {
+          if (c.tile !== 'water') { c.tile = 'road'; c.prop = 'barrel_burn'; c.solid = true; }
+        });
+        setLocal(spec.x0 + spec.w - 2, spec.y0 + spec.h + 1, (c) => {
+          if (c.tile !== 'water') { c.tile = 'road'; c.prop = 'road_sign'; c.solid = true; }
+        });
+      } else if (poi.kind === 'bunker') {
+        for (const ox of [1, 2, spec.w - 3, spec.w - 2]) {
+          setLocal(spec.x0 + ox, spec.y0 + spec.h + 1, (c) => {
+            if (c.tile !== 'water' && c.prop === 'none') { c.prop = 'sandbag_wall'; c.solid = true; }
+          });
+        }
+      }
+      if (poi.includeDrivableCar) {
+        const vx = spec.x0 + Math.floor(spec.w * 0.5);
+        const vy = spec.y0 + spec.h + 2;
+        if (vx >= startGX && vx < startGX + CHUNK_SIZE && vy >= startGY && vy < startGY + CHUNK_SIZE) {
+          vehicles.push({
+            id: nextVehicleIdRef.nextId++,
+            kind: h % 4 === 0 ? 'police' : 'sedan',
+            x: vx + 0.5,
+            y: vy + 0.5,
+            angle: 0,
+            speed: 0,
+            vx: 0,
+            vy: 0,
+            hp: 220,
+            maxHp: 220,
+            fuel: poi.kind === 'gas_station' ? 85 : 55,
+            headlightsOn: false,
+            sirenOn: false,
+            hitFlash: 0,
+            drifting: false,
+            boosting: false,
+            trunkItems: poi.kind === 'gas_station' ? { fuel: 3, scrap: 2 } : { food: 2, wood: 3 },
+            trunkSearched: false,
+          });
+        }
+      }
     }
   }
 
   // Occasional scenic lakeside clearing in empty pine_forest or rural_meadow regions (never blocking highways or East test spot)
-  const chunkRng = createRng(hashCoords(store.seed + 719, cx, cy));
+  const chunkRng = createRng(hashCoords(store.seed + 719 + rFace * 10007, rCX, rCY));
   if (!poi && chunkRng() < 0.14) {
     const lakeCX = startGX + 8;
     const lakeCY = startGY + 8;
-    const roadNear = sampleRoadInfo(store.seed, lakeCX, lakeCY);
+    const roadNear = sampleRoadInfo(store.seed, lakeCX, lakeCY, rFace);
     if (roadNear.highwayDist > 7 && Math.hypot(lakeCX - 84, lakeCY - 28) > 10) {
       const rxLake = 3.8 + chunkRng() * 1.3;
       const ryLake = 3.5 + chunkRng() * 1.2;
@@ -1609,7 +2014,7 @@ export function generateOuterChunk(
       if (cavePlan && Math.hypot(cell.gx - cavePlan.gx, cell.gy - cavePlan.gy) <= 6.5) {
         continue;
       }
-      if (sampleRoadTunnelInfo(store.seed, cell.gx + 0.5, cell.gy + 0.5).isTunnel) {
+      if (sampleRoadTunnelInfo(store.seed, cell.gx + 0.5, cell.gy + 0.5, rFace).isTunnel) {
         continue;
       }
 
@@ -1626,21 +2031,51 @@ export function generateOuterChunk(
         continue;
       }
 
-      const biome = sampleBiomeAt(store.seed, cell.gx, cell.gy);
+      const biome = sampleBiomeAt(store.seed, cell.gx, cell.gy, rFace);
+      const oceanCell = sampleOceanInfo(store.seed, cell.gx, cell.gy, rFace);
       const r = chunkRng();
 
+      // Coherent 3D woodland grove clustering: leaves open glades & clear sightlines with sparse natural tree groves
+      const sp = cubeFaceToSphere(rFace, cell.gx + 0.5, cell.gy + 0.5);
+      const groveVal = fbm3D(
+        store.seed + 3037,
+        sp.x * 6.8 * SPHERE_NOISE_SCALE,
+        sp.y * 6.8 * SPHERE_NOISE_SCALE,
+        sp.z * 6.8 * SPHERE_NOISE_SCALE,
+        2
+      );
+      const groveBoost = groveVal > 0.54 ? 1.55 : groveVal < 0.42 ? 0.35 : 0.85;
+
+      // Coastal sandy beaches & dunes: sparse picturesque palm trees leaning toward the sea!
+      if (oceanCell.inBeach || oceanCell.inDune) {
+        if (oceanCell.inDune && r < 0.026 * groveBoost) {
+          cell.prop = 'tree_palm';
+          cell.solid = true;
+          cell.blocksSight = false;
+        } else if (oceanCell.inBeach && oceanCell.continentVal > 0.402 && r < 0.015) {
+          cell.prop = 'tree_palm';
+          cell.solid = true;
+          cell.blocksSight = false;
+        } else if (r < 0.022) {
+          cell.prop = 'rock_boulder';
+          cell.solid = true;
+        }
+        continue;
+      }
+
       if (biome === 'pine_forest') {
-        if (r < 0.145) {
+        // Sparse alpine pine groves (~65% sparser than before for clean sightlines & driving)
+        if (r < 0.044 * groveBoost) {
           cell.prop = chunkRng() < 0.84 ? 'tree_pine' : 'tree_dead';
           cell.solid = true;
           cell.blocksSight = true;
-        } else if (r < 0.168) {
+        } else if (r < 0.056) {
           cell.prop = 'fallen_log';
           cell.solid = true;
-        } else if (r < 0.184) {
+        } else if (r < 0.066) {
           cell.prop = 'rock_boulder';
           cell.solid = true;
-        } else if (r < 0.189) {
+        } else if (r < 0.070) {
           cell.prop = 'crate_wood';
           cell.solid = true;
           containers.push({
@@ -1655,17 +2090,19 @@ export function generateOuterChunk(
           });
         }
       } else if (biome === 'river_valley') {
-        if (r < 0.055) {
-          cell.prop = chunkRng() < 0.65 ? 'tree_pine' : 'tree_dead';
+        // Sparse weeping willows & occasional oaks along river valleys
+        if (r < 0.024 * groveBoost) {
+          const tr = chunkRng();
+          cell.prop = tr < 0.68 ? 'tree_willow' : tr < 0.90 ? 'tree_oak' : 'tree_dead';
           cell.solid = true;
           cell.blocksSight = true;
-        } else if (r < 0.082) {
+        } else if (r < 0.038) {
           cell.prop = 'rock_boulder';
           cell.solid = true;
-        } else if (r < 0.098) {
+        } else if (r < 0.048) {
           cell.prop = 'fallen_log';
           cell.solid = true;
-        } else if (r < 0.103) {
+        } else if (r < 0.052) {
           cell.prop = 'crate_wood';
           cell.solid = true;
           containers.push({
@@ -1680,34 +2117,36 @@ export function generateOuterChunk(
           });
         }
       } else if (biome === 'scorched_barrens') {
-        if (r < 0.052) {
+        // Rare lonely charred snags & boulders
+        if (r < 0.018 * groveBoost) {
           cell.prop = 'tree_dead';
           cell.solid = true;
           cell.blocksSight = true;
-        } else if (r < 0.078) {
+        } else if (r < 0.036) {
           cell.prop = 'rock_boulder';
           cell.solid = true;
-        } else if (r < 0.084 && cell.tile === 'gravel') {
+        } else if (r < 0.041 && cell.tile === 'gravel') {
           cell.prop = 'wrecked_car';
           cell.solid = true;
           cell.blocksSight = true;
-        } else if (r < 0.089) {
+        } else if (r < 0.045) {
           cell.prop = 'barrel_burn';
           cell.solid = true;
         }
       } else {
-        // rural_meadow
-        if (r < 0.068) {
-          cell.prop = chunkRng() < 0.78 ? 'tree_pine' : 'tree_dead';
+        // rural_meadow: wide open sunlit grass meadows with sparse broadleaf oaks
+        if (r < 0.020 * groveBoost) {
+          const tr = chunkRng();
+          cell.prop = tr < 0.78 ? 'tree_oak' : tr < 0.92 ? 'tree_pine' : 'tree_dead';
           cell.solid = true;
           cell.blocksSight = true;
-        } else if (r < 0.082) {
+        } else if (r < 0.028) {
           cell.prop = 'rock_boulder';
           cell.solid = true;
-        } else if (r < 0.092) {
+        } else if (r < 0.034) {
           cell.prop = 'fallen_log';
           cell.solid = true;
-        } else if (r < 0.096) {
+        } else if (r < 0.038) {
           cell.prop = 'crate_wood';
           cell.solid = true;
           containers.push({

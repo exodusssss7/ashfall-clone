@@ -1,6 +1,8 @@
 import { ItemIcon } from './ItemIcon';
+import { PlanetGlobeView } from './PlanetGlobeView';
 import { useState, type RefObject } from 'react';
 import { Map, X, Navigation, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { getCubeFaceSpec, greatCircleDistanceTiles, type CubeFaceId } from '../game/cubeSphere';
 import type { HudSnapshot, LandmarkKind } from '../game/types';
 
 const PLACES = [
@@ -37,6 +39,14 @@ function iconForLandmark(kind: LandmarkKind): string {
       return 'campfire';
     case 'tunnel':
       return 'car_trunk';
+    case 'gas_station':
+      return 'fuel';
+    case 'bunker':
+      return 'crate_military';
+    case 'farmstead':
+      return 'food';
+    case 'watchtower':
+      return 'campfire';
     case 'cabin':
     default:
       return 'wood';
@@ -120,6 +130,11 @@ export function NavigationRadar({
               <div>
                 <h2 className="font-pixel text-xl text-[#f0ece1]">World Navigation</h2>
                 <p className="text-[10px] font-telemetry text-[#9aa09c]">
+                  {hud.planetCoords && (
+                    <>
+                      Sector: <span className="text-[#70d9ff]">{hud.planetCoords.faceName}</span> ({hud.planetCoords.latLonLabel} · {hud.planetCoords.exploredPct}% Globe) ·{' '}
+                    </>
+                  )}
                   Region: <span className="text-[#f0d078]">{hud.currentBiomeLabel}</span> · Coords ({hud.worldCoords.gx},{' '}
                   {hud.worldCoords.gy}) · Elev {Math.round(hud.elevation * 4)}m · {hud.weather.label} ({Math.round(hud.weather.ambientTempC)}°C)
                 </p>
@@ -135,6 +150,7 @@ export function NavigationRadar({
             </header>
 
             <div className="overflow-y-auto p-3 space-y-3">
+              <PlanetGlobeView hud={hud} />
               {hud.discoveredLandmarks.length > 0 && (
                 <div>
                   <div className="text-[10px] font-telemetry uppercase tracking-wider text-[#f0d078] mb-1.5">
@@ -142,9 +158,14 @@ export function NavigationRadar({
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {hud.discoveredLandmarks.map((lm) => {
+                      const curFace: CubeFaceId = hud.planetCoords?.face ?? 0;
+                      const lmFace: CubeFaceId = (lm.face ?? 0) as CubeFaceId;
                       const lmDist = Math.round(
-                        Math.hypot(lm.x - hud.worldCoords.gx - 0.5, lm.y - hud.worldCoords.gy - 0.5)
+                        lmFace === curFace
+                          ? Math.hypot(lm.x - hud.worldCoords.gx - 0.5, lm.y - hud.worldCoords.gy - 0.5)
+                          : greatCircleDistanceTiles(curFace, hud.worldCoords.gx + 0.5, hud.worldCoords.gy + 0.5, lmFace, lm.x, lm.y)
                       );
+                      const otherFaceTag = lmFace !== curFace ? getCubeFaceSpec(lmFace).code : null;
                       const isSel = selected?.name === lm.name;
                       return (
                         <button
@@ -169,7 +190,7 @@ export function NavigationRadar({
                           <div className="min-w-0 flex-1">
                             <div className="text-xs font-bold text-[#f0ece1] truncate">{lm.name}</div>
                             <div className="text-[10px] text-[#9aa09c] flex items-center gap-1.5">
-                              <span>{lmDist} tiles</span>
+                              <span>{lmDist} tiles{otherFaceTag ? ` · ${otherFaceTag}` : ''}</span>
                               {lm.hotspotCleared ? (
                                 <span className="inline-flex items-center gap-0.5 text-[#78c796]">
                                   <CheckCircle2 className="w-3 h-3" /> {lm.kind === 'cave' ? 'Safe Shelter' : 'Cleared'}

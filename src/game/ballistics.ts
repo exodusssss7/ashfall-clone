@@ -84,6 +84,9 @@ export function classifySurfaceMaterial(
     case 'door':
     case 'tree_pine':
     case 'tree_dead':
+    case 'tree_oak':
+    case 'tree_willow':
+    case 'tree_palm':
     case 'crate_wood':
     case 'counter':
     case 'bench':
@@ -257,6 +260,9 @@ function getPropBounds(
     case 'streetlamp':
       return { minX: gx + 0.445, maxX: gx + 0.555, minY: gy + 0.445, maxY: gy + 0.555, minZ: 0, maxZ: 1.95 };
     case 'tree_pine':
+    case 'tree_oak':
+    case 'tree_willow':
+    case 'tree_palm':
       return { minX: gx + 0.26, maxX: gx + 0.74, minY: gy + 0.26, maxY: gy + 0.74, minZ: 0, maxZ: 1.95 };
     case 'tree_dead':
       return { minX: gx + 0.32, maxX: gx + 0.68, minY: gy + 0.32, maxY: gy + 0.68, minZ: 0, maxZ: 1.50 };

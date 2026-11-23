@@ -35,6 +35,20 @@ import {
   pickSafeAmbientSpawnPoint,
   shouldAllowAmbientSpawn,
 } from './zombieBrain';
+import {
+  TOTAL_PLANET_CHUNKS,
+  cubeChunkKey,
+  greatCircleDistanceTiles,
+  isInsideCubeFaceTile,
+  isValidCubeFace,
+  parseCubeChunkKey,
+  resolveCubeSphereCoord,
+  resolveCubeSphereTile,
+  rotateAngleQuarterTurns,
+  rotateVectorQuarterTurns,
+  samplePlanetTelemetry,
+  type CubeFaceId,
+} from './cubeSphere';
 import { applyDoorCellState, getBiomeDisplayName, sampleBiomeAt } from './worldGen';
 import {
   CHUNK_SIZE,
@@ -247,8 +261,19 @@ export class SurvivalEngine {
   private lastFogGX = -999999;
   private lastFogGY = -999999;
 
-  // World & simulation state (infinite chunk-streamed world)
+  // World & simulation state (finite 6-face Cube-Sphere planetary world)
   private worldStore!: WorldStore;
+  private minimapRedrawTimer = 0;
+  private faceEntityCache = new Map<
+    CubeFaceId,
+    {
+      containers: LootContainer[];
+      structures: WorldStructure[];
+      vehicles: Vehicle[];
+      doors: DoorEntity[];
+      zombies: Zombie[];
+    }
+  >();
   private containers: LootContainer[] = [];
   private structures: WorldStructure[] = [];
   private vehicles: Vehicle[] = [];
@@ -469,7 +494,7 @@ export class SurvivalEngine {
   attachMinimapCanvas(canvas: HTMLCanvasElement | null): void {
     this.minimapCanvas = canvas;
     if (canvas && this.phase === 'playing' && this.worldStore) {
-      this.renderMinimap();
+      this.renderMinimap(true);
     }
   }
 
@@ -510,25 +535,198 @@ export class SurvivalEngine {
   private flushPendingChunkSpawns(): void {
     const queue = this.worldStore?.pendingSpawns;
     if (!queue || queue.length === 0) return;
+    const activeFace = this.worldStore.activeFace ?? 0;
     while (queue.length > 0) {
       const next = queue.shift()!;
-      this.registerChunkSpawns(next);
+      const spawnFace = next.face ?? activeFace;
+      if (spawnFace === activeFace) {
+        this.registerChunkSpawns(next);
+      } else {
+        const bucket = this.faceEntityCache.get(spawnFace) ?? {
+          containers: [],
+          structures: [],
+          vehicles: [],
+          doors: [],
+          zombies: [],
+        };
+        for (const c of next.containers) {
+          if (!bucket.containers.some((e) => e.id === c.id)) bucket.containers.push(c);
+        }
+        for (const st of next.structures) {
+          if (!bucket.structures.some((e) => e.id === st.id)) bucket.structures.push(st);
+        }
+        for (const v of next.vehicles) {
+          if (!bucket.vehicles.some((e) => e.id === v.id)) bucket.vehicles.push(v);
+        }
+        for (const d of next.doors) {
+          if (!bucket.doors.some((e) => e.id === d.id)) bucket.doors.push(d);
+        }
+        this.faceEntityCache.set(spawnFace, bucket);
+      }
     }
   }
 
   private streamChunksAround(wx: number, wy: number, radiusChunks = 3): void {
     this.flushPendingChunkSpawns();
+    const activeFace = this.worldStore.activeFace ?? 0;
     const pcx = Math.floor(wx / CHUNK_SIZE);
     const pcy = Math.floor(wy / CHUNK_SIZE);
     for (let cy = pcy - radiusChunks; cy <= pcy + radiusChunks; cy++) {
       for (let cx = pcx - radiusChunks; cx <= pcx + radiusChunks; cx++) {
-        const key = `${cx},${cy}`;
+        const resolved = resolveCubeSphereTile(activeFace, cx * CHUNK_SIZE + 8, cy * CHUNK_SIZE + 8);
+        const rCX = Math.floor(resolved.gx / CHUNK_SIZE);
+        const rCY = Math.floor(resolved.gy / CHUNK_SIZE);
+        const key = cubeChunkKey(resolved.face, rCX, rCY);
         if (this.worldStore.populatedChunks.has(key)) continue;
-        const spawned = generateChunk(this.worldStore, cx, cy, this.nextVehicleIdRef);
-        this.registerChunkSpawns(spawned);
+        const spawned = generateChunk(this.worldStore, rCX, rCY, this.nextVehicleIdRef, resolved.face);
+        // Only register spawned entities into live arrays if they belong to the currently active face
+        if (resolved.face === activeFace) {
+          this.registerChunkSpawns(spawned);
+        } else {
+          const bucket = this.faceEntityCache.get(resolved.face) ?? {
+            containers: [],
+            structures: [],
+            vehicles: [],
+            doors: [],
+            zombies: [],
+          };
+          bucket.containers.push(...spawned.containers);
+          bucket.structures.push(...spawned.structures);
+          bucket.vehicles.push(...spawned.vehicles);
+          bucket.doors.push(...spawned.doors);
+          this.faceEntityCache.set(resolved.face, bucket);
+        }
       }
     }
     this.flushPendingChunkSpawns();
+  }
+
+  /**
+   * Seamlessly transitions the player (and active vehicle if driving) across a Cube-Sphere
+   * face boundary when stepping beyond [-64, 128), rotating heading & velocity cleanly into
+   * the destination face's tangent chart and swapping per-face entity persistence buckets.
+   */
+  private checkCubeSphereFaceTransition(): boolean {
+    const p = this.player;
+    if (isInsideCubeFaceTile(p.x, p.y)) return false;
+
+    const oldFace = this.worldStore.activeFace ?? 0;
+    const resolved = resolveCubeSphereCoord(oldFace, p.x, p.y);
+    if (!resolved.crossedEdge || resolved.face === oldFace) return false;
+
+    const nextFace = resolved.face;
+    const rot = resolved.rotQuarterTurns;
+
+    // Detach active vehicle if driving so it crosses the face boundary with the player
+    let carriedCar: Vehicle | null = null;
+    if (this.activeVehicleId !== null) {
+      const idx = this.vehicles.findIndex((v) => v.id === this.activeVehicleId);
+      if (idx >= 0) {
+        carriedCar = this.vehicles.splice(idx, 1)[0];
+      }
+    }
+
+    // Carry nearby chasing zombies (within 12 tiles) smoothly across the face border so pursuits never pop out
+    const carriedZombies: Zombie[] = [];
+    const remainingZombies: Zombie[] = [];
+    for (const z of this.zombies) {
+      if (z.state !== 'dying' && Math.hypot(z.x - p.x, z.y - p.y) <= 12) {
+        const zRes = resolveCubeSphereCoord(oldFace, z.x, z.y);
+        if (zRes.face === nextFace) {
+          const zv = rotateVectorQuarterTurns(z.vx, z.vy, zRes.rotQuarterTurns);
+          const zf = rotateVectorQuarterTurns(z.facingX, z.facingY, zRes.rotQuarterTurns);
+          carriedZombies.push({
+            ...z,
+            x: zRes.gx,
+            y: zRes.gy,
+            vx: zv.x,
+            vy: zv.y,
+            facingX: zf.x,
+            facingY: zf.y,
+            wanderTargetX: resolved.gx,
+            wanderTargetY: resolved.gy,
+            lastHeardX: null,
+            lastHeardY: null,
+          });
+          continue;
+        }
+      }
+      remainingZombies.push(z);
+    }
+
+    // Persist old face's entities
+    this.faceEntityCache.set(oldFace, {
+      containers: this.containers,
+      structures: this.structures,
+      vehicles: this.vehicles,
+      doors: this.doors,
+      zombies: remainingZombies,
+    });
+
+    // Load or initialize destination face's entities
+    const nextBucket = this.faceEntityCache.get(nextFace) ?? {
+      containers: [],
+      structures: [],
+      vehicles: [],
+      doors: [],
+      zombies: [],
+    };
+    this.containers = nextBucket.containers;
+    this.structures = nextBucket.structures;
+    this.vehicles = nextBucket.vehicles;
+    this.doors = nextBucket.doors;
+    this.zombies = [...nextBucket.zombies, ...carriedZombies];
+    this.faceEntityCache.delete(nextFace);
+
+    // Transform player position, velocity & facing angle into the new face's tangent frame
+    p.x = resolved.gx;
+    p.y = resolved.gy;
+    p.facingAngle = rotateAngleQuarterTurns(p.facingAngle, rot);
+    const rv = rotateVectorQuarterTurns(this.playerVelX, this.playerVelY, rot);
+    this.playerVelX = rv.x;
+    this.playerVelY = rv.y;
+
+    if (carriedCar) {
+      carriedCar.x = resolved.gx;
+      carriedCar.y = resolved.gy;
+      carriedCar.angle = rotateAngleQuarterTurns(carriedCar.angle, rot);
+      const cv = rotateVectorQuarterTurns(carriedCar.vx, carriedCar.vy, rot);
+      carriedCar.vx = cv.x;
+      carriedCar.vy = cv.y;
+      this.vehicles.push(carriedCar);
+    }
+
+    // Activate new face and rebuild door lookup
+    this.worldStore.activeFace = nextFace;
+    this.doorByTile.clear();
+    for (const d of this.doors) {
+      this.doorByTile.set(`${d.gx}_${d.gy}`, d);
+    }
+
+    // Clear face-local transient visual lists and snap camera smoothly
+    this.zombieRoutes.clear();
+    this.projectiles = [];
+    this.firePatches = [];
+    this.soundRipples = [];
+    this.decals = [];
+    this.impactDecals = [];
+    this.impactEffects = [];
+    this.threeRenderer?.clearSceneCaches(true);
+
+    this.lastFogGX = -999999;
+    this.lastFogGY = -999999;
+    this.streamChunksAround(p.x, p.y, 2);
+    p.elevation = sampleTerrainHeight(this.worldStore.seed, p.x, p.y, nextFace);
+    this.revealFogAround(p.x, p.y, carriedCar?.headlightsOn ? 11 : this.player.flashlightOn ? 10 : 6);
+
+    const iso = worldToIso(p.x, p.y, 0);
+    this.camX = iso.sx;
+    this.camY = iso.sy;
+
+    const tel = samplePlanetTelemetry(nextFace, p.x, p.y);
+    this.showBanner(`SECTOR: ${tel.faceName} · ${tel.latLonLabel}`, 3.0);
+    this.emitHud();
+    return true;
   }
 
   private applyGraphicsQuality(q: GraphicsQuality): void {
@@ -539,6 +737,7 @@ export class SurvivalEngine {
     this.threeRenderer?.clearSceneCaches();
     clearTerrainCaches();
     this.clearedCaveIds.clear();
+    this.faceEntityCache.clear();
     this.weatherElapsedSeconds = 0;
     this.thermalSpeedMult = 1.0;
     this.lastThermalStatus = 'normal';
@@ -771,7 +970,7 @@ export class SurvivalEngine {
     p.wetness = 0;
     p.bodyTemp = NORMAL_BODY_TEMP_C;
     p.warmBuffTimer = 0;
-    p.elevation = sampleTerrainHeight(this.worldStore.seed, p.x, p.y);
+    p.elevation = sampleTerrainHeight(this.worldStore.seed, p.x, p.y, this.worldStore.activeFace ?? 0);
     this.thermalSpeedMult = 1.0;
     this.lastThermalStatus = 'normal';
     p.reloadingTimer = 0;
@@ -926,6 +1125,14 @@ export class SurvivalEngine {
       hotbar: cloneHotbarState(this.hotbar),
       clearedCaveIds: [...this.clearedCaveIds],
       weatherElapsedSeconds: this.weatherElapsedSeconds,
+      activeFace: this.worldStore.activeFace ?? 0,
+      faceStates: (() => {
+        const out: NonNullable<RunSnapshot['faceStates']> = {};
+        for (const [fId, bucket] of this.faceEntityCache.entries()) {
+          out[fId] = bucket;
+        }
+        return out;
+      })(),
     };
     storeRunSnapshot(save);
     this.saveAvailable = true;
@@ -963,7 +1170,7 @@ export class SurvivalEngine {
     p.wetness = clamp(typeof p.wetness === 'number' ? p.wetness : 0, 0, 100);
     p.bodyTemp = clamp(typeof p.bodyTemp === 'number' ? p.bodyTemp : NORMAL_BODY_TEMP_C, 32.0, 37.6);
     p.warmBuffTimer = Math.max(0, typeof p.warmBuffTimer === 'number' ? p.warmBuffTimer : 0);
-    p.elevation = sampleTerrainHeight(this.worldStore.seed, p.x, p.y);
+    p.elevation = sampleTerrainHeight(this.worldStore.seed, p.x, p.y, this.worldStore.activeFace ?? 0);
     this.player = p;
     this.inventory = { ...createInitialInventory(), ...save.inventory };
     if (save.hotbar) {
@@ -996,11 +1203,29 @@ export class SurvivalEngine {
     // Regenerate every previously streamed chunk's cells (spawned entities are
     // discarded: the saved lists already carry their exact state), then re-apply
     // the tile effects of saved doors and player-built barricades.
+    this.worldStore.activeFace = isValidCubeFace(save.activeFace) ? save.activeFace : 0;
+    this.faceEntityCache.clear();
+    if (save.faceStates && typeof save.faceStates === 'object') {
+      for (const [k, b] of Object.entries(save.faceStates)) {
+        const fNum = Number(k);
+        if (isValidCubeFace(fNum) && fNum !== this.worldStore.activeFace && b) {
+          this.faceEntityCache.set(fNum, {
+            containers: Array.isArray(b.containers) ? b.containers.map((c) => ({ ...c, items: { ...c.items } })) : [],
+            structures: Array.isArray(b.structures) ? b.structures.map((st) => ({ ...st })) : [],
+            vehicles: Array.isArray(b.vehicles)
+              ? b.vehicles.map((v) => ({ ...v, trunkItems: v.trunkItems ? { ...v.trunkItems } : undefined }))
+              : [],
+            doors: Array.isArray(b.doors) ? b.doors.map((d) => ({ ...d })) : [],
+            zombies: Array.isArray(b.zombies) ? b.zombies.map((z) => ({ ...z, hitFlash: 0 })) : [],
+          });
+        }
+      }
+    }
     this.worldStore.populatedChunks = new Set(save.populatedChunks);
     for (const key of save.populatedChunks) {
-      const [cx, cy] = key.split(',').map(Number);
-      if (Number.isFinite(cx) && Number.isFinite(cy) && !this.worldStore.chunks.has(key)) {
-        generateChunk(this.worldStore, cx, cy, this.nextVehicleIdRef);
+      const parsed = parseCubeChunkKey(key);
+      if (parsed && !this.worldStore.chunks.has(key)) {
+        generateChunk(this.worldStore, parsed.cx, parsed.cy, this.nextVehicleIdRef, parsed.face);
       }
     }
     this.worldStore.pendingSpawns = [];
@@ -1044,7 +1269,7 @@ export class SurvivalEngine {
       this.player.y,
       this.weatherElapsedSeconds,
       this.timeMinutes,
-      sampleBiomeAt(this.worldStore.seed, Math.floor(this.player.x), Math.floor(this.player.y)),
+      sampleBiomeAt(this.worldStore.seed, Math.floor(this.player.x), Math.floor(this.player.y), this.worldStore.activeFace ?? 0),
       this.player.elevation,
       this.forcedWeather
     );
@@ -2367,24 +2592,68 @@ export class SurvivalEngine {
     }
     this.prevBoostActive = next.boosting;
 
-    // Move car & resolve tight solid building/prop/parked-car collisions across infinite world
+    // Advanced Mountain & Off-Road Vehicle Physics:
+    // - 3D slope gravity force (uphill torque drag, downhill momentum & boost low-gear climb surge)
+    // - Lateral side-hill pull on steep mountain traverses
+    // - Surface-aware traction (tarmac vs mountain gravel/dirt/mud/beach sand) + roostertail dust/sand plumes
+    // - Generous 0.88-tile mountain clearance so cars smoothly conquer hills without snagging
+    const activeFace = this.worldStore.activeFace ?? 0;
     const carRadius = 0.42;
+    const fwdX = Math.cos(next.angle);
+    const fwdY = Math.sin(next.angle);
+    const rightX = -fwdY;
+    const rightY = fwdX;
+    const vSurf = sampleTerrainSurface(this.worldStore.seed, next.x, next.y, activeFace);
+    const gradeFwd = -(vSurf.normalX * fwdX + vSurf.normalZ * fwdY) / Math.max(0.28, vSurf.normalY);
+    const gradeRight = -(vSurf.normalX * rightX + vSurf.normalZ * rightY) / Math.max(0.28, vSurf.normalY);
+
+    // Apply physical gravity along mountain grade (boost engages high-torque climb surge!)
+    if (Math.abs(gradeFwd) > 0.04) {
+      const climbAssist = next.boosting && gradeFwd * throttle > 0 ? 0.42 : 1.0;
+      const gravityAccel = -gradeFwd * (gradeFwd * next.speed >= 0 ? 5.2 * climbAssist : 4.1);
+      next.speed = clamp(next.speed + gravityAccel * dt, -5.5, next.boosting ? 15.8 : 13.2);
+      next.vx = fwdX * next.speed;
+      next.vy = fwdY * next.speed;
+    }
+
+    // Surface-aware off-road traction & roostertail particles (beach sand / mountain dirt / mud)
+    const underCell = this.getCell(Math.floor(next.x), Math.floor(next.y));
+    const surfaceGrip =
+      underCell.tile === 'road' || underCell.tile === 'asphalt_cracked' || underCell.tile === 'bridge_deck'
+        ? 1.0
+        : underCell.tile === 'mud' || underCell.tile === 'water'
+          ? 0.84
+          : underCell.tile === 'sand'
+            ? 0.90
+            : 0.95;
+
+    if (Math.abs(next.speed) > 2.2 && (underCell.tile === 'sand' || underCell.tile === 'dirt' || underCell.tile === 'gravel' || underCell.tile === 'mud' || vSurf.slope > 0.22)) {
+      if (Math.random() < dt * 16) {
+        const dustCol = underCell.tile === 'sand' ? '#e0ca90' : underCell.tile === 'mud' ? '#634d36' : '#a89f8c';
+        this.spawnParticles(next.x - fwdX * 0.65, next.y - fwdY * 0.65, 0.14, 1, dustCol, 1.8, 1.3);
+      }
+    }
+
     const travelSign = next.speed >= 0 ? 1 : -1;
-    const slopeMult = computeSlopeSpeedMultiplier(
-      this.worldStore.seed,
-      next.x,
-      next.y,
-      Math.cos(next.angle) * travelSign,
-      Math.sin(next.angle) * travelSign,
-      true
-    );
-    const nextX = next.x + next.vx * slopeMult * dt;
-    const nextY = next.y + next.vy * slopeMult * dt;
+    const slopeMult =
+      computeSlopeSpeedMultiplier(
+        this.worldStore.seed,
+        next.x,
+        next.y,
+        fwdX * travelSign,
+        fwdY * travelSign,
+        true,
+        activeFace
+      ) * surfaceGrip;
+    // Subtle lateral gravity slide on steep side-slopes
+    const sideSlide = Math.abs(gradeRight) > 0.26 ? -gradeRight * 0.65 * dt : 0;
+    const nextX = next.x + next.vx * slopeMult * dt + rightX * sideSlide;
+    const nextY = next.y + next.vy * slopeMult * dt + rightY * sideSlide;
     let crashed = false;
 
     if (
       !isCircleBlocked(this.worldStore, nextX, next.y, carRadius, this.vehicles, next.id) &&
-      !isTerrainStepBlocked(this.worldStore.seed, next.x, next.y, nextX, next.y, 0.58)
+      !isTerrainStepBlocked(this.worldStore.seed, next.x, next.y, nextX, next.y, 0.88, activeFace)
     ) {
       next.x = nextX;
     } else {
@@ -2393,7 +2662,7 @@ export class SurvivalEngine {
 
     if (
       !isCircleBlocked(this.worldStore, next.x, nextY, carRadius, this.vehicles, next.id) &&
-      !isTerrainStepBlocked(this.worldStore.seed, next.x, next.y, next.x, nextY, 0.58)
+      !isTerrainStepBlocked(this.worldStore.seed, next.x, next.y, next.x, nextY, 0.88, activeFace)
     ) {
       next.y = nextY;
     } else {
@@ -2504,7 +2773,10 @@ export class SurvivalEngine {
     this.player.invulnTimer = Math.max(0, this.player.invulnTimer - dt);
     this.player = tickSurvivalNeeds(this.player, dt, false, false);
 
-    // Stream infinite chunks & reveal minimap fog with headlights
+    // Seamlessly transition across Cube-Sphere face boundaries when driving around the planet
+    if (this.checkCubeSphereFaceTransition()) return;
+
+    // Stream finite Cube-Sphere chunks & reveal minimap fog with headlights
     const fgx = Math.floor(next.x);
     const fgy = Math.floor(next.y);
     if (fgx !== this.lastFogGX || fgy !== this.lastFogGY) {
@@ -2636,7 +2908,7 @@ export class SurvivalEngine {
     } else {
       const slopeMult =
         moveLen > 0
-          ? computeSlopeSpeedMultiplier(this.worldStore.seed, p.x, p.y, moveX, moveY, false)
+          ? computeSlopeSpeedMultiplier(this.worldStore.seed, p.x, p.y, moveX, moveY, false, this.worldStore.activeFace ?? 0)
           : 1.0;
       const baseSpeed = (wantsSprint ? 4.8 : 3.25) * slopeMult * this.thermalSpeedMult;
       const targetVx = moveLen > 0 ? moveX * baseSpeed : 0;
@@ -2720,7 +2992,10 @@ export class SurvivalEngine {
       }
     }
 
-    // Stream infinite chunks & reveal minimap fog when survivor steps onto a new tile
+    // Seamlessly transition across Cube-Sphere face boundaries when walking around the planet
+    if (this.checkCubeSphereFaceTransition()) return;
+
+    // Stream finite Cube-Sphere chunks & reveal minimap fog when survivor steps onto a new tile
     const fgx = Math.floor(this.player.x);
     const fgy = Math.floor(this.player.y);
     if (fgx !== this.lastFogGX || fgy !== this.lastFogGY) {
@@ -2914,8 +3189,8 @@ export class SurvivalEngine {
           const kbY = dy / dLen;
           const hit = resolveMeleeHit(spec, Math.random());
           const hgBonus = computeHighGroundCombatBonus(
-            sampleTerrainHeight(this.worldStore.seed, p.x, p.y),
-            sampleTerrainHeight(this.worldStore.seed, z.x, z.y)
+            sampleTerrainHeight(this.worldStore.seed, p.x, p.y, this.worldStore.activeFace ?? 0),
+            sampleTerrainHeight(this.worldStore.seed, z.x, z.y, this.worldStore.activeFace ?? 0)
           );
           const finalMeleeDmg = hgBonus.active ? Math.round(hit.damage * hgBonus.damageMultiplier) : hit.damage;
           if (hit.isCrit) anyCrit = true;
@@ -3112,7 +3387,7 @@ export class SurvivalEngine {
       p.attackCooldown = spec.cooldown;
       soundEngine.playMeleeSwing();
       const useForwardTarget = this.usingVirtualAim && this.cameraMode !== 'fps';
-      const shooterElev = sampleTerrainHeight(this.worldStore.seed, p.x, p.y);
+      const shooterElev = sampleTerrainHeight(this.worldStore.seed, p.x, p.y, this.worldStore.activeFace ?? 0);
       const effectiveRange = shooterElev >= 1.35 ? spec.range * 1.24 : spec.range;
       const tx = useForwardTarget
         ? p.x + Math.cos(p.facingAngle) * (shooterElev >= 1.35 ? 5.6 : 4.5)
@@ -3154,7 +3429,7 @@ export class SurvivalEngine {
   ): void {
     const isFps = this.cameraMode === 'fps';
     const seed = this.worldStore.seed;
-    const shooterElev = sampleTerrainHeight(seed, sx, sy);
+    const shooterElev = sampleTerrainHeight(seed, sx, sy, this.worldStore.activeFace ?? 0);
     const spawnZ = shooterElev + (isFps ? FPS_EYE_HEIGHT : 0.65);
     const rangeBoost = !this.shelterInfo.sheltered && shooterElev >= 1.35 ? 1.24 : 1.0;
     const maxLife = (kind === 'pellet' ? 0.28 : 0.45) * rangeBoost;
@@ -3164,7 +3439,7 @@ export class SurvivalEngine {
       const aimDist = this.usingVirtualAim ? 8.5 : Math.max(2.0, dist(sx, sy, this.mouseWorldX, this.mouseWorldY));
       const tx = this.usingVirtualAim ? sx + Math.cos(angle) * aimDist : this.mouseWorldX;
       const ty = this.usingVirtualAim ? sy + Math.sin(angle) * aimDist : this.mouseWorldY;
-      const targetElev = sampleTerrainHeight(seed, tx, ty);
+      const targetElev = sampleTerrainHeight(seed, tx, ty, this.worldStore.activeFace ?? 0);
       isoVz = clamp(((targetElev - shooterElev) / aimDist) * speed, -speed * 0.45, speed * 0.45);
     }
     for (let i = 0; i < count; i++) {
@@ -3626,9 +3901,10 @@ export class SurvivalEngine {
 
       // Swept 3D ballistic collision in true world-Y so hillside/cliff/cave/tunnel shots never tunnel or clip through ridges
       const seed = this.worldStore.seed;
-      const getGroundY = (wx: number, wy: number) => sampleTerrainHeight(seed, wx, wy);
+      const activeFace = this.worldStore.activeFace ?? 0;
+      const getGroundY = (wx: number, wy: number) => sampleTerrainHeight(seed, wx, wy, activeFace);
       const getCeilingY = (wx: number, wy: number): number | null => {
-        const surf = sampleTerrainSurface(seed, wx, wy);
+        const surf = sampleTerrainSurface(seed, wx, wy, activeFace);
         if (surf.isCave || surf.isCaveCoveredMouth) return surf.caveRoofY;
         if (surf.isTunnel) return surf.tunnelRoofY;
         return null;
@@ -3679,7 +3955,7 @@ export class SurvivalEngine {
         const dirZ = pr.vz / speed3D;
 
         const shooterElev = pr.originElevation ?? this.player.elevation;
-        const targetElev = sampleTerrainHeight(seed, zombieHit.zombie.x, zombieHit.zombie.y);
+        const targetElev = sampleTerrainHeight(seed, zombieHit.zombie.x, zombieHit.zombie.y, this.worldStore.activeFace ?? 0);
         const hgBonus = computeHighGroundCombatBonus(shooterElev, targetElev);
         const localHitZ = Math.max(0.08, zombieHit.hz - targetElev);
 
@@ -3798,7 +4074,7 @@ export class SurvivalEngine {
     isFps: boolean
   ): void {
     const scale = kind === 'bullet' ? 1.0 : 0.78;
-    const localZ = Math.max(0.02, hit.hz - sampleTerrainHeight(this.worldStore.seed, hit.hx, hit.hy));
+    const localZ = Math.max(0.02, hit.hz - sampleTerrainHeight(this.worldStore.seed, hit.hx, hit.hy, this.worldStore.activeFace ?? 0));
     this.pushImpactEffect(hit.hx, hit.hy, localZ, hit.nx, hit.ny, hit.nz, hit.material, scale);
     soundEngine.playBulletImpact(hit.material);
 
@@ -3930,7 +4206,7 @@ export class SurvivalEngine {
       if (dist(z.x, z.y, x, y) <= 2.4) {
         const hgBonus = computeHighGroundCombatBonus(
           originElevation,
-          sampleTerrainHeight(this.worldStore.seed, z.x, z.y)
+          sampleTerrainHeight(this.worldStore.seed, z.x, z.y, this.worldStore.activeFace ?? 0)
         );
         this.damageZombie(z, Math.round(38 * hgBonus.damageMultiplier), 0, 0, true, false, false, 0.58, hgBonus.active);
         z.burnTimer = 4.5;
@@ -4233,7 +4509,7 @@ export class SurvivalEngine {
         const nextLen = Math.hypot(nextDx, nextDy) || 1;
         const dirX = nextDx / nextLen;
         const dirY = nextDy / nextLen;
-        const wSlope = computeSlopeSpeedMultiplier(this.worldStore.seed, z.x, z.y, dirX, dirY, false);
+        const wSlope = computeSlopeSpeedMultiplier(this.worldStore.seed, z.x, z.y, dirX, dirY, false, this.worldStore.activeFace ?? 0);
         this.moveActor(z, dirX * z.speed * 0.35 * wSlope * dt, dirY * z.speed * 0.35 * wSlope * dt, 0.21);
         const turnBlend = 1 - Math.exp(-dt * 8);
         const fx = lerp(z.facingX, dirX, turnBlend);
@@ -4248,7 +4524,7 @@ export class SurvivalEngine {
           const dHeard = dist(z.x, z.y, z.lastHeardX, z.lastHeardY);
           if (dHeard > 0.55) {
             const steer = this.steerZombie(z, z.lastHeardX, z.lastHeardY);
-            const aSlope = computeSlopeSpeedMultiplier(this.worldStore.seed, z.x, z.y, steer.dx, steer.dy, false);
+            const aSlope = computeSlopeSpeedMultiplier(this.worldStore.seed, z.x, z.y, steer.dx, steer.dy, false, this.worldStore.activeFace ?? 0);
             this.moveActor(z, steer.dx * z.speed * 0.72 * aSlope * dt, steer.dy * z.speed * 0.72 * aSlope * dt, 0.21);
             z.facingX = steer.dx;
             z.facingY = steer.dy;
@@ -4327,7 +4603,7 @@ export class SurvivalEngine {
             mx = -z.facingY;
             my = z.facingX;
           }
-          const sSlope = computeSlopeSpeedMultiplier(this.worldStore.seed, z.x, z.y, mx, my, false);
+          const sSlope = computeSlopeSpeedMultiplier(this.worldStore.seed, z.x, z.y, mx, my, false, this.worldStore.activeFace ?? 0);
           this.moveActor(z, mx * z.speed * sSlope * dt, my * z.speed * sSlope * dt, 0.21);
           z.walkCycle += z.speed * sSlope * dt * 3;
         } else {
@@ -4354,7 +4630,7 @@ export class SurvivalEngine {
               soundEngine.playZombieGroan(z.archetype, { x: z.x, y: z.y });
             }
           } else {
-            const cSlope = computeSlopeSpeedMultiplier(this.worldStore.seed, z.x, z.y, mx, my, false);
+            const cSlope = computeSlopeSpeedMultiplier(this.worldStore.seed, z.x, z.y, mx, my, false, this.worldStore.activeFace ?? 0);
             this.moveActor(z, mx * z.speed * cSlope * dt, my * z.speed * cSlope * dt, 0.21);
             z.walkCycle += z.speed * cSlope * dt * 3;
           }
@@ -4520,7 +4796,8 @@ export class SurvivalEngine {
           candidate.x,
           candidate.y,
           this.clearedCaveIds,
-          this.worldStore.landmarks.values()
+          this.worldStore.landmarks.values(),
+          this.worldStore.activeFace ?? 0
         );
         if (cell.tile !== 'water' && !inClearedCave) {
           const r = Math.random();
@@ -4546,7 +4823,8 @@ export class SurvivalEngine {
         x,
         y,
         this.clearedCaveIds,
-        this.worldStore.landmarks.values()
+        this.worldStore.landmarks.values(),
+        this.worldStore.activeFace ?? 0
       )
     ) {
       return false;
@@ -4598,9 +4876,10 @@ export class SurvivalEngine {
 
   private moveActor(actor: { x: number; y: number }, dx: number, dy: number, radius: number): void {
     const seed = this.worldStore.seed;
+    const face = this.worldStore.activeFace ?? 0;
     const canMoveX =
       !this.isPointSolid(actor.x + dx, actor.y, radius) &&
-      !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + dx, actor.y, 0.68);
+      !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + dx, actor.y, 0.68, face);
     if (canMoveX) {
       actor.x += dx;
     } else if (Math.abs(dx) > 0.0005) {
@@ -4608,15 +4887,15 @@ export class SurvivalEngine {
       const probe = 0.28;
       const clearPlus =
         !this.isPointSolid(actor.x + dx, actor.y + probe, radius) &&
-        !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + dx, actor.y + probe, 0.68);
+        !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + dx, actor.y + probe, 0.68, face);
       const clearMinus =
         !this.isPointSolid(actor.x + dx, actor.y - probe, radius) &&
-        !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + dx, actor.y - probe, 0.68);
+        !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + dx, actor.y - probe, 0.68, face);
       if (clearPlus !== clearMinus) {
         const slide = Math.abs(dx) * 0.72 * (clearPlus ? 1 : -1);
         if (
           !this.isPointSolid(actor.x + dx * 0.45, actor.y + slide, radius) &&
-          !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + dx * 0.45, actor.y + slide, 0.68)
+          !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + dx * 0.45, actor.y + slide, 0.68, face)
         ) {
           actor.y += slide;
         }
@@ -4625,22 +4904,22 @@ export class SurvivalEngine {
 
     const canMoveY =
       !this.isPointSolid(actor.x, actor.y + dy, radius) &&
-      !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x, actor.y + dy, 0.68);
+      !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x, actor.y + dy, 0.68, face);
     if (canMoveY) {
       actor.y += dy;
     } else if (Math.abs(dy) > 0.0005) {
       const probe = 0.28;
       const clearPlus =
         !this.isPointSolid(actor.x + probe, actor.y + dy, radius) &&
-        !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + probe, actor.y + dy, 0.68);
+        !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + probe, actor.y + dy, 0.68, face);
       const clearMinus =
         !this.isPointSolid(actor.x - probe, actor.y + dy, radius) &&
-        !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x - probe, actor.y + dy, 0.68);
+        !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x - probe, actor.y + dy, 0.68, face);
       if (clearPlus !== clearMinus) {
         const slide = Math.abs(dy) * 0.72 * (clearPlus ? 1 : -1);
         if (
           !this.isPointSolid(actor.x + slide, actor.y + dy * 0.45, radius) &&
-          !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + slide, actor.y + dy * 0.45, 0.68)
+          !isTerrainStepBlocked(seed, actor.x, actor.y, actor.x + slide, actor.y + dy * 0.45, 0.68, face)
         ) {
           actor.x += slide;
         }
@@ -4668,9 +4947,10 @@ export class SurvivalEngine {
       }
     }
 
+    const curFace = this.worldStore.activeFace ?? 0;
     let newlyDiscovered = false;
     for (const lm of this.worldStore.landmarks.values()) {
-      if (lm.discovered) continue;
+      if (lm.discovered || (lm.face ?? 0) !== curFace) continue;
       if (dist(wx, wy, lm.gx + 0.5, lm.gy + 0.5) <= radius + 5.5) {
         lm.discovered = true;
         newlyDiscovered = true;
@@ -4689,7 +4969,7 @@ export class SurvivalEngine {
     this.hotspotCheckTimer = 0;
 
     const biomeNow = getBiomeDisplayName(
-      sampleBiomeAt(this.worldStore.seed, Math.floor(this.player.x), Math.floor(this.player.y))
+      sampleBiomeAt(this.worldStore.seed, Math.floor(this.player.x), Math.floor(this.player.y), this.worldStore.activeFace ?? 0)
     );
     if (biomeNow !== this.lastBiomeLabel) {
       const prev = this.lastBiomeLabel;
@@ -4707,7 +4987,9 @@ export class SurvivalEngine {
       this.recentCombatTimer
     );
 
+    const curFace = this.worldStore.activeFace ?? 0;
     for (const lm of this.worldStore.landmarks.values()) {
+      if ((lm.face ?? 0) !== curFace) continue;
       const isCave = lm.kind === 'cave';
       if (isCave && (lm.hotspotCleared || this.clearedCaveIds.has(lm.id))) {
         lm.hotspotCleared = true;
@@ -4774,7 +5056,7 @@ export class SurvivalEngine {
         (s) =>
           s.kind === 'campfire' &&
           dist(s.gx + 0.5, s.gy + 0.5, p.x, p.y) <= 4.2 &&
-          Math.abs(sampleTerrainHeight(seed, s.gx + 0.5, s.gy + 0.5) - p.elevation) < 1.8
+          Math.abs(sampleTerrainHeight(seed, s.gx + 0.5, s.gy + 0.5, this.worldStore.activeFace ?? 0) - p.elevation) < 1.8
       )
     ) {
       return true;
@@ -4787,7 +5069,7 @@ export class SurvivalEngine {
         if (
           (cell.prop === 'stove' || cell.prop === 'barrel_burn') &&
           dist(pgx + dx + 0.5, pgy + dy + 0.5, p.x, p.y) <= 3.6 &&
-          Math.abs(sampleTerrainHeight(seed, pgx + dx + 0.5, pgy + dy + 0.5) - p.elevation) < 1.8
+          Math.abs(sampleTerrainHeight(seed, pgx + dx + 0.5, pgy + dy + 0.5, this.worldStore.activeFace ?? 0) - p.elevation) < 1.8
         ) {
           return true;
         }
@@ -4800,12 +5082,12 @@ export class SurvivalEngine {
     this.weatherElapsedSeconds += dt;
     const p = this.player;
     const seed = this.worldStore.seed;
-    p.elevation = sampleTerrainHeight(seed, p.x, p.y);
+    p.elevation = sampleTerrainHeight(seed, p.x, p.y, this.worldStore.activeFace ?? 0);
     const cell = this.getCell(Math.floor(p.x), Math.floor(p.y));
-    this.shelterInfo = getShelterInfo(seed, p.x, p.y, cell, this.activeVehicleId !== null);
+    this.shelterInfo = getShelterInfo(seed, p.x, p.y, cell, this.activeVehicleId !== null, this.worldStore.activeFace ?? 0);
     p.sheltered = this.shelterInfo.sheltered;
 
-    const biome = sampleBiomeAt(seed, Math.floor(p.x), Math.floor(p.y));
+    const biome = sampleBiomeAt(seed, Math.floor(p.x), Math.floor(p.y), this.worldStore.activeFace ?? 0);
     this.currentWeather = sampleWeatherAt(
       seed,
       p.x,
@@ -5116,7 +5398,10 @@ export class SurvivalEngine {
     this.flushPendingChunkSpawns();
   }
 
-  private renderMinimap(): void {
+  private renderMinimap(force = false): void {
+    const nowMs = typeof performance !== 'undefined' ? performance.now() : 0;
+    if (!force && nowMs > 0 && nowMs - this.minimapRedrawTimer < 100) return;
+    this.minimapRedrawTimer = nowMs;
     const mc = this.minimapCanvas;
     if (!mc) return;
     const mctx = mc.getContext('2d');
@@ -5157,7 +5442,7 @@ export class SurvivalEngine {
           else if (cell.prop.startsWith('wall')) mctx.fillStyle = '#a34a36';
           else if (cell.prop === 'cliff_rock') mctx.fillStyle = '#474f5b';
           else if (cell.prop === 'cave_stalagmite') mctx.fillStyle = '#556070';
-          else if (cell.prop === 'tree_pine' || cell.prop === 'tree_dead') mctx.fillStyle = '#2f5e2c';
+          else if (cell.prop === 'tree_pine' || cell.prop === 'tree_dead' || cell.prop === 'tree_oak' || cell.prop === 'tree_willow' || cell.prop === 'tree_palm') mctx.fillStyle = cell.prop === 'tree_palm' ? '#5ea844' : '#2f5e2c';
           else if (cell.prop === 'wrecked_car') mctx.fillStyle = '#994823';
           else if (cell.prop === 'rock_boulder') mctx.fillStyle = '#6c7275';
           else if (cell.prop === 'sandbag_wall') mctx.fillStyle = '#85775b';
@@ -5194,7 +5479,7 @@ export class SurvivalEngine {
         const ph = Math.ceil(scale);
         mctx.fillRect(px, py, pw, ph);
         // Subtle topographic elevation highlight on outer frontier hills
-        const elev = sampleTerrainHeight(this.worldStore.seed, gx + 0.5, gy + 0.5);
+        const elev = sampleTerrainHeight(this.worldStore.seed, gx + 0.5, gy + 0.5, this.worldStore.activeFace ?? 0);
         if (elev > 0.65 && cell.tile !== 'cave_floor') {
           mctx.fillStyle = `rgba(235, 240, 226, ${clamp((elev - 0.6) * 0.065, 0, 0.28).toFixed(2)})`;
           mctx.fillRect(px, py, pw, ph);
@@ -5441,6 +5726,21 @@ export class SurvivalEngine {
         gx: Math.floor(this.player.x),
         gy: Math.floor(this.player.y),
       },
+      planetCoords: (() => {
+        const tel = samplePlanetTelemetry(this.worldStore.activeFace ?? 0, this.player.x, this.player.y);
+        const exploredChunks = this.worldStore.populatedChunks.size;
+        return {
+          face: tel.face,
+          faceCode: tel.faceCode,
+          faceName: tel.faceName,
+          latDeg: tel.latDeg,
+          lonDeg: tel.lonDeg,
+          latLonLabel: tel.latLonLabel,
+          exploredChunks,
+          totalChunks: TOTAL_PLANET_CHUNKS,
+          exploredPct: Math.min(100, Math.round((exploredChunks / TOTAL_PLANET_CHUNKS) * 100)),
+        };
+      })(),
       nearCookingHeat,
       fishing:
         this.fishing.phase !== 'idle'
@@ -5485,18 +5785,21 @@ export class SurvivalEngine {
         : null,
       statusBanner: this.statusBanner,
       currentBiomeLabel: getBiomeDisplayName(
-        sampleBiomeAt(this.worldStore.seed, Math.floor(this.player.x), Math.floor(this.player.y))
+        sampleBiomeAt(this.worldStore.seed, Math.floor(this.player.x), Math.floor(this.player.y), this.worldStore.activeFace ?? 0)
       ),
       discoveredLandmarks: Array.from(this.worldStore.landmarks.values())
         .filter((lm) => lm.discovered)
-        .sort(
-          (a, b) =>
-            dist(a.gx + 0.5, a.gy + 0.5, this.player.x, this.player.y) -
-            dist(b.gx + 0.5, b.gy + 0.5, this.player.x, this.player.y)
-        )
+        .sort((a, b) => {
+          const curF = this.worldStore.activeFace ?? 0;
+          return (
+            greatCircleDistanceTiles(curF, this.player.x, this.player.y, (a.face ?? 0) as CubeFaceId, a.gx + 0.5, a.gy + 0.5) -
+            greatCircleDistanceTiles(curF, this.player.x, this.player.y, (b.face ?? 0) as CubeFaceId, b.gx + 0.5, b.gy + 0.5)
+          );
+        })
         .slice(0, 10)
         .map((lm) => ({
           id: lm.id,
+          face: lm.face ?? 0,
           name: lm.name,
           kind: lm.kind,
           x: lm.gx + 0.5,
@@ -5536,7 +5839,7 @@ export class SurvivalEngine {
     this.player.y = wy;
     this.player.vx = 0;
     this.player.vy = 0;
-    this.player.elevation = sampleTerrainHeight(this.worldStore.seed, wx, wy);
+    this.player.elevation = sampleTerrainHeight(this.worldStore.seed, wx, wy, this.worldStore.activeFace ?? 0);
     const iso = worldToIso(wx, wy, 0);
     this.camX = iso.sx;
     this.camY = iso.sy;

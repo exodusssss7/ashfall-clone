@@ -1,3 +1,4 @@
+import { cubeChunkKey, resolveCubeSphereTile } from './cubeSphere';
 import type { TileCell, WorldStore } from './types';
 
 // Native pixel-art isometric tile dimensions (2:1 crisp isometric ratio)
@@ -17,12 +18,13 @@ export function readCellFromSource(source: CellSource, gx: number, gy: number): 
   if (Array.isArray(source)) {
     return source[gy]?.[gx];
   }
-  const cx = Math.floor(gx / CHUNK_SIZE);
-  const cy = Math.floor(gy / CHUNK_SIZE);
-  const chunk = source.chunks.get(`${cx},${cy}`);
+  const resolved = resolveCubeSphereTile(source.activeFace ?? 0, gx, gy);
+  const cx = Math.floor(resolved.gx / CHUNK_SIZE);
+  const cy = Math.floor(resolved.gy / CHUNK_SIZE);
+  const chunk = source.chunks.get(cubeChunkKey(resolved.face, cx, cy));
   if (!chunk) return undefined;
-  const lx = ((gx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-  const ly = ((gy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+  const lx = ((resolved.gx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+  const ly = ((resolved.gy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
   return chunk.cells[ly]?.[lx];
 }
 

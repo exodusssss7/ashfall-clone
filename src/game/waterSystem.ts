@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { PLANET_RADIUS_TILES } from './cubeSphere';
 import { clamp } from './isometric';
 import type { AtmosphereLightingState } from './lighting';
 import type { TileKind } from './types';
@@ -294,6 +295,9 @@ export interface PixelWaterMaterialUniforms {
   uFlashlightDir: { value: THREE.Vector3 };
   uIsFps: { value: number };
   uRipples: { value: THREE.Vector4[] };
+  uCurveOrigin: { value: THREE.Vector3 };
+  uCurveStrength: { value: number };
+  uPlanetRadius: { value: number };
 }
 
 export function createPixelWaterMaterial(): {
@@ -319,6 +323,9 @@ export function createPixelWaterMaterial(): {
     uFlashlightDir: { value: new THREE.Vector3(1, -0.1, 0).normalize() },
     uIsFps: { value: 0 },
     uRipples: { value: rippleVecs },
+    uCurveOrigin: { value: new THREE.Vector3(0, 0, 0) },
+    uCurveStrength: { value: 0.06 },
+    uPlanetRadius: { value: PLANET_RADIUS_TILES },
   };
 
   const material = new THREE.ShaderMaterial({
@@ -333,6 +340,9 @@ export function createPixelWaterMaterial(): {
       attribute float aDepth;
       attribute float aShore;
       uniform float uTime;
+      uniform vec3 uCurveOrigin;
+      uniform float uCurveStrength;
+      uniform float uPlanetRadius;
 
       varying vec3 vWorldPos;
       varying float vDepth;
@@ -346,6 +356,10 @@ export function createPixelWaterMaterial(): {
         pos.y += bob * 0.009 * (0.3 + aDepth * 0.7) * waveDamp;
 
         vec4 worldPos = modelMatrix * vec4(pos, 1.0);
+        // Subtle realistic planetary horizon curve (flat within 18 tiles, imperceptible near-field)
+        float curveDist = max(0.0, length(worldPos.xz - uCurveOrigin.xz) - 22.0);
+        worldPos.y -= (curveDist * curveDist) / (2.0 * uPlanetRadius) * 0.12 * uCurveStrength;
+
         vec4 mvPos = viewMatrix * worldPos;
         vWorldPos = worldPos.xyz;
         vDepth = aDepth;

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { getLootPopTransform, resolvePlayerAnimState, resolveZombieAnimState, type ActionVisual } from './actionAnimation';
+import { PLANET_RADIUS_TILES, isInsideCubeFaceTile, resolveCubeSphereCoord } from './cubeSphere';
 import { CHUNK_SIZE, PIXEL_SCALE, TILE_W, clamp, dist, isoToWorld } from './isometric';
 import { getPrimaryLootItem } from './lootUi';
 import { WEAPONS, isMeleeWeapon } from './recipes';
@@ -53,7 +54,7 @@ import {
   sampleTerrainMeshHeight,
   sampleTerrainSurface,
 } from './terrainSystem';
-import { sampleRiverInfo, sampleRoadInfo } from './worldGen';
+import { sampleBiomeAt, sampleOceanInfo, sampleRiverInfo, sampleRoadInfo } from './worldGen';
 import { getBuildTargetTile, getDaylightInfo } from './survivalLogic';
 import { getSettings } from './settings';
 import { STRUCTURES } from './recipes';
@@ -67,6 +68,7 @@ import {
 } from './zombieVisuals';
 import type {
   BloodDecal,
+  CubeFaceId,
   BulletImpactEffect,
   CameraMode,
   DoorEntity,
@@ -264,10 +266,23 @@ export class ThreeIsometricRenderer {
 
   private chunksGroup = new THREE.Group();
   private chunkVisuals = new Map<string, ChunkVisual>();
-  private chunkPlaneGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
+  private pendingDisposeChunks: ChunkVisual[] = [];
+  private chunkPlaneGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
   private ceilingBoxGeo = new THREE.BoxGeometry(1, 0.08, 1);
   private ceilingMat: THREE.MeshStandardMaterial;
   private activeSeed = 1994;
+  private activeFace: CubeFaceId = 0;
+  private isMobileDevice = false;
+  private shadowFrameCounter = 0;
+  private lastShadowCamX = -99999;
+  private lastShadowCamZ = -99999;
+  private rollingFrameMs = 16.6;
+  private adaptiveDprScale = 1.0;
+  private planetCurveUniforms = {
+    uCurveOrigin: { value: new THREE.Vector3(0, 0, 0) },
+    uCurveStrength: { value: 0.06 },
+    uPlanetRadius: { value: PLANET_RADIUS_TILES },
+  };
   private smoothedTargetY = 0;
   private rainInstanced!: THREE.InstancedMesh;
   private rainDrops: Array<{ ox: number; oy: number; oz: number; speed: number; len: number }> = [];
@@ -416,10 +431,20 @@ export class ThreeIsometricRenderer {
     this.renderer.localClippingEnabled = true;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
-    this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2));
+    this.isMobileDevice =
+      typeof window !== 'undefined' &&
+      (window.matchMedia?.('(pointer: coarse)').matches || (navigator.maxTouchPoints ?? 0) > 0);
+    const maxDpr = this.isSoftwareGl ? 1 : this.isMobileDevice ? 1.5 : 2;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxDpr));
     this.qualityPixelRatio = this.renderer.getPixelRatio();
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // On mobile GPUs, keep full 1024x1024 PCFSoftShadowMap quality while updating shadows at 30Hz
+    // (or immediately on camera movement), cutting mobile GPU shadow workload in half with zero quality loss.
+    if (this.isMobileDevice && !this.isSoftwareGl) {
+      this.renderer.shadowMap.autoUpdate = false;
+      this.renderer.shadowMap.needsUpdate = true;
+    }
 
     // Lightweight transparent 2D overlay canvas for crisp damage numbers, bars & crosshair
     this.overlayCanvas = document.createElement('canvas');
@@ -933,7 +958,7 @@ export class ThreeIsometricRenderer {
   }
 
   private groundY(wx: number, wy: number): number {
-    return sampleTerrainHeight(this.activeSeed, wx, wy);
+    return sampleTerrainHeight(this.activeSeed, wx, wy, this.activeFace);
   }
 
   public screenToWorld(screenX: number, screenY: number, camX?: number, camY?: number): { wx: number; wy: number } {
@@ -1000,11 +1025,21 @@ export class ThreeIsometricRenderer {
     });
   }
 
-  public clearSceneCaches(): void {
+  public clearSceneCaches(deferChunkDispose = false): void {
     for (const chunk of this.chunkVisuals.values()) {
-      this.disposeChunkVisual(chunk);
+      this.chunksGroup.remove(chunk.group);
+      if (deferChunkDispose) {
+        this.pendingDisposeChunks.push(chunk);
+      } else {
+        this.disposeChunkVisual(chunk);
+      }
     }
     this.chunkVisuals.clear();
+    if (!deferChunkDispose) {
+      while (this.pendingDisposeChunks.length > 0) {
+        this.disposeChunkVisual(this.pendingDisposeChunks.pop()!);
+      }
+    }
     this.waterRipples.clear();
     this.lastBobberRippleTime = -10;
     this.lastOccludedWalls.length = 0;
@@ -1069,22 +1104,55 @@ export class ThreeIsometricRenderer {
     const pcy = Math.floor(centerWY / CHUNK_SIZE);
     const keepRadius = 2;
 
-    // Evict distant chunks
+    // Gently drain deferred chunk disposals (2/frame) so face transitions never stutter WebGL
+    for (let d = 0; d < 2 && this.pendingDisposeChunks.length > 0; d++) {
+      this.disposeChunkVisual(this.pendingDisposeChunks.pop()!);
+    }
+
+    // Stagger distant chunk eviction (max 2 per frame) to avoid GC hitches on mobile
+    let evicted = 0;
     for (const [key, cv] of this.chunkVisuals.entries()) {
       if (Math.abs(cv.cx - pcx) > keepRadius + 1 || Math.abs(cv.cy - pcy) > keepRadius + 1) {
-        this.disposeChunkVisual(cv);
+        this.chunksGroup.remove(cv.group);
+        this.pendingDisposeChunks.push(cv);
         this.chunkVisuals.delete(key);
         this.burnBarrelsDirty = true;
+        if (++evicted >= 2) break;
       }
     }
 
+    // Collect missing chunks and sort closest-first so player's immediate area always builds first
+    const missing: Array<{ cx: number; cy: number; key: string; distSq: number }> = [];
     for (let cy = pcy - keepRadius; cy <= pcy + keepRadius; cy++) {
       for (let cx = pcx - keepRadius; cx <= pcx + keepRadius; cx++) {
         const key = `${cx},${cy}`;
         if (this.chunkVisuals.has(key)) continue;
-        this.chunkVisuals.set(key, this.buildChunkVisual(cx, cy, key, getCell));
-        this.burnBarrelsDirty = true;
+        const dx = cx - pcx;
+        const dy = cy - pcy;
+        missing.push({ cx, cy, key, distSq: dx * dx + dy * dy });
       }
+    }
+    if (missing.length === 0) return;
+
+    missing.sort((a, b) => a.distSq - b.distSq);
+
+    // On empty cache (startup or face transition), build immediate 3x3 (distSq <= 2) synchronously
+    // so the player never sees an empty floor; time-slice outer chunks to 1-2/frame within a 5ms budget!
+    const isColdStart = this.chunkVisuals.size === 0;
+    const isBorderTransition = isColdStart && this.pendingDisposeChunks.length > 0;
+    const maxPerFrame = isBorderTransition ? 2 : isColdStart ? 5 : this.isMobileDevice ? 1 : 2;
+    const budgetMs = isBorderTransition ? 8.0 : isColdStart ? 18.0 : 4.5;
+    const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
+
+    let built = 0;
+    for (let i = 0; i < missing.length; i++) {
+      const m = missing[i];
+      if (!isColdStart && built >= maxPerFrame) break;
+      if (isColdStart && m.distSq > 2 && built >= 1) break;
+      this.chunkVisuals.set(m.key, this.buildChunkVisual(m.cx, m.cy, m.key, getCell));
+      this.burnBarrelsDirty = true;
+      built++;
+      if (!isColdStart && t0 > 0 && performance.now() - t0 >= budgetMs) break;
     }
   }
 
@@ -1098,7 +1166,8 @@ export class ThreeIsometricRenderer {
     const startX = cx * CHUNK_SIZE;
     const startY = cy * CHUNK_SIZE;
     const seed = this.activeSeed;
-    const isFlatOrigin = cx >= 0 && cx <= 3 && cy >= 0 && cy <= 3;
+    const face = this.activeFace;
+    const isFlatOrigin = face === 0 && cx >= 0 && cx <= 3 && cy >= 0 && cy <= 3;
 
     const terrainTex = this.atlas.createChunkTerrainTexture(getCell, cx, cy, CHUNK_SIZE);
     const terrainMat = new THREE.MeshStandardMaterial({
@@ -1106,6 +1175,34 @@ export class ThreeIsometricRenderer {
       roughness: 0.94,
       metalness: 0.02,
     });
+    const curveUniforms = this.planetCurveUniforms;
+    terrainMat.onBeforeCompile = (shader) => {
+      shader.uniforms.uCurveOrigin = curveUniforms.uCurveOrigin;
+      shader.uniforms.uCurveStrength = curveUniforms.uCurveStrength;
+      shader.uniforms.uPlanetRadius = curveUniforms.uPlanetRadius;
+      shader.vertexShader =
+        `uniform vec3 uCurveOrigin;
+uniform float uCurveStrength;
+uniform float uPlanetRadius;
+` +
+        shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <project_vertex>',
+        `vec4 mvPosition = vec4( transformed, 1.0 );
+        #ifdef USE_BATCHING
+          mvPosition = batchingMatrix * mvPosition;
+        #endif
+        #ifdef USE_INSTANCING
+          mvPosition = instanceMatrix * mvPosition;
+        #endif
+        vec4 planetWorldPos = modelMatrix * mvPosition;
+        float pCurveDist = max(0.0, length(planetWorldPos.xz - uCurveOrigin.xz) - 22.0);
+        planetWorldPos.y -= (pCurveDist * pCurveDist) / (2.0 * uPlanetRadius) * 0.12 * uCurveStrength;
+        mvPosition = viewMatrix * planetWorldPos;
+        gl_Position = projectionMatrix * mvPosition;`
+      );
+    };
+    terrainMat.customProgramCacheKey = () => 'ashfall_planet_curve_terrain_v1';
 
     const mergedGeos: THREE.BufferGeometry[] = [];
     if (isFlatOrigin) {
@@ -1126,12 +1223,12 @@ export class ThreeIsometricRenderer {
       for (let i = 0; i < posAttr.count; i++) {
         const wx = centerX + posAttr.getX(i);
         const wz = centerZ + posAttr.getZ(i);
-        const meshY = sampleTerrainMeshHeight(seed, wx, wz);
+        const meshY = sampleTerrainMeshHeight(seed, wx, wz, face);
         posAttr.setY(i, meshY);
         if (meshY < -0.02) {
           normAttr.setXYZ(i, 0, 1, 0);
         } else {
-          const surf = sampleTerrainSurface(seed, wx, wz);
+          const surf = sampleTerrainSurface(seed, wx, wz, face);
           normAttr.setXYZ(i, surf.normalX, surf.normalY, surf.normalZ);
         }
       }
@@ -1195,14 +1292,14 @@ export class ThreeIsometricRenderer {
     // mid-run and opening daylight slits between wall segments. The classification lives in
     // terrainSystem (isTunnelCoreCell/isTunnelClaimedCell) so gameplay collision matches these
     // visible walls exactly.
-    const tunnelCoreAt = (tx: number, ty: number) => isTunnelCoreCell(seed, tx, ty);
-    const tunnelClaimedAt = (tx: number, ty: number) => isTunnelClaimedCell(seed, tx, ty);
+    const tunnelCoreAt = (tx: number, ty: number) => isTunnelCoreCell(seed, tx, ty, face);
+    const tunnelClaimedAt = (tx: number, ty: number) => isTunnelClaimedCell(seed, tx, ty, face);
     for (let ly = 0; ly < CHUNK_SIZE; ly++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
         const gx = startX + lx;
         const gy = startY + ly;
         const cell = getCell(gx, gy);
-        const tileSurf = isFlatOrigin ? null : sampleTerrainSurface(seed, gx + 0.5, gy + 0.5);
+        const tileSurf = isFlatOrigin ? null : sampleTerrainSurface(seed, gx + 0.5, gy + 0.5, face);
         const tileY = tileSurf ? tileSurf.height : 0;
 
         if (
@@ -1217,7 +1314,7 @@ export class ThreeIsometricRenderer {
 
         // Solid 3D Elevated River Bridge Deck, steel stringer girders, wooden pilings & guardrails
         if (!isFlatOrigin && cell.tile === 'bridge_deck') {
-          const bridge = sampleBridgeInfo(seed, gx + 0.5, gy + 0.5);
+          const bridge = sampleBridgeInfo(seed, gx + 0.5, gy + 0.5, face);
           const bRoot = new THREE.Group();
           bRoot.position.set(gx + 0.5, tileY, gy + 0.5);
 
@@ -1301,7 +1398,7 @@ export class ThreeIsometricRenderer {
         // Covers every tile the bore claims (road lanes AND walkable shoulder strips), not just road tiles,
         // so flanking gallery floors get the same roof/walls instead of standing open to the sky.
         if (!isFlatOrigin) {
-          const tun = sampleRoadTunnelInfo(seed, gx + 0.5, gy + 0.5);
+          const tun = sampleRoadTunnelInfo(seed, gx + 0.5, gy + 0.5, face);
           if (tunnelClaimedAt(gx, gy)) {
             if (gx + 0.5 < tunMinX) tunMinX = gx + 0.5;
             if (gx + 0.5 > tunMaxX) tunMaxX = gx + 0.5;
@@ -1312,8 +1409,8 @@ export class ThreeIsometricRenderer {
             // Slope the ceiling smoothly between neighbors instead of per-tile stair-step slabs
             const clearAt = (tx: number, ty: number) => {
               if (!tunnelClaimedAt(tx, ty)) return null;
-              const ti = sampleRoadTunnelInfo(seed, tx + 0.5, ty + 0.5);
-              return Math.max(2.6, ti.roofY - sampleTerrainSurface(seed, tx + 0.5, ty + 0.5).height);
+              const ti = sampleRoadTunnelInfo(seed, tx + 0.5, ty + 0.5, face);
+              return Math.max(2.6, ti.roofY - sampleTerrainSurface(seed, tx + 0.5, ty + 0.5, face).height);
             };
             const hPrev = tun.axis === 'ew' ? clearAt(gx - 1, gy) : clearAt(gx, gy - 1);
             const hNext = tun.axis === 'ew' ? clearAt(gx + 1, gy) : clearAt(gx, gy + 1);
@@ -1327,8 +1424,8 @@ export class ThreeIsometricRenderer {
             let slabDrop = 0;
             for (const [nx, ny] of [[gx - 1, gy], [gx + 1, gy], [gx, gy - 1], [gx, gy + 1]]) {
               if (!tunnelClaimedAt(nx, ny)) continue;
-              const tn = sampleRoadTunnelInfo(seed, nx + 0.5, ny + 0.5);
-              const nClear = Math.max(2.6, tn.roofY - sampleTerrainSurface(seed, nx + 0.5, ny + 0.5).height);
+              const tn = sampleRoadTunnelInfo(seed, nx + 0.5, ny + 0.5, face);
+              const nClear = Math.max(2.6, tn.roofY - sampleTerrainSurface(seed, nx + 0.5, ny + 0.5, face).height);
               slabDrop = Math.max(slabDrop, clearH - nClear - 0.36);
             }
             slabDrop = Math.max(0, slabDrop);
@@ -1352,7 +1449,7 @@ export class ThreeIsometricRenderer {
             // (low curb + rim permanent, upper wall FPS-only). Where the envelope edge steps with
             // the curving road, cross walls seal hillside corners; where the highway lane itself
             // crosses the face, a framed header leaves a designed opening (no wall across the lane).
-            const roadAt = (tx: number, ty: number) => sampleRoadInfo(seed, tx, ty).isAnyRoad;
+            const roadAt = (tx: number, ty: number) => sampleRoadInfo(seed, tx, ty, face).isAnyRoad;
             const addCutawayWall = (cx: number, cz: number, alongX: boolean) => {
               const low = new THREE.Mesh(new THREE.BoxGeometry(alongX ? 1.01 : 0.24, 0.56, alongX ? 0.24 : 1.01), tunnelDarkMat);
               low.position.set(cx, tileY + 0.28, cz);
@@ -1512,6 +1609,9 @@ export class ThreeIsometricRenderer {
           tileSurf.slope > 0.1 &&
           (cell.prop === 'tree_pine' ||
             cell.prop === 'tree_dead' ||
+            cell.prop === 'tree_oak' ||
+            cell.prop === 'tree_willow' ||
+            cell.prop === 'tree_palm' ||
             cell.prop === 'rock_boulder' ||
             cell.prop === 'fallen_log' ||
             cell.prop === 'tent' ||
@@ -1587,9 +1687,12 @@ export class ThreeIsometricRenderer {
 
     // Build True Isometric Rocky Cliff Cave Architecture (3 layers: moody basalt floor liner, asymmetric cutaway perimeter with crisp light-granite rims, and semi-translucent sculpted rocky roof dome)
     if (!isFlatOrigin) {
-      const rx = Math.floor(startX / 32);
-      const ry = Math.floor(startY / 32);
-      const cave = getMacroRegionCave(seed, rx, ry);
+      const caveRes = isInsideCubeFaceTile(startX + 8, startY + 8)
+        ? { face, gx: startX + 8, gy: startY + 8 }
+        : resolveCubeSphereCoord(face, startX + 8, startY + 8);
+      const rx = Math.floor(caveRes.gx / 32);
+      const ry = Math.floor(caveRes.gy / 32);
+      const cave = getMacroRegionCave(seed, rx, ry, caveRes.face);
       if (
         cave &&
         cave.gx >= startX &&
@@ -1819,7 +1922,7 @@ export class ThreeIsometricRenderer {
       cy,
       CHUNK_SIZE,
       this.isSoftwareGl ? 0.55 : 1,
-      isFlatOrigin ? undefined : (gx, gz) => sampleTerrainHeight(seed, gx, gz)
+      isFlatOrigin ? undefined : (gx, gz) => sampleTerrainHeight(seed, gx, gz, face)
     );
     if (grassMesh) {
       group.add(grassMesh);
@@ -1850,8 +1953,9 @@ export class ThreeIsometricRenderer {
           const t = getCell(wx, wy).tile;
           if (t === 'water') return true;
           if (t === 'bridge_deck') {
-            const rv = sampleRiverInfo(seed, wx + 0.5, wy + 0.5);
-            return rv.inWater || rv.riverBand < 0.036;
+            const rv = sampleRiverInfo(seed, wx + 0.5, wy + 0.5, face);
+            const oc = sampleOceanInfo(seed, wx + 0.5, wy + 0.5, face);
+            return oc.inSeaWater || rv.inWater || rv.riverBand < 0.036;
           }
           return false;
         };
@@ -1890,6 +1994,11 @@ export class ThreeIsometricRenderer {
 
   public render(state: RenderFrameState): void {
     this.activeSeed = state.worldStore.seed;
+    const nextFace = state.worldStore.activeFace ?? 0;
+    if (nextFace !== this.activeFace) {
+      this.activeFace = nextFace;
+      this.clearSceneCaches(true);
+    }
     const settings = getSettings();
     const isFps = state.cameraMode === 'fps' && state.phase !== 'title';
     const rawDt = this.lastRenderClock > 0 ? state.elapsedClock - this.lastRenderClock : 0.016;
@@ -2023,6 +2132,34 @@ export class ThreeIsometricRenderer {
       this.camera.updateMatrixWorld();
       this.activeCamera = this.camera;
       this.fogExp.density = 0.009;
+    }
+
+    // Sync subtle realistic planetary horizon curvature (imperceptible near-field on 2,048-tile globe)
+    const curveStr = isFps ? 0.12 : 0.04;
+    this.planetCurveUniforms.uCurveOrigin.value.set(targetX, 0, targetZ);
+    this.planetCurveUniforms.uCurveStrength.value = curveStr;
+    this.waterUniforms.uCurveOrigin.value.set(targetX, 0, targetZ);
+    this.waterUniforms.uCurveStrength.value = curveStr;
+    this.grassSystem.updateCurvature(targetX, targetZ, curveStr);
+
+    // Mobile GPU optimization: 30Hz smart shadow update + smooth adaptive DPR guard (preserves visual quality)
+    if (this.isMobileDevice && !this.isSoftwareGl) {
+      this.shadowFrameCounter = (this.shadowFrameCounter + 1) & 1;
+      const camMoved = Math.hypot(targetX - this.lastShadowCamX, targetZ - this.lastShadowCamZ) > 0.25;
+      if (this.shadowFrameCounter === 0 || camMoved) {
+        this.renderer.shadowMap.needsUpdate = true;
+        this.lastShadowCamX = targetX;
+        this.lastShadowCamZ = targetZ;
+      }
+      const frameMs = Math.min(80, Math.max(8, dt * 1000));
+      this.rollingFrameMs = this.rollingFrameMs * 0.92 + frameMs * 0.08;
+      if (this.rollingFrameMs > 26 && this.adaptiveDprScale > 0.78) {
+        this.adaptiveDprScale = Math.max(0.78, this.adaptiveDprScale - 0.04);
+        this.renderer.setPixelRatio(Math.max(1.0, this.qualityPixelRatio * this.adaptiveDprScale));
+      } else if (this.rollingFrameMs < 18 && this.adaptiveDprScale < 1.0) {
+        this.adaptiveDprScale = Math.min(1.0, this.adaptiveDprScale + 0.02);
+        this.renderer.setPixelRatio(Math.max(1.0, this.qualityPixelRatio * this.adaptiveDprScale));
+      }
     }
 
     // Stream 3D chunks around camera
@@ -2593,7 +2730,7 @@ export class ThreeIsometricRenderer {
         this.scene.add(rig.root);
         this.vehicleRigs.set(v.id, rig);
       }
-      const vSurf = sampleTerrainSurface(this.activeSeed, v.x, v.y);
+      const vSurf = sampleTerrainSurface(this.activeSeed, v.x, v.y, this.activeFace);
       rig.root.position.set(v.x, vSurf.height, v.y);
       rig.root.rotation.order = 'YXZ';
       rig.root.rotation.y = -v.angle;
@@ -2604,17 +2741,65 @@ export class ThreeIsometricRenderer {
       const rightZ = fwdX;
       const slopeFwd = -(vSurf.normalX * fwdX + vSurf.normalZ * fwdZ) / Math.max(0.25, vSurf.normalY);
       const slopeRight = -(vSurf.normalX * rightX + vSurf.normalZ * rightZ) / Math.max(0.25, vSurf.normalY);
-      rig.root.rotation.z = clamp(Math.atan(slopeFwd), -0.42, 0.42);
-      rig.root.rotation.x = clamp(-Math.atan(slopeRight), -0.35, 0.35);
-      rig.cabGroup.visible = !(isFps && activeVehicleId === v.id);
+      const targetPitch = clamp(Math.atan(slopeFwd), -0.46, 0.46);
+      const targetRoll = clamp(-Math.atan(slopeRight), -0.38, 0.38);
+      rig.root.rotation.z += (targetPitch - rig.root.rotation.z) * 0.24;
+      rig.root.rotation.x += (targetRoll - rig.root.rotation.x) * 0.24;
+      const inFpsCar = isFps && activeVehicleId === v.id;
+      rig.cabGroup.visible = !inFpsCar;
+      rig.cockpitGroup.visible = inFpsCar;
 
-      // Wheel rotation & gentle suspension tilt
+      // Compute smooth real-time steering angle from angular velocity
+      let dAng = v.angle - rig.prevAngle;
+      while (dAng > Math.PI) dAng -= Math.PI * 2;
+      while (dAng < -Math.PI) dAng += Math.PI * 2;
+      rig.prevAngle = v.angle;
+      const targetSteer = clamp(dAng * 14, -0.55, 0.55);
+      rig.steerSmooth += (targetSteer - rig.steerSmooth) * 0.22;
+
+      // Animate front wheels turning into corners + wheel spin + realistic body roll/pitch
+      rig.wheelFL.rotation.y = -rig.steerSmooth * 0.68;
+      rig.wheelFR.rotation.y = -rig.steerSmooth * 0.68;
       const wheelSpin = elapsedClock * v.speed * 4.5;
       for (const wm of rig.wheelMeshes) {
         wm.rotation.z = -wheelSpin;
       }
-      rig.bodyGroup.rotation.z = clamp(v.speed * 0.008, -0.05, 0.05);
+      const engineRumble = Math.abs(v.speed) > 0.2 ? Math.sin(elapsedClock * 38) * 0.0022 : Math.sin(elapsedClock * 16) * 0.0008;
+      rig.bodyGroup.position.y = engineRumble;
+      rig.bodyGroup.rotation.z = clamp(v.speed * 0.006, -0.045, 0.045);
+      rig.bodyGroup.rotation.x = clamp(-rig.steerSmooth * Math.min(1, Math.abs(v.speed) / 6) * 0.08, -0.06, 0.06);
       rig.trunkPivot.rotation.z = v.trunkSearched ? -0.9 : 0;
+
+      // Live First-Person Cockpit Dashboard & Steering Wheel Animation
+      if (inFpsCar) {
+        rig.steeringWheel.rotation.x = rig.steerSmooth * 1.45;
+        const speedNorm = clamp(Math.abs(v.speed) / 13.5, 0.04, 1.0);
+        rig.speedBar.scale.z = speedNorm;
+        const fuelNorm = clamp(v.fuel / 100, 0.02, 1.0);
+        rig.fuelBar.scale.z = fuelNorm;
+        const fMat = rig.fuelBar.material as THREE.MeshStandardMaterial;
+        if (fuelNorm < 0.2) {
+          fMat.color.set('#ff4a42');
+          fMat.emissive.set('#ff4a42');
+          fMat.emissiveIntensity = 1.2 + Math.sin(elapsedClock * 10) * 0.6;
+        } else if (fuelNorm < 0.45) {
+          fMat.color.set('#f0d078');
+          fMat.emissive.set('#f0d078');
+          fMat.emissiveIntensity = 1.2;
+        } else {
+          fMat.color.set('#5ef28f');
+          fMat.emissive.set('#5ef28f');
+          fMat.emissiveIntensity = 1.3;
+        }
+        const bMat = rig.boostLed.material as THREE.MeshStandardMaterial;
+        bMat.emissiveIntensity = v.boosting ? 2.4 : 0.15;
+      }
+
+      // Dynamic headlight DRL brightness
+      for (const hl of rig.headLights) {
+        const hm = hl.material as THREE.MeshStandardMaterial;
+        hm.emissiveIntensity = v.headlightsOn && v.hp > 0 ? 2.4 : 0.35;
+      }
 
       // Brake lights
       const braking = v.speed < -0.2 || v.drifting;
@@ -4081,7 +4266,7 @@ export class ThreeIsometricRenderer {
       const wx = targetX + d.ox;
       const wz = targetZ + d.oz;
       const wy = targetY + d.oy;
-      const surf = sampleTerrainSurface(this.activeSeed, wx, wz);
+      const surf = sampleTerrainSurface(this.activeSeed, wx, wz, this.activeFace);
       const cellTile = state.getCell(Math.floor(wx), Math.floor(wz)).tile;
       const isIndoor =
         cellTile === 'floor' ||

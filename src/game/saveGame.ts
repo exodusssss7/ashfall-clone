@@ -11,6 +11,7 @@
 
 import { CHUNK_SIZE } from './isometric';
 import type {
+  CubeFaceId,
   DoorEntity,
   Inventory,
   LootContainer,
@@ -61,6 +62,17 @@ export interface RunSnapshot {
   explored: ExploredChunkBits[];
   clearedCaveIds?: string[];
   weatherElapsedSeconds?: number;
+  activeFace?: CubeFaceId;
+  faceStates?: Record<
+    number,
+    {
+      containers: LootContainer[];
+      structures: WorldStructure[];
+      vehicles: Vehicle[];
+      doors: DoorEntity[];
+      zombies: Zombie[];
+    }
+  >;
 }
 
 export interface RunSaveMeta {
