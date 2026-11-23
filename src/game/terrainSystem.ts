@@ -496,14 +496,22 @@ export const TUNNEL_WALL_CAMERA_CLEARANCE = 0.1;
  * (road cell in the portal band, matching the renderer's header/opening condition). This covers
  * end seals where the road stops inside the envelope as well as side/corner seals.
  */
+export function isTunnelOpeningEdge(seed: number, tx: number, ty: number, ux: number, uy: number, face: CubeFaceId = 0): boolean {
+  const tunnel = sampleRoadTunnelInfo(seed, tx + 0.5, ty + 0.5, face);
+  if (tunnel.isPortal && sampleRoadInfo(seed, ux, uy, face).isAnyRoad) return true;
+  // A river crossing or abrupt hill cutoff can end the bore without a portal-band cell.
+  // Leave the continuing highway open along the bore, never through a lateral retaining wall.
+  const alongBore = tunnel.axis === 'ew' ? uy === ty : tunnel.axis === 'ns' ? ux === tx : false;
+  return alongBore && sampleRoadInfo(seed, ux + 0.5, uy + 0.5, face).isMainHighway;
+}
+
 export function isTunnelEdgeWall(seed: number, ax: number, ay: number, bx: number, by: number, face: CubeFaceId = 0): boolean {
   const aClaimed = isTunnelClaimedCell(seed, ax, ay, face);
   const bClaimed = isTunnelClaimedCell(seed, bx, by, face);
   if (aClaimed === bClaimed) return false;
   const ux = aClaimed ? bx : ax;
   const uy = aClaimed ? by : ay;
-  const claimedTun = sampleRoadTunnelInfo(seed, (aClaimed ? ax : bx) + 0.5, (aClaimed ? ay : by) + 0.5, face);
-  return !(sampleRoadInfo(seed, ux, uy, face).isAnyRoad && claimedTun.isPortal);
+  return !isTunnelOpeningEdge(seed, aClaimed ? ax : bx, aClaimed ? ay : by, ux, uy, face);
 }
 
 /**
