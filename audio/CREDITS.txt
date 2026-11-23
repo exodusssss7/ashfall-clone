@@ -151,3 +151,22 @@ Plays on existing zombie alert/attack vocal cues, globally rate-limited to
 once per 2.2 seconds. Existing hurt and death recordings are unchanged.
 CC0 allows commercial game use and redistribution in source.
 No creator endorsement is implied.
+
+Storm and campfire audio (user-selected additions):
+
+Thunder: cognito perceptu, Thunder crack 2, CC0 1.0.
+https://uncommonear.com/t/fd-254427693e/thunder-crack-2-by-cognito-perceptu
+-> thunder.mp3. Real recorded thunder crack; plays on storm lightning 0.35s
+after the flash, at most once per 8.5s, quieter when sheltered. Replaces the
+previous synthesized rumble. Edited: two-pass loudness normalization to
+-22 LUFS/-2 dBTP, mono 32kHz/96kbps MP3. Small playback-rate variation at
+runtime. No creator endorsement implied.
+
+Campfire loop: Sufyan_Khalil, Fire Place, Pixabay Content License.
+https://pixabay.com/sound-effects/fire-place-189399/
+License: https://pixabay.com/service/terms/
+A 30-second seamless loop edited from the recording (section trimmed,
+endpoint crossfade, loudness-normalized) -> fireplace.mp3, bundled only as an
+incorporated game asset; the unmodified recording is not redistributed.
+Plays as a positional HRTF loop that swells as the player approaches a lit
+campfire and fades with distance. No creator endorsement implied.
