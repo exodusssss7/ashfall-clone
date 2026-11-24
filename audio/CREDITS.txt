@@ -170,3 +170,18 @@ endpoint crossfade, loudness-normalized) -> fireplace.mp3, bundled only as an
 incorporated game asset; the unmodified recording is not redistributed.
 Plays as a positional HRTF loop that swells as the player approaches a lit
 campfire and fades with distance. No creator endorsement implied.
+
+Cold breathing: deleted_user_2104797, sound 166125, CC0 1.0.
+https://freesound.org/people/deleted_user_2104797/sounds/166125/
+-> cold.mp3. Shaky scared breathing; loops while the player is chilled or
+freezing, fading in and out with the thermal state. Edited per the user's
+audition approvals: 15% faster tempo with pitch preserved, level reduced to
+the approved quieter version, short endpoint fades, mono 32kHz/96kbps MP3.
+No creator endorsement implied.
+
+Teeth chattering: mickdow, "ShiveringTeeth", CC0 1.0.
+https://freesound.org/people/mickdow/sounds/184177/
+-> teeth.mp3. Loops while the player is freezing. User-selected from the
+audition set (option E); trimmed to the continuous chatter section, baked
+10 dB below audition loudness per the user's quiet in-game level request,
+short endpoint fades, mono 32kHz/96kbps MP3. No creator endorsement implied.
