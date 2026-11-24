@@ -5176,6 +5176,10 @@ export class SurvivalEngine {
       }
       this.lastThermalStatus = thermal.thermalStatus;
     }
+    // Shaky cold breathing while chilled or freezing (user-selected recording)
+    soundEngine.updateColdLoop(thermal.thermalStatus === 'chilled' || thermal.thermalStatus === 'freezing');
+    // Teeth chattering at the more severe freezing tier (user-selected recording)
+    soundEngine.updateTeethLoop(thermal.thermalStatus === 'freezing');
 
     const shelteredInRain = this.shelterInfo.sheltered && this.currentWeather.rainIntensity > 0.35;
     if (shelteredInRain && !this.wasShelteredInStorm && this.shelterInfo.label) {

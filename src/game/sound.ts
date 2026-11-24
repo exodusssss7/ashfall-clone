@@ -22,7 +22,7 @@ const SAMPLE_NAMES = [
   'groan1', 'groan2', 'groan3', 'groan4', 'pistol0', 'pistol1', 'shotgun0', 'shotgun1',
   'reload', 'rack', 'day', 'night', 'breathing', 'heartbeat',
   'lmg0', 'lmg1', 'zombiedie0', 'zombiedie1', 'carhit0', 'carhit1', 'zhurt0', 'zhurt1', 'zhurt2', 'zmoan0', 'zmoan1', 'zmoan2',
-  'fireplace', 'thunder',
+  'fireplace', 'thunder', 'cold', 'teeth',
 ];
 
 /** Recorded foley/weapon banks, with quiet continuous day/night soundscapes and 3D HRTF spatialization.
@@ -400,6 +400,8 @@ class SurvivalSoundEngine {
     this.updateEngineSound(false, 0, false);
     this.updateWeatherAudio(false, 0, 0, false, 0);
     this.stopFireplaceLoop();
+    this.stopColdLoop();
+    this.stopTeethLoop();
     this.stopEffects();
   }
 
@@ -561,6 +563,98 @@ class SurvivalSoundEngine {
     this.releasePanner(this.fireplacePanner);
     this.fireplacePanner = null;
     this.fireplacePos = null;
+  }
+
+  // Shaky cold breathing while the player is chilled or freezing. Level and tempo are
+  // baked into the asset (user-approved audition), so runtime gain stays at 1.
+  private coldSource: AudioBufferSourceNode | null = null;
+  private coldGain: GainNode | null = null;
+
+  updateColdLoop(active: boolean): void {
+    if (!this.ctx || !this.dryGain) return;
+    const now = this.ctx.currentTime;
+    if (!active || this.muted) {
+      if (this.coldGain) this.coldGain.gain.setTargetAtTime(0.0001, now, 0.3);
+      return;
+    }
+    if (this.coldSource || document.hidden || this.ctx.state !== 'running') return;
+    const buffer = this.buffers.get('cold');
+    if (!buffer) return;
+    const source = this.ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    const gain = this.ctx.createGain();
+    gain.gain.value = 0.0001;
+    source.connect(gain);
+    gain.connect(this.dryGain);
+    this.coldSource = source;
+    this.coldGain = gain;
+    source.onended = () => {
+      if (this.coldSource === source) {
+        this.coldSource = null;
+        this.coldGain = null;
+      }
+    };
+    source.start(now);
+    gain.gain.setTargetAtTime(1, now, 0.4);
+  }
+
+  stopColdLoop(): void {
+    if (this.coldSource) {
+      try { this.coldSource.stop(); } catch { /* already stopped */ }
+      try { this.coldSource.disconnect(); } catch { /* already disconnected */ }
+      this.coldSource = null;
+    }
+    if (this.coldGain) {
+      try { this.coldGain.disconnect(); } catch { /* already disconnected */ }
+      this.coldGain = null;
+    }
+  }
+
+  // Teeth chattering while the player is freezing (the more severe cold tier).
+  // Level baked into the asset, runtime gain stays at 1.
+  private teethSource: AudioBufferSourceNode | null = null;
+  private teethGain: GainNode | null = null;
+
+  updateTeethLoop(active: boolean): void {
+    if (!this.ctx || !this.dryGain) return;
+    const now = this.ctx.currentTime;
+    if (!active || this.muted) {
+      if (this.teethGain) this.teethGain.gain.setTargetAtTime(0.0001, now, 0.3);
+      return;
+    }
+    if (this.teethSource || document.hidden || this.ctx.state !== 'running') return;
+    const buffer = this.buffers.get('teeth');
+    if (!buffer) return;
+    const source = this.ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    const gain = this.ctx.createGain();
+    gain.gain.value = 0.0001;
+    source.connect(gain);
+    gain.connect(this.dryGain);
+    this.teethSource = source;
+    this.teethGain = gain;
+    source.onended = () => {
+      if (this.teethSource === source) {
+        this.teethSource = null;
+        this.teethGain = null;
+      }
+    };
+    source.start(now);
+    gain.gain.setTargetAtTime(1, now, 0.4);
+  }
+
+  stopTeethLoop(): void {
+    if (this.teethSource) {
+      try { this.teethSource.stop(); } catch { /* already stopped */ }
+      try { this.teethSource.disconnect(); } catch { /* already disconnected */ }
+      this.teethSource = null;
+    }
+    if (this.teethGain) {
+      try { this.teethGain.disconnect(); } catch { /* already disconnected */ }
+      this.teethGain = null;
+    }
   }
   playSpitHiss(pos?: SpatialPosition): void {
     this.texture(2200, 0.27, 0.19, 0, pos, 1.25);
